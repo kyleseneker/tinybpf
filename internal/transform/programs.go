@@ -19,8 +19,8 @@ func isRuntimeFunc(name string) bool {
 	return false
 }
 
-// extractProbes removes non-probe define blocks and runtime globals.
-func extractProbes(lines []string, probeNames []string, verbose bool, w io.Writer) ([]string, error) {
+// extractPrograms removes non-program define blocks and runtime globals.
+func extractPrograms(lines []string, programNames []string, verbose bool, w io.Writer) ([]string, error) {
 	type defineBlock struct {
 		name      string
 		startLine int
@@ -54,35 +54,35 @@ func extractProbes(lines []string, probeNames []string, verbose bool, w io.Write
 		}
 	}
 
-	probeSet := make(map[string]bool)
-	if len(probeNames) > 0 {
-		for _, n := range probeNames {
-			probeSet[n] = true
+	programSet := make(map[string]bool)
+	if len(programNames) > 0 {
+		for _, n := range programNames {
+			programSet[n] = true
 		}
 	} else {
 		for _, b := range blocks {
 			if !isRuntimeFunc(b.name) {
-				probeSet[b.name] = true
+				programSet[b.name] = true
 			}
 		}
 	}
-	if len(probeSet) == 0 {
+	if len(programSet) == 0 {
 		names := make([]string, len(blocks))
 		for i, b := range blocks {
 			names[i] = b.name
 		}
-		return nil, fmt.Errorf("transform: no probe functions found among: %v", names)
+		return nil, fmt.Errorf("transform: no program functions found among: %v", names)
 	}
 	if verbose {
-		for name := range probeSet {
-			fmt.Fprintf(w, "[transform] keeping probe: %s\n", name)
+		for name := range programSet {
+			fmt.Fprintf(w, "[transform] keeping program: %s\n", name)
 		}
 	}
 
 	remove := make(map[int]bool)
 
 	for _, b := range blocks {
-		if !probeSet[b.name] {
+		if !programSet[b.name] {
 			for j := b.startLine; j <= b.endLine; j++ {
 				remove[j] = true
 			}

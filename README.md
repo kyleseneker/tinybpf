@@ -107,13 +107,21 @@ func handle_connect(ctx unsafe.Pointer) int32 {
 Compile and link:
 
 ```bash
-tinygo build -o probe.ll -gc=none -scheduler=none -panic=trap -opt=1 ./bpf
+tinygo build -o program.ll -gc=none -scheduler=none -panic=trap -opt=1 ./bpf
 
-tinybpf --input probe.ll --output probe.o \
+tinybpf --input program.ll --output program.o \
   --section handle_connect=tracepoint/syscalls/sys_enter_connect
 ```
 
 See [`examples/network-sidecar/`](examples/network-sidecar/) for a complete working project with a userspace loader that reads events via `cilium/ebpf`.
+
+### Scaffold a new project
+
+```bash
+tinybpf init xdp_filter
+```
+
+This generates `bpf/xdp_filter.go` with build tags and an empty entry point, `bpf/xdp_filter_stub.go` for IDE compatibility, and a `Makefile` with TinyGo and tinybpf build commands. Fill in the ELF section type and program logic to match your use case.
 
 ## CLI reference
 
@@ -121,8 +129,8 @@ See [`examples/network-sidecar/`](examples/network-sidecar/) for a complete work
 |------|---------|-------------|
 | `--input` | *(required)* | Input file (`.ll`, `.bc`, `.o`, `.a`). Repeatable. |
 | `--output`, `-o` | `bpf.o` | Output ELF path. |
-| `--probe` | *(auto-detect)* | Probe function to keep. Repeatable. |
-| `--section` | | Probe-to-section mapping (`name=section`). Repeatable. |
+| `--program` | *(auto-detect)* | Program function to keep. Repeatable. |
+| `--section` | | Program-to-section mapping (`name=section`). Repeatable. |
 | `--cpu` | `v3` | BPF CPU version for `llc -mcpu`. |
 | `--opt-profile` | `default` | `conservative`, `default`, `aggressive`, or `verifier-safe`. |
 | `--pass-pipeline` | | Explicit `opt` pass pipeline (overrides profile). |
@@ -140,11 +148,19 @@ See [`examples/network-sidecar/`](examples/network-sidecar/) for a complete work
 | `--llvm-ar` | | Override path to `llvm-ar`. |
 | `--llvm-objcopy` | | Override path to `llvm-objcopy`. |
 
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `init <name>` | Scaffold a new BPF project in the current directory |
+| `doctor` | Check toolchain installation and version compatibility |
+| `version` | Print version information |
+
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Writing Go for eBPF](docs/TINYGO_COMPAT.md) | Language constraints, probe structure, and supported BPF helpers |
+| [Writing Go for eBPF](docs/TINYGO_COMPAT.md) | Language constraints, program structure, and supported BPF helpers |
 | [Architecture](docs/ARCHITECTURE.md) | Pipeline design and the 11-step IR transformation |
 | [Support Matrix](docs/SUPPORT_MATRIX.md) | Tested toolchain versions and platforms |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Setup issues, pipeline errors, and verifier debugging |
@@ -155,7 +171,7 @@ See [`examples/network-sidecar/`](examples/network-sidecar/) for a complete work
 | Project | Relationship |
 |---------|-------------|
 | [cilium/ebpf](https://github.com/cilium/ebpf) | Go library for loading eBPF programs; loads `tinybpf` output |
-| [bpf2go](https://pkg.go.dev/github.com/cilium/ebpf/cmd/bpf2go) | Compiles C eBPF and generates Go bindings; replaced when the probe is Go |
+| [bpf2go](https://pkg.go.dev/github.com/cilium/ebpf/cmd/bpf2go) | Compiles C eBPF and generates Go bindings; replaced when the program is Go |
 | [libbpf](https://github.com/libbpf/libbpf) | C loader library; compatible with `tinybpf` output |
 | [TinyGo](https://tinygo.org/) | Go compiler targeting LLVM; provides the IR that `tinybpf` transforms |
 | [Aya](https://aya-rs.dev/) | eBPF in Rust; similar goal, different language |

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestExtractProbes(t *testing.T) {
+func TestExtractPrograms(t *testing.T) {
 	base := strings.Split(strings.TrimSpace(`
 source_filename = "main"
 
@@ -40,7 +40,7 @@ declare void @runtime.alloc(i64, ptr, ptr)
 `), "\n")
 
 	t.Run("auto-detect removes runtime funcs", func(t *testing.T) {
-		got, err := extractProbes(base, nil, false, io.Discard)
+		got, err := extractPrograms(base, nil, false, io.Discard)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -51,14 +51,14 @@ declare void @runtime.alloc(i64, ptr, ptr)
 			}
 		}
 		if !strings.Contains(text, "handle_connect") {
-			t.Error("probe handle_connect was removed")
+			t.Error("program handle_connect was removed")
 		}
 		if !strings.Contains(text, "!dbg") {
 			t.Error("inline debug references should be preserved")
 		}
 	})
 
-	t.Run("explicit probe list", func(t *testing.T) {
+	t.Run("explicit program list", func(t *testing.T) {
 		input := strings.Split(strings.TrimSpace(`
 define i32 @foo() {
 entry:
@@ -70,7 +70,7 @@ entry:
   ret i32 1
 }
 `), "\n")
-		got, err := extractProbes(input, []string{"bar"}, false, io.Discard)
+		got, err := extractPrograms(input, []string{"bar"}, false, io.Discard)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -83,25 +83,25 @@ entry:
 		}
 	})
 
-	t.Run("no probes found", func(t *testing.T) {
+	t.Run("no programs found", func(t *testing.T) {
 		input := strings.Split("define void @runtime.runMain() {\nentry:\n  ret void\n}\n", "\n")
-		_, err := extractProbes(input, nil, false, io.Discard)
+		_, err := extractPrograms(input, nil, false, io.Discard)
 		if err == nil {
 			t.Fatal("expected error")
 		}
 	})
 
 	t.Run("verbose", func(t *testing.T) {
-		input := strings.Split("define i32 @my_probe(ptr %ctx) {\nentry:\n  ret i32 0\n}\n", "\n")
+		input := strings.Split("define i32 @my_program(ptr %ctx) {\nentry:\n  ret i32 0\n}\n", "\n")
 		var buf strings.Builder
-		got, err := extractProbes(input, nil, true, &buf)
+		got, err := extractPrograms(input, nil, true, &buf)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(strings.Join(got, "\n"), "my_probe") {
-			t.Error("expected probe to be kept")
+		if !strings.Contains(strings.Join(got, "\n"), "my_program") {
+			t.Error("expected program to be kept")
 		}
-		if !strings.Contains(buf.String(), "keeping probe") {
+		if !strings.Contains(buf.String(), "keeping program") {
 			t.Error("expected verbose output")
 		}
 	})

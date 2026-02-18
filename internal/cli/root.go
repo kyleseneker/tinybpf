@@ -16,6 +16,7 @@ import (
 	"github.com/kyleseneker/tinybpf/internal/doctor"
 	"github.com/kyleseneker/tinybpf/internal/llvm"
 	"github.com/kyleseneker/tinybpf/internal/pipeline"
+	"github.com/kyleseneker/tinybpf/internal/scaffold"
 )
 
 // Version is set at build time via ldflags:
@@ -45,6 +46,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		switch args[0] {
 		case "doctor":
 			return runDoctor(ctx, args[1:], stdout, stderr)
+		case "init":
+			return runInit(args[1:], stdout, stderr)
 		case "version":
 			return runVersion(stdout)
 		case "--version", "-version":
@@ -61,7 +64,7 @@ func runVersion(stdout io.Writer) int {
 
 func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	var inputs multiStringFlag
-	var probes multiStringFlag
+	var programs multiStringFlag
 	var sectionFlags multiStringFlag
 	var profilePath string
 	cfg := pipeline.Config{
@@ -84,8 +87,8 @@ func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.DurationVar(&cfg.Timeout, "timeout", 30*time.Second, "Per-stage command timeout.")
 	fs.StringVar(&cfg.TempDir, "tmpdir", "", "Directory for intermediate artifacts (kept after run).")
 	fs.BoolVar(&cfg.EnableBTF, "btf", false, "Enable BTF injection via pahole.")
-	fs.Var(&probes, "probe", "Probe function name to keep. Repeat for multiple probes. Auto-detected if omitted.")
-	fs.Var(&sectionFlags, "section", "Probe-to-section mapping (e.g., handle_connect=tracepoint/syscalls/sys_enter_connect). Repeat for multiple.")
+	fs.Var(&programs, "program", "Program function name to keep. Repeat for multiple programs. Auto-detected if omitted.")
+	fs.Var(&sectionFlags, "section", "Program-to-section mapping (e.g., handle_connect=tracepoint/syscalls/sys_enter_connect). Repeat for multiple.")
 	registerToolFlags(fs, &cfg.Tools)
 
 	fs.IntVar(&cfg.Jobs, "jobs", 1, "Number of parallel input normalization workers.")
@@ -103,7 +106,7 @@ func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	cfg.Inputs = inputs
-	cfg.Probes = probes
+	cfg.Programs = programs
 	cfg.Sections = parseSectionFlags(sectionFlags)
 
 	if cfg.ConfigPath != "" {
@@ -202,6 +205,20 @@ func registerToolFlags(fs *flag.FlagSet, tools *llvm.ToolOverrides) {
 	fs.StringVar(&tools.LLVMAr, "llvm-ar", "", "Path to llvm-ar binary.")
 	fs.StringVar(&tools.Objcopy, "llvm-objcopy", "", "Path to llvm-objcopy binary.")
 	fs.StringVar(&tools.Pahole, "pahole", "", "Path to pahole binary (used with --btf).")
+}
+
+func runInit(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintln(stderr, "usage: tinybpf init <name>")
+		return 2
+	}
+
+	cfg := scaffold.Config{Dir: ".", Program: args[0], Stdout: stdout}
+	if err := scaffold.Run(cfg); err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 // parseSectionFlags converts "name=section" strings into a map.

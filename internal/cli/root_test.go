@@ -19,6 +19,8 @@ func TestRunExitCodes(t *testing.T) {
 		{"no args (missing input)", []string{}, 2},
 		{"unknown flag", []string{"--unknown-flag"}, 2},
 		{"doctor parse error", []string{"doctor", "--unknown-flag"}, 2},
+		{"init parse error", []string{"init", "--unknown-flag"}, 2},
+		{"init missing name", []string{"init"}, 2},
 		{
 			"pipeline error (missing tool)",
 			[]string{"--input", "/dev/null", "--output", "/tmp/test-output.o", "--llvm-link", "/does/not/exist/llvm-link"},
@@ -134,7 +136,7 @@ func TestParseSectionFlags(t *testing.T) {
 		want  map[string]string
 	}{
 		{"nil", nil, nil},
-		{"valid entries", []string{"handle_connect=kprobe/sys_connect", "probe=xdp"}, map[string]string{"handle_connect": "kprobe/sys_connect", "probe": "xdp"}},
+		{"valid entries", []string{"handle_connect=kprobe/sys_connect", "xdp_filter=xdp"}, map[string]string{"handle_connect": "kprobe/sys_connect", "xdp_filter": "xdp"}},
 		{"malformed skipped", []string{"no-equals", "valid=section"}, map[string]string{"valid": "section"}},
 	}
 	for _, tt := range tests {
@@ -377,5 +379,26 @@ exit 0`
 	}
 	if !strings.Contains(out.String(), "intermediates:") {
 		t.Fatalf("expected 'intermediates:' in verbose output, got: %s", out.String())
+	}
+}
+
+func TestRunInitSuccess(t *testing.T) {
+	dir := t.TempDir()
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	var out, errOut bytes.Buffer
+	code := Run(context.Background(), []string{"init", "xdp_filter"}, &out, &errOut)
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d, stderr=%s", code, errOut.String())
+	}
+	for _, f := range []string{"bpf/xdp_filter.go", "bpf/xdp_filter_stub.go", "Makefile"} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("expected %s to exist", f)
+		}
+	}
+	if !strings.Contains(out.String(), "create") {
+		t.Errorf("expected 'create' in output, got: %s", out.String())
 	}
 }

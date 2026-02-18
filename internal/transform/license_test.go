@@ -9,7 +9,7 @@ func TestAddLicense(t *testing.T) {
 	t.Run("already present", func(t *testing.T) {
 		input := []string{
 			`@_license = global [4 x i8] c"GPL\00", section "license", align 1`,
-			"define i32 @probe() { ret i32 0 }",
+			"define i32 @my_func() { ret i32 0 }",
 		}
 		got := addLicense(input)
 		count := 0

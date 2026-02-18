@@ -18,7 +18,7 @@ entry:
 		got := assignSections(input, map[string]string{"handle_connect": "kprobe/sys_connect"})
 		text := strings.Join(got, "\n")
 		if !strings.Contains(text, `section "kprobe/sys_connect"`) {
-			t.Error("probe section not assigned")
+			t.Error("section not assigned")
 		}
 		if !strings.Contains(text, `section ".maps"`) {
 			t.Error("map section not assigned")
@@ -27,11 +27,11 @@ entry:
 
 	t.Run("default section name", func(t *testing.T) {
 		input := []string{
-			`define i32 @my_probe(ptr %ctx) #4 {`,
+			`define i32 @my_func(ptr %ctx) #4 {`,
 			`entry:`, `  ret i32 0`, `}`,
 		}
 		text := strings.Join(assignSections(input, nil), "\n")
-		if !strings.Contains(text, `section "my_probe"`) {
+		if !strings.Contains(text, `section "my_func"`) {
 			t.Errorf("expected default section name:\n%s", text)
 		}
 	})
@@ -46,7 +46,7 @@ entry:
 }
 
 func TestInsertSectionNoBrace(t *testing.T) {
-	got := insertSection(`declare i32 @probe(ptr %ctx)`, "kprobe/test")
+	got := insertSection(`declare i32 @my_func(ptr %ctx)`, "kprobe/test")
 	if !strings.Contains(got, `section "kprobe/test"`) {
 		t.Errorf("expected section attribute, got: %s", got)
 	}

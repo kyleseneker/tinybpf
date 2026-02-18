@@ -30,7 +30,7 @@ type Config struct {
 	Timeout      time.Duration
 	TempDir      string
 	EnableBTF    bool
-	Probes       []string
+	Programs     []string
 	Sections     map[string]string
 	Tools        llvm.ToolOverrides
 	Stdout       io.Writer
@@ -89,7 +89,7 @@ func Run(ctx context.Context, cfg Config) (*Artifacts, error) {
 	}
 
 	transformOpts := transform.Options{
-		Probes:   cfg.Probes,
+		Programs: cfg.Programs,
 		Sections: cfg.Sections,
 		Verbose:  cfg.Verbose,
 		Stdout:   cfg.Stdout,

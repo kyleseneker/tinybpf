@@ -72,7 +72,7 @@ The input IR modules could not be linked together.
 - LLVM version mismatch (IR uses syntax the system LLVM cannot parse)
 - Corrupt or truncated `.ll` / `.bc` file
 
-**Fix:** Verify the input was produced by TinyGo (`tinygo build -o probe.ll ...`), and check LLVM version compatibility.
+**Fix:** Verify the input was produced by TinyGo (`tinygo build -o program.ll ...`), and check LLVM version compatibility.
 
 ### Stage `transform` — TOOL_EXECUTION_FAILED
 
@@ -86,7 +86,7 @@ The IR rewrite step failed. This is the `tinybpf`-specific transformation that c
 **Fix:**
 1. Ensure your TinyGo compilation uses the correct flags:
    ```bash
-   tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o probe.ll ./bpf
+   tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o program.ll ./bpf
    ```
 2. Check that BPF helper declarations use recognized names (see [TINYGO_COMPAT.md](TINYGO_COMPAT.md#supported-bpf-helpers)).
 3. Use `--keep-temp` to inspect the linked IR before transformation.
@@ -127,12 +127,12 @@ After `tinybpf` produces a `.o` file, the Linux kernel's BPF verifier must accep
 
 1. **Load with verbose output:**
    ```bash
-   bpftool prog load probe.o /sys/fs/bpf/test 2>&1
+   bpftool prog load program.o /sys/fs/bpf/test 2>&1
    ```
 
 2. **Inspect with detailed verifier log:**
    ```bash
-   bpftool -d prog load probe.o /sys/fs/bpf/test
+   bpftool -d prog load program.o /sys/fs/bpf/test
    ```
 
 3. **Inspect intermediates:** Use `--keep-temp --tmpdir ./debug` to preserve all pipeline artifacts and examine the IR at each stage.

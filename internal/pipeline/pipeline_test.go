@@ -54,7 +54,7 @@ struct.pack_into('<Q',h,40,so);struct.pack_into('<H',h,60,5);struct.pack_into('<
 sys.stdout.buffer.write(bytes(h)+d+sh)" > "$out"
 exit 0`
 
-// testIR returns LLVM IR with a single probe function.
+// testIR returns LLVM IR with a single program function.
 const testIR = `target datalayout = "e-m:o-p270:32:32"
 target triple = "arm64-apple-macosx11.0.0"
 

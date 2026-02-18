@@ -99,7 +99,7 @@ The transformation runs 11 steps in sequence. Each step takes a slice of IR text
 ```mermaid
 graph LR
     A["retarget"] --> B["strip attrs"]
-    B --> C["extract probes"]
+    B --> C["extract programs"]
     C --> D["replace alloc"]
     D --> E["rewrite helpers"]
     E --> F["assign sections"]
@@ -114,10 +114,10 @@ graph LR
 |------|-----------|---------|
 | 1 | **Retarget** | Replace `target datalayout` and `target triple` with BPF values |
 | 2 | **Strip attributes** | Remove host-specific function attributes (`target-cpu`, `target-features`, `allockind`, etc.) |
-| 3 | **Extract probes** | Keep only user probe functions and their dependencies; discard TinyGo runtime (debug metadata preserved for BTF) |
+| 3 | **Extract programs** | Keep only user program functions and their dependencies; discard TinyGo runtime (debug metadata preserved for BTF) |
 | 4 | **Replace alloc** | Convert `@runtime.alloc` calls to entry-block `alloca` + `llvm.memset` |
 | 5 | **Rewrite helpers** | Convert mangled `@main.bpfXxx(args, ptr undef)` calls to `inttoptr (i64 ID to ptr)(args)` |
-| 6 | **Assign sections** | Apply ELF section attributes to probes and map globals; promote `internal` map globals to global linkage |
+| 6 | **Assign sections** | Apply ELF section attributes to program functions and map globals; promote `internal` map globals to global linkage |
 | 7 | **Strip map prefix** | Rename Go package-qualified map globals (`@main.events` → `@events`) to match the C BPF naming convention |
 | 8 | **Rewrite map BTF** | Transform `bpfMapDef` globals and DWARF metadata to libbpf-compatible BTF encoding |
 | 9 | **Sanitize BTF names** | Replace `.` with `_` in Go-style type names; strip names from `DW_TAG_pointer_type` nodes |

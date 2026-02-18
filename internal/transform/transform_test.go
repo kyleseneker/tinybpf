@@ -19,7 +19,7 @@ func TestRun(t *testing.T) {
 	t.Run("write error", func(t *testing.T) {
 		tmp := t.TempDir()
 		input := filepath.Join(tmp, "in.ll")
-		os.WriteFile(input, []byte("define i32 @probe(ptr %ctx) {\nentry:\n  ret i32 0\n}\n"), 0o644)
+		os.WriteFile(input, []byte("define i32 @my_func(ptr %ctx) {\nentry:\n  ret i32 0\n}\n"), 0o644)
 		if err := Run(input, filepath.Join(input, "out.ll"), Options{Stdout: io.Discard}); err == nil {
 			t.Fatal("expected error")
 		}
@@ -106,7 +106,7 @@ func TestFullTransformLLC(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	outputLL := filepath.Join(tmpDir, "transformed.ll")
-	outputObj := filepath.Join(tmpDir, "probe.o")
+	outputObj := filepath.Join(tmpDir, "output.o")
 
 	opts := Options{
 		Sections: map[string]string{"handle_connect": "kprobe/sys_connect"},

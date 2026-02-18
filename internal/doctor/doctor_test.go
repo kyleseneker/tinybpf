@@ -160,7 +160,7 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup:      func(t *testing.T) { fakeTinyGo(t, "echo 'tinygo version 0.40.1'") },
+			setup:      func(t *testing.T) { t.Helper(); fakeTinyGo(t, "echo 'tinygo version 0.40.1'") },
 			wantStdout: []string{"tinygo:", "[OK]   tinygo:", "0.40.1"},
 		},
 		{
@@ -178,7 +178,7 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup:      func(t *testing.T) { fakeTinyGo(t, "exit 1") },
+			setup:      func(t *testing.T) { t.Helper(); fakeTinyGo(t, "exit 1") },
 			wantStderr: []string{"[FAIL] tinygo"},
 		},
 		{
@@ -187,7 +187,7 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup:      func(t *testing.T) { fakeTinyGo(t, "echo 'tinygo version 0.40.1' >&2") },
+			setup:      func(t *testing.T) { t.Helper(); fakeTinyGo(t, "echo 'tinygo version 0.40.1' >&2") },
 			wantStdout: []string{"0.40.1"},
 		},
 		{
@@ -196,7 +196,7 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup:      func(t *testing.T) { fakeTinyGo(t, "exit 0") },
+			setup:      func(t *testing.T) { t.Helper(); fakeTinyGo(t, "exit 0") },
 			wantStdout: []string{"(no version output)"},
 		},
 		{
@@ -205,7 +205,7 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup:       func(t *testing.T) { fakeTinyGo(t, "echo 'tinygo version 0.40.1'") },
+			setup:       func(t *testing.T) { t.Helper(); fakeTinyGo(t, "echo 'tinygo version 0.40.1'") },
 			wantStdout:  []string{"all checks passed"},
 			notInStdout: []string{"warnings:"},
 		},

@@ -20,7 +20,7 @@ var (
 
 // Options configures the IR transformation pass.
 type Options struct {
-	Probes   []string
+	Programs []string
 	Sections map[string]string
 
 	Verbose bool
@@ -43,7 +43,7 @@ func Run(inputLL, outputLL string, opts Options) error {
 // TransformLines applies the full transformations to IR text lines:
 // - retarget
 // - strip attributes
-// - extract probes
+// - extract programs
 // - replace alloc
 // - rewrite helpers
 // - assign sections
@@ -61,7 +61,7 @@ func TransformLines(lines []string, opts Options) ([]string, error) {
 	lines = retarget(lines)
 	lines = stripAttributes(lines)
 
-	lines, err = extractProbes(lines, opts.Probes, opts.Verbose, opts.Stdout)
+	lines, err = extractPrograms(lines, opts.Programs, opts.Verbose, opts.Stdout)
 	if err != nil {
 		return nil, err
 	}

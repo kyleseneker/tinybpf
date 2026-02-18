@@ -1,6 +1,6 @@
 # Writing eBPF programs in Go
 
-A guide to structuring Go code for eBPF probes compiled with TinyGo and linked with `tinybpf`.
+A guide to structuring Go code for eBPF programs compiled with TinyGo and linked with `tinybpf`.
 
 ## Language constraints
 
@@ -28,9 +28,9 @@ The Linux kernel's BPF verifier enforces strict safety guarantees on loaded prog
 | Floating point | Not supported by the BPF instruction set |
 | Unbounded loops | Rejected by the BPF verifier |
 
-## Probe structure
+## Program structure
 
-A BPF probe file requires three components: a map definition, helper declarations, and an exported entry point.
+A BPF program file requires three components: a map definition, helper declarations, and an exported entry point.
 
 ```go
 //go:build tinygo
@@ -54,11 +54,11 @@ var events = bpfMapDef{Type: 27, MaxEntries: 1 << 24} // BPF_MAP_TYPE_RINGBUF
 //go:extern bpf_get_current_pid_tgid
 func bpfGetCurrentPidTgid() uint64
 
-// Probe entry point -- //export prevents TinyGo from eliminating the function.
+// Program entry point -- //export prevents TinyGo from eliminating the function.
 // tinybpf assigns the ELF section based on the --section flag.
-//export my_probe
-func my_probe(ctx unsafe.Pointer) int32 {
-    // probe logic using supported Go features
+//export my_program
+func my_program(ctx unsafe.Pointer) int32 {
+    // program logic using supported Go features
     return 0
 }
 
@@ -69,12 +69,12 @@ func main() {}
 
 | Convention | Details |
 |------------|---------|
-| Build tag | Use `//go:build tinygo` so standard Go tooling ignores the file. Add a `probe_stub.go` with `//go:build !tinygo` for IDE compatibility. |
+| Build tag | Use `//go:build tinygo` so standard Go tooling ignores the file. Add a `program_stub.go` with `//go:build !tinygo` for IDE compatibility. |
 | Entry points | Mark with `//export` (not `//go:export`). |
 | Helper declarations | Declare with `//go:extern`. |
 | Compilation flags | `tinygo build -gc=none -scheduler=none -panic=trap -opt=1` |
 
-See [`examples/network-sidecar/bpf/probe.go`](../examples/network-sidecar/bpf/probe.go) for a complete working probe.
+See [`examples/network-sidecar/bpf/probe.go`](../examples/network-sidecar/bpf/probe.go) for a complete working example.
 
 ## Supported BPF helpers
 
@@ -129,7 +129,7 @@ type event struct {
 
 ### Struct field access from context
 
-Probe context pointers must be cast to typed struct pointers for field access:
+Program context pointers must be cast to typed struct pointers for field access:
 
 ```go
 type tpArgs struct {
@@ -138,8 +138,8 @@ type tpArgs struct {
     Uservaddr uint64
 }
 
-//export my_probe
-func my_probe(ctx unsafe.Pointer) int32 {
+//export my_program
+func my_program(ctx unsafe.Pointer) int32 {
     args := (*tpArgs)(ctx)
     fd := args.Fd
     _ = fd
@@ -204,9 +204,9 @@ All 11 transformations run automatically between `llvm-link` and `opt`. See [Arc
 
 ### 1. Strip TinyGo runtime
 
-TinyGo emits runtime functions even with `-gc=none -scheduler=none` (`__dynamic_loader`, `tinygo_signal_handler`, `runtime.runMain`, etc.). These use constructs the BPF backend rejects. The transform extracts only probe functions and their dependencies, discarding everything else.
+TinyGo emits runtime functions even with `-gc=none -scheduler=none` (`__dynamic_loader`, `tinygo_signal_handler`, `runtime.runMain`, etc.). These use constructs the BPF backend rejects. The transform extracts only program functions and their dependencies, discarding everything else.
 
-Probes are auto-detected from non-runtime `define` blocks, or specified explicitly with `--probe`.
+Programs are auto-detected from non-runtime `define` blocks, or specified explicitly with `--program`.
 
 ### 2. Replace heap allocation with stack allocation
 
@@ -242,13 +242,13 @@ Removes `target-cpu`, `target-features`, `allockind`, `allocsize`, and `alloc-fa
 
 ### 6. Assign ELF sections
 
-Maps probe functions to BPF program sections and globals to `.maps`. Configurable via `--section`:
+Maps program functions to BPF ELF sections and globals to `.maps`. Configurable via `--section`:
 
 ```bash
 tinybpf --section handle_connect=tracepoint/syscalls/sys_enter_connect ...
 ```
 
-When no mapping is provided, probes are placed in a section matching the function name.
+When no mapping is provided, programs are placed in a section matching the function name.
 
 ### 7. Strip map prefix
 
@@ -274,7 +274,7 @@ Removes orphaned `declare` statements, unreferenced globals (except those with e
 
 | Feature | Usage |
 |---------|-------|
-| `//export funcname` | Prevents dead code elimination of probe entry points |
+| `//export funcname` | Prevents dead code elimination of program entry points |
 | `//go:extern symbolname` | Creates external declarations for BPF helpers (mangled by TinyGo; rewritten by `tinybpf`) |
 | `-gc=none -scheduler=none` | Produces clean function bodies: struct access, pointer arithmetic, conditionals, and calls as straightforward LLVM IR |
 

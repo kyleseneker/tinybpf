@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// assignSections adds ELF section attributes to probe definitions and map globals that don't already have one.
+// assignSections adds ELF section attributes to program definitions and map globals that don't already have one.
 func assignSections(lines []string, sections map[string]string) []string {
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)

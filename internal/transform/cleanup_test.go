@@ -12,7 +12,7 @@ declare void @unused_func()
 
 declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 
-define i32 @probe() #4 {
+define i32 @my_func() #4 {
 entry:
   call void @llvm.memset.p0.i64(ptr null, i8 0, i64 16, i1 false)
   ret i32 0
