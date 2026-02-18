@@ -10,16 +10,23 @@ import (
 	"testing"
 )
 
+// runCLI runs the CLI with the given arguments and returns the stdout, stderr, and exit code.
+func runCLI(t *testing.T, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code = Run(context.Background(), args, &out, &errOut)
+	return out.String(), errOut.String(), code
+}
+
 func TestRunExitCodes(t *testing.T) {
 	tests := []struct {
 		name     string
 		args     []string
 		wantCode int
 	}{
-		{"no args (missing input)", []string{}, 2},
 		{"unknown flag", []string{"--unknown-flag"}, 2},
 		{"doctor parse error", []string{"doctor", "--unknown-flag"}, 2},
-		{"init parse error", []string{"init", "--unknown-flag"}, 2},
+		{"init unknown flag", []string{"init", "--unknown-flag"}, 2},
 		{"init missing name", []string{"init"}, 2},
 		{
 			"pipeline error (missing tool)",
@@ -29,10 +36,37 @@ func TestRunExitCodes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var out, errOut bytes.Buffer
-			code := Run(context.Background(), tt.args, &out, &errOut)
+			_, _, code := runCLI(t, tt.args...)
 			if code != tt.wantCode {
-				t.Fatalf("expected exit code %d, got %d, stderr=%s", tt.wantCode, code, errOut.String())
+				t.Fatalf("exit code: got %d, want %d", code, tt.wantCode)
+			}
+		})
+	}
+}
+
+func TestRunHelp(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantCode int
+	}{
+		{"help subcommand", []string{"help"}, 0},
+		{"--help flag", []string{"--help"}, 0},
+		{"-h flag", []string{"-h"}, 0},
+		{"no args", []string{}, 2},
+		{"doctor --help", []string{"doctor", "--help"}, 0},
+		{"init --help", []string{"init", "--help"}, 0},
+		{"init -h", []string{"init", "-h"}, 0},
+		{"link --help", []string{"--input", "/dev/null", "--help"}, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout, stderr, code := runCLI(t, tt.args...)
+			if code != tt.wantCode {
+				t.Fatalf("exit code: got %d, want %d", code, tt.wantCode)
+			}
+			if !strings.Contains(stdout+stderr, "Usage:") {
+				t.Fatalf("expected 'Usage:' in output, got stdout=%q stderr=%q", stdout, stderr)
 			}
 		})
 	}
@@ -48,13 +82,12 @@ func TestRunVersion(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var out bytes.Buffer
-			code := Run(context.Background(), tt.args, &out, nil)
+			stdout, _, code := runCLI(t, tt.args...)
 			if code != 0 {
 				t.Fatalf("expected exit code 0, got %d", code)
 			}
-			if !strings.Contains(out.String(), "tinybpf") {
-				t.Fatalf("expected version output, got: %q", out.String())
+			if !strings.Contains(stdout, "tinybpf") {
+				t.Fatalf("expected version output, got: %q", stdout)
 			}
 		})
 	}
@@ -65,45 +98,62 @@ func TestRunVersionShowsVariable(t *testing.T) {
 	Version = "v0.1.0-test"
 	defer func() { Version = old }()
 
-	var out bytes.Buffer
-	code := Run(context.Background(), []string{"version"}, &out, nil)
+	stdout, _, code := runCLI(t, "version")
 	if code != 0 {
 		t.Fatal("expected exit code 0")
 	}
-	if !strings.Contains(out.String(), "v0.1.0-test") {
-		t.Fatalf("expected injected version, got: %q", out.String())
+	if !strings.Contains(stdout, "v0.1.0-test") {
+		t.Fatalf("expected injected version, got: %q", stdout)
 	}
 }
 
 func TestRunDoctor(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		dir := t.TempDir()
-		makeCliTool := func(name string) string {
-			p := filepath.Join(dir, name)
-			os.WriteFile(p, []byte("#!/bin/sh\necho ok\n"), 0o755)
-			return p
-		}
-		link := makeCliTool("llvm-link")
-		opt := makeCliTool("opt")
-		llc := makeCliTool("llc")
-
-		var out, errOut bytes.Buffer
-		code := Run(context.Background(), []string{"doctor", "--llvm-link", link, "--opt", opt, "--llc", llc}, &out, &errOut)
-		if code != 0 {
-			t.Fatalf("expected exit code 0, got %d, stderr=%s", code, errOut.String())
-		}
-	})
-
-	t.Run("missing tool", func(t *testing.T) {
-		var out, errOut bytes.Buffer
-		code := Run(context.Background(), []string{"doctor", "--llvm-link", "/does/not/exist/llvm-link"}, &out, &errOut)
-		if code != 1 {
-			t.Fatalf("expected exit code 1, got %d", code)
-		}
-		if !strings.Contains(errOut.String(), "llvm-link") {
-			t.Errorf("expected error mentioning llvm-link, got: %s", errOut.String())
-		}
-	})
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T) []string
+		wantCode int
+		wantErr  string
+	}{
+		{
+			name: "success",
+			setup: func(t *testing.T) []string {
+				t.Helper()
+				dir := t.TempDir()
+				fakeTool := func(name string) string {
+					p := filepath.Join(dir, name)
+					os.WriteFile(p, []byte("#!/bin/sh\necho ok\n"), 0o755)
+					return p
+				}
+				return []string{
+					"--llvm-link", fakeTool("llvm-link"),
+					"--opt", fakeTool("opt"),
+					"--llc", fakeTool("llc"),
+				}
+			},
+			wantCode: 0,
+		},
+		{
+			name: "missing tool",
+			setup: func(t *testing.T) []string {
+				t.Helper()
+				return []string{"--llvm-link", "/does/not/exist/llvm-link"}
+			},
+			wantCode: 1,
+			wantErr:  "llvm-link",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append([]string{"doctor"}, tt.setup(t)...)
+			_, stderr, code := runCLI(t, args...)
+			if code != tt.wantCode {
+				t.Fatalf("exit code: got %d, want %d, stderr=%s", code, tt.wantCode, stderr)
+			}
+			if tt.wantErr != "" && !strings.Contains(stderr, tt.wantErr) {
+				t.Fatalf("expected %q in stderr, got: %s", tt.wantErr, stderr)
+			}
+		})
+	}
 }
 
 func TestMultiStringFlag(t *testing.T) {
@@ -194,18 +244,17 @@ func TestRunLinkConfig(t *testing.T) {
 				cfgPath = "/does/not/exist/linker-config.json"
 			}
 
-			var out, errOut bytes.Buffer
-			code := Run(context.Background(), []string{
+			_, stderr, code := runCLI(t,
 				"--input", "/dev/null",
 				"--output", filepath.Join(tmp, "out.o"),
 				"--llvm-link", "/does/not/exist/llvm-link",
 				"--config", cfgPath,
-			}, &out, &errOut)
+			)
 			if code != tt.wantCode {
 				t.Fatalf("expected exit code %d, got %d", tt.wantCode, code)
 			}
-			if tt.wantErr != "" && !strings.Contains(errOut.String(), tt.wantErr) {
-				t.Fatalf("expected %q in stderr, got: %s", tt.wantErr, errOut.String())
+			if tt.wantErr != "" && !strings.Contains(stderr, tt.wantErr) {
+				t.Fatalf("expected %q in stderr, got: %s", tt.wantErr, stderr)
 			}
 		})
 	}
@@ -274,45 +323,45 @@ func TestStartProfiling(t *testing.T) {
 	})
 }
 
-func TestRunLinkWithProfile(t *testing.T) {
-	tmp := t.TempDir()
-	profBase := filepath.Join(tmp, "prof")
+func TestRunLinkProfile(t *testing.T) {
+	t.Run("creates profile on pipeline failure", func(t *testing.T) {
+		tmp := t.TempDir()
+		profBase := filepath.Join(tmp, "prof")
 
-	var out, errOut bytes.Buffer
-	code := Run(context.Background(), []string{
-		"--input", "/dev/null",
-		"--output", filepath.Join(tmp, "out.o"),
-		"--llvm-link", "/does/not/exist/llvm-link",
-		"--profile", profBase,
-	}, &out, &errOut)
-	if code != 1 {
-		t.Fatalf("expected exit code 1, got %d", code)
-	}
-	if _, err := os.Stat(profBase + ".cpu.prof"); err != nil {
-		t.Fatalf("cpu profile not created: %v", err)
-	}
-}
+		_, _, code := runCLI(t,
+			"--input", "/dev/null",
+			"--output", filepath.Join(tmp, "out.o"),
+			"--llvm-link", "/does/not/exist/llvm-link",
+			"--profile", profBase,
+		)
+		if code != 1 {
+			t.Fatalf("expected exit code 1, got %d", code)
+		}
+		if _, err := os.Stat(profBase + ".cpu.prof"); err != nil {
+			t.Fatalf("cpu profile not created: %v", err)
+		}
+	})
 
-func TestRunLinkProfileStartFailure(t *testing.T) {
-	tmp := t.TempDir()
-	f, _ := os.Create(filepath.Join(tmp, "block.prof"))
-	defer f.Close()
-	pprof.StartCPUProfile(f)
-	defer pprof.StopCPUProfile()
+	t.Run("warns on start failure", func(t *testing.T) {
+		tmp := t.TempDir()
+		f, _ := os.Create(filepath.Join(tmp, "block.prof"))
+		defer f.Close()
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
 
-	var out, errOut bytes.Buffer
-	code := Run(context.Background(), []string{
-		"--input", "/dev/null",
-		"--output", filepath.Join(tmp, "out.o"),
-		"--llvm-link", "/does/not/exist/llvm-link",
-		"--profile", filepath.Join(tmp, "prof"),
-	}, &out, &errOut)
-	if code != 1 {
-		t.Fatalf("expected exit code 1, got %d", code)
-	}
-	if !strings.Contains(errOut.String(), "warning: profiling failed to start") {
-		t.Fatalf("expected profiling warning, got: %s", errOut.String())
-	}
+		_, stderr, code := runCLI(t,
+			"--input", "/dev/null",
+			"--output", filepath.Join(tmp, "out.o"),
+			"--llvm-link", "/does/not/exist/llvm-link",
+			"--profile", filepath.Join(tmp, "prof"),
+		)
+		if code != 1 {
+			t.Fatalf("expected exit code 1, got %d", code)
+		}
+		if !strings.Contains(stderr, "warning: profiling failed to start") {
+			t.Fatalf("expected profiling warning, got: %s", stderr)
+		}
+	})
 }
 
 func TestRunLinkFullSuccess(t *testing.T) {
@@ -362,23 +411,22 @@ exit 0`
 	os.WriteFile(filepath.Join(toolDir, "llc"), []byte(llcScript), 0o755)
 
 	output := filepath.Join(tmp, "out.o")
-	var out, errOut bytes.Buffer
-	code := Run(context.Background(), []string{
+	stdout, stderr, code := runCLI(t,
 		"--input", input,
 		"--output", output,
 		"--llvm-link", filepath.Join(toolDir, "llvm-link"),
 		"--opt", filepath.Join(toolDir, "opt"),
 		"--llc", filepath.Join(toolDir, "llc"),
 		"--verbose",
-	}, &out, &errOut)
+	)
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d, stderr=%s", code, errOut.String())
+		t.Fatalf("expected exit code 0, got %d, stderr=%s", code, stderr)
 	}
-	if !strings.Contains(out.String(), "wrote") {
-		t.Fatalf("expected 'wrote' output, got: %s", out.String())
+	if !strings.Contains(stdout, "wrote") {
+		t.Fatalf("expected 'wrote' output, got: %s", stdout)
 	}
-	if !strings.Contains(out.String(), "intermediates:") {
-		t.Fatalf("expected 'intermediates:' in verbose output, got: %s", out.String())
+	if !strings.Contains(stdout, "intermediates:") {
+		t.Fatalf("expected 'intermediates:' in verbose output, got: %s", stdout)
 	}
 }
 
@@ -388,17 +436,16 @@ func TestRunInitSuccess(t *testing.T) {
 	os.Chdir(dir)
 	defer os.Chdir(orig)
 
-	var out, errOut bytes.Buffer
-	code := Run(context.Background(), []string{"init", "xdp_filter"}, &out, &errOut)
+	stdout, stderr, code := runCLI(t, "init", "xdp_filter")
 	if code != 0 {
-		t.Fatalf("expected exit code 0, got %d, stderr=%s", code, errOut.String())
+		t.Fatalf("expected exit code 0, got %d, stderr=%s", code, stderr)
 	}
 	for _, f := range []string{"bpf/xdp_filter.go", "bpf/xdp_filter_stub.go", "Makefile"} {
 		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
 			t.Errorf("expected %s to exist", f)
 		}
 	}
-	if !strings.Contains(out.String(), "create") {
-		t.Errorf("expected 'create' in output, got: %s", out.String())
+	if !strings.Contains(stdout, "create") {
+		t.Errorf("expected 'create' in output, got: %s", stdout)
 	}
 }

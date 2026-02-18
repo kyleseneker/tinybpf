@@ -125,6 +125,8 @@ This generates `bpf/xdp_filter.go` with build tags and an empty entry point, `bp
 
 ## CLI reference
 
+Run `tinybpf --help` for a quick overview, or `tinybpf <command> --help` for details on a specific command.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--input` | *(required)* | Input file (`.ll`, `.bc`, `.o`, `.a`). Repeatable. |
@@ -155,6 +157,7 @@ This generates `bpf/xdp_filter.go` with build tags and an empty entry point, `bp
 | `init <name>` | Scaffold a new BPF project in the current directory |
 | `doctor` | Check toolchain installation and version compatibility |
 | `version` | Print version information |
+| `help` | Show usage overview (also `--help`, `-h`) |
 
 ## Documentation
 

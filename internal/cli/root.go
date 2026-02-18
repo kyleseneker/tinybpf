@@ -1,9 +1,9 @@
-// Package cli implements the tinybpf command-line interface,
-// including the default link subcommand and the doctor and version subcommands.
+// Package cli implements the tinybpf command-line interface.
 package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -24,12 +24,15 @@ import (
 //	go build -ldflags "-X github.com/kyleseneker/tinybpf/internal/cli.Version=v0.1.0"
 var Version = "(dev)"
 
+// multiStringFlag is a flag that can be set multiple times.
 type multiStringFlag []string
 
+// String returns the multiStringFlag as a comma-separated string.
 func (m *multiStringFlag) String() string {
 	return strings.Join(*m, ",")
 }
 
+// Set appends the value to the multiStringFlag.
 func (m *multiStringFlag) Set(value string) error {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -39,29 +42,87 @@ func (m *multiStringFlag) Set(value string) error {
 	return nil
 }
 
-// Run is the top-level entrypoint. It dispatches to the appropriate
-// subcommand based on the first argument.
+// Run is the top-level entrypoint.
 func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	if len(args) > 0 {
-		switch args[0] {
-		case "doctor":
-			return runDoctor(ctx, args[1:], stdout, stderr)
-		case "init":
-			return runInit(args[1:], stdout, stderr)
-		case "version":
-			return runVersion(stdout)
-		case "--version", "-version":
-			return runVersion(stdout)
-		}
+	if len(args) == 0 {
+		printUsage(stderr)
+		return 2
 	}
-	return runLink(ctx, args, stdout, stderr)
+
+	switch args[0] {
+	case "help", "--help", "-h":
+		printUsage(stdout)
+		return 0
+	case "doctor":
+		return runDoctor(ctx, args[1:], stdout, stderr)
+	case "init":
+		return runInit(args[1:], stdout, stderr)
+	case "version", "--version", "-version":
+		return runVersion(stdout)
+	default:
+		return runLink(ctx, args, stdout, stderr)
+	}
 }
 
+// printUsage prints the usage information for the CLI.
+func printUsage(w io.Writer) {
+	fmt.Fprintf(w, `tinybpf %s — Write eBPF programs in Go
+
+Usage:
+  tinybpf --input <file> [flags]    Link TinyGo LLVM IR into a BPF ELF object
+  tinybpf init <name>               Scaffold a new BPF project
+  tinybpf doctor [flags]            Check toolchain installation
+  tinybpf version                   Print version information
+
+Common link flags:
+  --input <file>      Input LLVM file (.ll, .bc, .o, .a). Repeatable.
+  --output <file>     Output eBPF ELF path (default: bpf.o)
+  --program <name>    Program function to keep. Repeatable. Auto-detected if omitted.
+  --section <map>     Program-to-section mapping (name=section). Repeatable.
+  -v, --verbose       Print each pipeline stage.
+
+Run 'tinybpf --input <file> --help' for all link flags.
+`, Version)
+}
+
+// newFlagSet creates a FlagSet with consistent usage formatting.
+func newFlagSet(w io.Writer, usage, desc string) *flag.FlagSet {
+	fs := flag.NewFlagSet("tinybpf", flag.ContinueOnError)
+	fs.SetOutput(w)
+	fs.Usage = func() {
+		fmt.Fprintf(w, "Usage: %s\n\n%s\n\nFlags:\n", usage, desc)
+		fs.VisitAll(func(f *flag.Flag) {
+			if f.Usage == "" {
+				return
+			}
+			fmt.Fprintf(w, "  -%s", f.Name)
+			if f.DefValue != "" && f.DefValue != "false" && f.DefValue != "0" {
+				fmt.Fprintf(w, " (default %s)", f.DefValue)
+			}
+			fmt.Fprintf(w, "\n    \t%s\n", f.Usage)
+		})
+	}
+	return fs
+}
+
+// parseFlags parses args and returns (exitCode, ok).
+func parseFlags(fs *flag.FlagSet, args []string) (code int, ok bool) {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0, false
+		}
+		return 2, false
+	}
+	return 0, true
+}
+
+// runVersion prints the version information for the CLI.
 func runVersion(stdout io.Writer) int {
 	fmt.Fprintf(stdout, "tinybpf %s\n", Version)
 	return 0
 }
 
+// runLink links the TinyGo LLVM IR into a BPF ELF object.
 func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	var inputs multiStringFlag
 	var programs multiStringFlag
@@ -72,8 +133,7 @@ func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		Stderr: stderr,
 	}
 
-	fs := flag.NewFlagSet("tinybpf", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs := newFlagSet(stderr, "tinybpf --input <file> [flags]", "Link TinyGo LLVM IR into a BPF ELF object.")
 
 	fs.Var(&inputs, "input", "Input LLVM file (.ll, .bc, .o, .a). Repeat for multiple modules.")
 	fs.StringVar(&cfg.Output, "output", "bpf.o", "Output eBPF ELF object path.")
@@ -93,11 +153,11 @@ func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 	fs.IntVar(&cfg.Jobs, "jobs", 1, "Number of parallel input normalization workers.")
 	fs.IntVar(&cfg.Jobs, "j", 1, "Number of parallel input normalization workers (shorthand).")
-	fs.StringVar(&profilePath, "profile", "", "") // hidden: pprof output base path
+	fs.StringVar(&profilePath, "profile", "", "")
 	fs.StringVar(&cfg.ConfigPath, "config", "", "Path to linker-config.json for custom passes and settings.")
 
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
 	}
 
 	if len(inputs) == 0 {
@@ -140,7 +200,7 @@ func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// startProfiling begins CPU profiling and returns a cleanup function that
+// startProfiling starts CPU profiling and returns a cleanup function that
 // stops the CPU profile and writes a heap memory profile on completion.
 func startProfiling(basePath string, w io.Writer) (func(), error) {
 	cpuPath := basePath + ".cpu.prof"
@@ -175,19 +235,19 @@ func startProfiling(basePath string, w io.Writer) (func(), error) {
 	return cleanup, nil
 }
 
+// runDoctor checks the toolchain installation and version compatibility.
 func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	cfg := doctor.Config{
 		Stdout: stdout,
 		Stderr: stderr,
 	}
 
-	fs := flag.NewFlagSet("tinybpf doctor", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs := newFlagSet(stderr, "tinybpf doctor [flags]", "Check toolchain installation and version compatibility.")
 	fs.DurationVar(&cfg.Timeout, "timeout", 10*time.Second, "Timeout for each version check.")
 	registerToolFlags(fs, &cfg.Tools)
 
-	if err := fs.Parse(args); err != nil {
-		return 2
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
 	}
 
 	if err := doctor.Run(ctx, cfg); err != nil {
@@ -207,9 +267,14 @@ func registerToolFlags(fs *flag.FlagSet, tools *llvm.ToolOverrides) {
 	fs.StringVar(&tools.Pahole, "pahole", "", "Path to pahole binary (used with --btf).")
 }
 
+// runInit scaffolds a new BPF project in the current directory.
 func runInit(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Fprintln(stdout, "Usage: tinybpf init <name>\n\nScaffold a new BPF project in the current directory.")
+		return 0
+	}
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
-		fmt.Fprintln(stderr, "usage: tinybpf init <name>")
+		fmt.Fprintln(stderr, "Usage: tinybpf init <name>")
 		return 2
 	}
 
@@ -221,7 +286,7 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// parseSectionFlags converts "name=section" strings into a map.
+// parseSectionFlags parses "name=section" strings into a map.
 func parseSectionFlags(flags []string) map[string]string {
 	if len(flags) == 0 {
 		return nil

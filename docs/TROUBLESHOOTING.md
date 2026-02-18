@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Common issues and solutions when using `tinybpf`.
+Common issues and solutions when using `tinybpf`. Run `tinybpf --help` for a quick overview of available commands and flags.
 
 ## Setup issues
 
