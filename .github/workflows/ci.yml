@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: ["1.23.x", "1.24.x"]
+        llvm-version: ["20"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Install LLVM toolchain
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-${{ matrix.llvm-version }} main" | sudo tee /etc/apt/sources.list.d/llvm-${{ matrix.llvm-version }}.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-${{ matrix.llvm-version }}
+          echo "/usr/lib/llvm-${{ matrix.llvm-version }}/bin" >> "$GITHUB_PATH"
+
+      - name: Print versions
+        run: |
+          go version
+          llvm-link --version
+          opt --version
+          llc --version
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Validate scripts
+        run: |
+          bash -n scripts/setup.sh
+          bash -n scripts/create-vm.sh
+          bash -n scripts/e2e.sh
