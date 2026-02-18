@@ -5,6 +5,25 @@ import (
 	"testing"
 )
 
+func FuzzAssignSections(f *testing.F) {
+	f.Add(`define i32 @handle_connect(ptr %ctx) #4 !dbg !0 {
+entry:
+  ret i32 0
+}`)
+	f.Add(`@main.events = internal global %main.bpfMapDef { i32 27 }, align 4`)
+	f.Add(`@main.events = global %main.bpfMapDef { i32 27 }`)
+	f.Add(`define i32 @my_func(ptr %ctx) section "existing" {
+entry:
+  ret i32 0
+}`)
+	f.Add(`just some text`)
+
+	f.Fuzz(func(t *testing.T, ir string) {
+		lines := strings.Split(ir, "\n")
+		assignSections(lines, nil)
+	})
+}
+
 func TestAssignSections(t *testing.T) {
 	t.Run("with map", func(t *testing.T) {
 		input := strings.Split(strings.TrimSpace(`

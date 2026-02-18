@@ -6,6 +6,41 @@ import (
 	"testing"
 )
 
+func FuzzExtractPrograms(f *testing.F) {
+	f.Add(`define i32 @handle_connect(ptr %ctx) {
+entry:
+  ret i32 0
+}`)
+	f.Add(`define void @__dynamic_loader() {
+entry:
+  ret void
+}
+
+define i32 @my_prog(ptr %ctx) {
+entry:
+  ret i32 0
+}`)
+	f.Add(`define void @runtime.runMain() {
+entry:
+  ret void
+}`)
+	f.Add(`no define blocks at all`)
+	f.Add(`define i32 @foo() {
+entry:
+  ret i32 0
+}
+
+define i32 @bar() {
+entry:
+  ret i32 1
+}`)
+
+	f.Fuzz(func(t *testing.T, ir string) {
+		lines := strings.Split(ir, "\n")
+		extractPrograms(lines, nil, false, io.Discard)
+	})
+}
+
 func TestExtractPrograms(t *testing.T) {
 	base := strings.Split(strings.TrimSpace(`
 source_filename = "main"

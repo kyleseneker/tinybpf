@@ -78,18 +78,114 @@ See [`examples/network-sidecar/bpf/probe.go`](../examples/network-sidecar/bpf/pr
 
 ## Supported BPF helpers
 
+IDs are from the `__BPF_FUNC_MAPPER` enum in `include/uapi/linux/bpf.h`.
+
+### Map operations
+
 | Go declaration name | Kernel helper | Helper ID |
 |---------------------|--------------|-----------|
 | `bpfMapLookupElem` | `bpf_map_lookup_elem` | 1 |
 | `bpfMapUpdateElem` | `bpf_map_update_elem` | 2 |
 | `bpfMapDeleteElem` | `bpf_map_delete_elem` | 3 |
+| `bpfMapPushElem` | `bpf_map_push_elem` | 87 |
+| `bpfMapPopElem` | `bpf_map_pop_elem` | 88 |
+| `bpfMapPeekElem` | `bpf_map_peek_elem` | 89 |
+
+### Time
+
+| Go declaration name | Kernel helper | Helper ID |
+|---------------------|--------------|-----------|
 | `bpfKtimeGetNs` | `bpf_ktime_get_ns` | 5 |
+| `bpfKtimeGetBootNs` | `bpf_ktime_get_boot_ns` | 125 |
+
+### Print / trace
+
+| Go declaration name | Kernel helper | Helper ID |
+|---------------------|--------------|-----------|
 | `bpfTracePrintk` | `bpf_trace_printk` | 6 |
+
+### Process info
+
+| Go declaration name | Kernel helper | Helper ID |
+|---------------------|--------------|-----------|
 | `bpfGetCurrentPidTgid` | `bpf_get_current_pid_tgid` | 14 |
 | `bpfGetCurrentComm` | `bpf_get_current_comm` | 16 |
+| `bpfGetCurrentTask` | `bpf_get_current_task` | 35 |
+| `bpfGetCurrentTaskBtf` | `bpf_get_current_task_btf` | 158 |
+| `bpfGetCurrentCgroupId` | `bpf_get_current_cgroup_id` | 80 |
+
+### CPU info
+
+| Go declaration name | Kernel helper | Helper ID |
+|---------------------|--------------|-----------|
+| `bpfGetSmpProcessorId` | `bpf_get_smp_processor_id` | 8 |
+| `bpfGetNumaNodeId` | `bpf_get_numa_node_id` | 42 |
+
+### Perf event
+
+| Go declaration name | Kernel helper | Helper ID |
+|---------------------|--------------|-----------|
 | `bpfPerfEventOutput` | `bpf_perf_event_output` | 25 |
-| `bpfProbeReadUser` | `bpf_probe_read_user` | 112 |
+| `bpfPerfEventReadValue` | `bpf_perf_event_read_value` | 55 |
+
+### Ring buffer
+
+| Go declaration name | Kernel helper | Helper ID |
+|---------------------|--------------|-----------|
 | `bpfRingbufOutput` | `bpf_ringbuf_output` | 130 |
+| `bpfRingbufReserve` | `bpf_ringbuf_reserve` | 131 |
+| `bpfRingbufSubmit` | `bpf_ringbuf_submit` | 132 |
+| `bpfRingbufDiscard` | `bpf_ringbuf_discard` | 133 |
+| `bpfRingbufQuery` | `bpf_ringbuf_query` | 134 |
+
+### Probe / memory read
+
+| Go declaration name | Kernel helper | Helper ID |
+|---------------------|--------------|-----------|
+| `bpfProbeReadUser` | `bpf_probe_read_user` | 112 |
+| `bpfProbeReadKernel` | `bpf_probe_read_kernel` | 113 |
+| `bpfProbeReadKernelStr` | `bpf_probe_read_kernel_str` | 115 |
+
+### Tracing
+
+| Go declaration name | Kernel helper | Helper ID |
+|---------------------|--------------|-----------|
+| `bpfGetStack` | `bpf_get_stack` | 67 |
+| `bpfGetFuncIp` | `bpf_get_func_ip` | 173 |
+| `bpfGetAttachCookie` | `bpf_get_attach_cookie` | 174 |
+
+### Networking / skb
+
+| Go declaration name | Kernel helper | Helper ID |
+|---------------------|--------------|-----------|
+| `bpfSkbStoreBytes` | `bpf_skb_store_bytes` | 9 |
+| `bpfSkbLoadBytes` | `bpf_skb_load_bytes` | 26 |
+| `bpfL3CsumReplace` | `bpf_l3_csum_replace` | 10 |
+| `bpfL4CsumReplace` | `bpf_l4_csum_replace` | 11 |
+| `bpfRedirect` | `bpf_redirect` | 23 |
+| `bpfRedirectMap` | `bpf_redirect_map` | 51 |
+| `bpfFibLookup` | `bpf_fib_lookup` | 69 |
+
+### XDP
+
+| Go declaration name | Kernel helper | Helper ID |
+|---------------------|--------------|-----------|
+| `bpfXdpAdjustHead` | `bpf_xdp_adjust_head` | 44 |
+| `bpfXdpAdjustTail` | `bpf_xdp_adjust_tail` | 65 |
+
+### Socket
+
+| Go declaration name | Kernel helper | Helper ID |
+|---------------------|--------------|-----------|
+| `bpfSkLookupTcp` | `bpf_sk_lookup_tcp` | 84 |
+| `bpfSkLookupUdp` | `bpf_sk_lookup_udp` | 85 |
+| `bpfGetSocketCookie` | `bpf_get_socket_cookie` | 46 |
+
+### Tail call
+
+| Go declaration name | Kernel helper | Helper ID |
+|---------------------|--------------|-----------|
+| `bpfTailCall` | `bpf_tail_call` | 12 |
 
 Unrecognized helpers produce an explicit error during transformation rather than silently emitting invalid IR.
 

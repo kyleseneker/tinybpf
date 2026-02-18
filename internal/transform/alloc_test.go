@@ -5,6 +5,34 @@ import (
 	"testing"
 )
 
+func FuzzReplaceAlloc(f *testing.F) {
+	f.Add(`define i32 @my_func(ptr %ctx) {
+entry:
+  %buf = call align 4 dereferenceable(16) ptr @runtime.alloc(i64 16, ptr nonnull inttoptr (i64 3 to ptr), ptr undef) #7
+  ret i32 0
+}`)
+	f.Add(`define i32 @my_func(ptr %ctx) {
+  %buf = call align 4 dereferenceable(16) ptr @runtime.alloc(i64 16, ptr nonnull inttoptr (i64 3 to ptr), ptr undef) #7
+  ret i32 0
+}`)
+	f.Add(`define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`)
+	f.Add(`just some text with no define blocks`)
+	f.Add(`define i32 @f() {
+entry:
+  %a = call align 4 dereferenceable(8) ptr @runtime.alloc(i64 8, ptr null, ptr undef)
+  %b = call align 4 dereferenceable(32) ptr @runtime.alloc(i64 32, ptr null, ptr undef)
+  ret i32 0
+}`)
+
+	f.Fuzz(func(t *testing.T, ir string) {
+		lines := strings.Split(ir, "\n")
+		replaceAlloc(lines)
+	})
+}
+
 func TestReplaceAlloc(t *testing.T) {
 	t.Run("single alloc", func(t *testing.T) {
 		input := strings.Split(strings.TrimSpace(`

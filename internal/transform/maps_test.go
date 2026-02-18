@@ -5,6 +5,23 @@ import (
 	"testing"
 )
 
+func FuzzStripMapPrefix(f *testing.F) {
+	f.Add(`@main.events = global { ptr } zeroinitializer, section ".maps", align 8
+  call i64 @helper(ptr @main.events, i64 0)`)
+	f.Add(`@events = global { ptr } zeroinitializer, section ".maps", align 8`)
+	f.Add(`@trailingdot. = global { ptr } zeroinitializer, section ".maps", align 8`)
+	f.Add(`@main.x = global i32 0
+define void @main.foo() {
+  ret void
+}`)
+	f.Add(`no globals at all`)
+
+	f.Fuzz(func(t *testing.T, ir string) {
+		lines := strings.Split(ir, "\n")
+		stripMapPrefix(lines)
+	})
+}
+
 func TestStripMapPrefix(t *testing.T) {
 	tests := []struct {
 		name  string

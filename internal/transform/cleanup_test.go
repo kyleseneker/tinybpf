@@ -5,6 +5,33 @@ import (
 	"testing"
 )
 
+func FuzzCleanup(f *testing.F) {
+	f.Add(`; Function Attrs: nounwind
+declare void @unused_func()
+
+declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+
+define i32 @my_func() #4 {
+entry:
+  call void @llvm.memset.p0.i64(ptr null, i8 0, i64 16, i1 false)
+  ret i32 0
+}
+
+attributes #0 = { nounwind }
+attributes #4 = { nounwind }`)
+	f.Add(`@some_global = global i32 42
+define void @foo() {
+  ret void
+}`)
+	f.Add(`; Function Attrs: nounwind`)
+	f.Add(`just some text with no IR constructs`)
+
+	f.Fuzz(func(t *testing.T, ir string) {
+		lines := strings.Split(ir, "\n")
+		cleanup(lines)
+	})
+}
+
 func TestCleanup(t *testing.T) {
 	input := strings.Split(strings.TrimSpace(`
 ; Function Attrs: nounwind

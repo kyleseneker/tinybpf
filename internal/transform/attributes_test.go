@@ -5,6 +5,19 @@ import (
 	"testing"
 )
 
+func FuzzStripAttributes(f *testing.F) {
+	f.Add(`attributes #0 = { allockind("alloc,zeroed") allocsize(0) "alloc-family"="runtime.alloc" "target-cpu"="generic" "target-features"="+neon" }`)
+	f.Add(`attributes #4 = { nounwind "target-cpu"="generic" }`)
+	f.Add(`attributes #7 = { nounwind }`)
+	f.Add(`not an attributes line at all`)
+	f.Add(`attributes #0 = { }`)
+
+	f.Fuzz(func(t *testing.T, line string) {
+		lines := strings.Split(line, "\n")
+		stripAttributes(lines)
+	})
+}
+
 func TestStripAttributes(t *testing.T) {
 	lines := []string{
 		`attributes #0 = { allockind("alloc,zeroed") allocsize(0) "alloc-family"="runtime.alloc" "target-cpu"="generic" "target-features"="+ete,+fp-armv8,+neon,+trbe,+v8a" }`,

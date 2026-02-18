@@ -9,6 +9,44 @@ import (
 	"testing"
 )
 
+func FuzzTransformLines(f *testing.F) {
+	f.Add(`target datalayout = "e-m:o-p270:32:32-p271:32:32"
+target triple = "arm64-apple-macosx11.0.0"
+
+define i32 @my_program(ptr %ctx) {
+entry:
+  ret i32 0
+}`)
+	f.Add(`target triple = "x86_64-unknown-linux-gnu"
+
+@main.events = global %main.bpfMapDef { i32 27, i32 0, i32 0, i32 16777216, i32 0 }, align 4
+
+define i32 @my_func(ptr %ctx) #0 {
+entry:
+  %0 = call i64 @main.bpfGetCurrentPidTgid(ptr undef) #7
+  ret i32 0
+}
+
+attributes #0 = { "target-cpu"="generic" "target-features"="+neon" }`)
+	f.Add(`just random text that is not IR`)
+	f.Add(`define void @runtime.runMain() {
+entry:
+  ret void
+}
+
+define i32 @handle(ptr %ctx) {
+entry:
+  %buf = call align 4 dereferenceable(16) ptr @runtime.alloc(i64 16, ptr null, ptr undef)
+  %1 = call i64 @main.bpfRingbufOutput(ptr @main.events, ptr %buf, i64 16, i64 0, ptr undef) #7
+  ret i32 0
+}`)
+
+	f.Fuzz(func(t *testing.T, ir string) {
+		lines := strings.Split(ir, "\n")
+		TransformLines(lines, Options{Stdout: io.Discard})
+	})
+}
+
 func TestRun(t *testing.T) {
 	t.Run("read error", func(t *testing.T) {
 		if err := Run("/does/not/exist.ll", filepath.Join(t.TempDir(), "out.ll"), Options{}); err == nil {
