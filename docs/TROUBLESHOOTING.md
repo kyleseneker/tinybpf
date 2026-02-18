@@ -47,6 +47,31 @@ tinybpf doctor
 
 If a required tool (`llvm-link`, `opt`, `llc`) is missing, install LLVM or pass the tool path explicitly with `--llvm-link`, `--opt`, or `--llc`.
 
+## Build errors
+
+When using `tinybpf build`, the TinyGo compilation step runs before the link pipeline. Errors from this stage are reported as `tinygo-compile`.
+
+### Stage `tinygo-compile` — TOOL_EXECUTION_FAILED
+
+TinyGo could not compile the Go package.
+
+**Common causes:**
+- Syntax or type errors in the Go source
+- Missing build tags (`//go:build tinygo`)
+- Package path is wrong or not a valid Go package
+- TinyGo not found on PATH
+
+**Fix:**
+1. Verify the package compiles directly:
+   ```bash
+   tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o /dev/null ./bpf
+   ```
+2. If TinyGo is not on PATH, pass its location explicitly:
+   ```bash
+   tinybpf build --tinygo /path/to/tinygo ./bpf
+   ```
+3. Run `tinybpf doctor` to check your full toolchain.
+
 ## Pipeline errors
 
 `tinybpf` reports errors as structured diagnostics with a stage name, error code, and remediation hint. The stage tells you where in the pipeline the failure occurred.

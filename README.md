@@ -104,12 +104,20 @@ func handle_connect(ctx unsafe.Pointer) int32 {
 }
 ```
 
-Compile and link:
+Compile and link in one step:
+
+```bash
+tinybpf build --output program.o \
+  --section handle_connect=tracepoint/syscalls/sys_enter_connect \
+  ./bpf
+```
+
+Or, if you prefer the two-step workflow:
 
 ```bash
 tinygo build -o program.ll -gc=none -scheduler=none -panic=trap -opt=1 ./bpf
 
-tinybpf --input program.ll --output program.o \
+tinybpf link --input program.ll --output program.o \
   --section handle_connect=tracepoint/syscalls/sys_enter_connect
 ```
 
@@ -127,37 +135,59 @@ This generates `bpf/xdp_filter.go` with build tags and an empty entry point, `bp
 
 Run `tinybpf --help` for a quick overview, or `tinybpf <command> --help` for details on a specific command.
 
+### Subcommands
+
+| Subcommand | Description |
+|------------|-------------|
+| `build [flags] <package>` | Compile Go source to BPF ELF in one step (runs TinyGo + link pipeline) |
+| `link --input <file> [flags]` | Link TinyGo LLVM IR into a BPF ELF object |
+| `init <name>` | Scaffold a new BPF project in the current directory |
+| `doctor` | Check toolchain installation and version compatibility |
+| `version` | Print version information |
+| `help` | Show usage overview (also `--help`, `-h`) |
+
+The bare-flag form `tinybpf --input <file> [flags]` still works as an alias for `link`.
+
+### Shared flags (build and link)
+
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--input` | *(required)* | Input file (`.ll`, `.bc`, `.o`, `.a`). Repeatable. |
 | `--output`, `-o` | `bpf.o` | Output ELF path. |
 | `--program` | *(auto-detect)* | Program function to keep. Repeatable. |
 | `--section` | | Program-to-section mapping (`name=section`). Repeatable. |
 | `--cpu` | `v3` | BPF CPU version for `llc -mcpu`. |
 | `--opt-profile` | `default` | `conservative`, `default`, `aggressive`, or `verifier-safe`. |
 | `--pass-pipeline` | | Explicit `opt` pass pipeline (overrides profile). |
-| `--config` | | Path to `linker-config.json` for custom passes. |
-| `--jobs`, `-j` | `1` | Parallel input normalization workers. |
 | `--btf` | `false` | Inject BTF via `pahole`. |
-| `--pahole` | | Path to `pahole`. |
 | `--verbose`, `-v` | `false` | Print each pipeline stage. |
 | `--timeout` | `30s` | Per-stage timeout. |
 | `--keep-temp` | `false` | Preserve intermediate files for debugging. |
 | `--tmpdir` | | Directory for intermediate files. |
-| `--llvm-link` | | Override path to `llvm-link`. |
-| `--opt` | | Override path to `opt`. |
-| `--llc` | | Override path to `llc`. |
-| `--llvm-ar` | | Override path to `llvm-ar`. |
-| `--llvm-objcopy` | | Override path to `llvm-objcopy`. |
 
-### Subcommands
+### build-only flags
 
-| Subcommand | Description |
-|------------|-------------|
-| `init <name>` | Scaffold a new BPF project in the current directory |
-| `doctor` | Check toolchain installation and version compatibility |
-| `version` | Print version information |
-| `help` | Show usage overview (also `--help`, `-h`) |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--tinygo` | *(PATH)* | Path to tinygo binary. |
+
+### link-only flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--input` | *(required)* | Input file (`.ll`, `.bc`, `.o`, `.a`). Repeatable. |
+| `--config` | | Path to `linker-config.json` for custom passes. |
+| `--jobs`, `-j` | `1` | Parallel input normalization workers. |
+
+### Tool path overrides (build and link)
+
+| Flag | Description |
+|------|-------------|
+| `--llvm-link` | Override path to `llvm-link`. |
+| `--opt` | Override path to `opt`. |
+| `--llc` | Override path to `llc`. |
+| `--llvm-ar` | Override path to `llvm-ar`. |
+| `--llvm-objcopy` | Override path to `llvm-objcopy`. |
+| `--pahole` | Override path to `pahole`. |
 
 ## Documentation
 

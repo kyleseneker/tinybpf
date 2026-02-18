@@ -7,16 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
-	"runtime"
-	"runtime/pprof"
 	"strings"
 	"time"
 
-	"github.com/kyleseneker/tinybpf/internal/doctor"
 	"github.com/kyleseneker/tinybpf/internal/llvm"
 	"github.com/kyleseneker/tinybpf/internal/pipeline"
-	"github.com/kyleseneker/tinybpf/internal/scaffold"
 )
 
 // Version is set at build time via ldflags:
@@ -53,10 +48,14 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "help", "--help", "-h":
 		printUsage(stdout)
 		return 0
+	case "build":
+		return runBuild(ctx, args[1:], stdout, stderr)
+	case "link":
+		return runLink(ctx, args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(ctx, args[1:], stdout, stderr)
 	case "init":
-		return runInit(args[1:], stdout, stderr)
+		return runInit(ctx, args[1:], stdout, stderr)
 	case "version", "--version", "-version":
 		return runVersion(stdout)
 	default:
@@ -69,19 +68,18 @@ func printUsage(w io.Writer) {
 	fmt.Fprintf(w, `tinybpf %s — Write eBPF programs in Go
 
 Usage:
-  tinybpf --input <file> [flags]    Link TinyGo LLVM IR into a BPF ELF object
+  tinybpf build [flags] <package>   Compile Go source to BPF ELF (one step)
+  tinybpf link --input <file> [flags]
+                                    Link TinyGo LLVM IR into a BPF ELF object
   tinybpf init <name>               Scaffold a new BPF project
   tinybpf doctor [flags]            Check toolchain installation
   tinybpf version                   Print version information
+  tinybpf help                      Show this message
 
-Common link flags:
-  --input <file>      Input LLVM file (.ll, .bc, .o, .a). Repeatable.
-  --output <file>     Output eBPF ELF path (default: bpf.o)
-  --program <name>    Program function to keep. Repeatable. Auto-detected if omitted.
-  --section <map>     Program-to-section mapping (name=section). Repeatable.
-  -v, --verbose       Print each pipeline stage.
+Run 'tinybpf <command> --help' for details on a specific command.
 
-Run 'tinybpf --input <file> --help' for all link flags.
+The bare-flag form 'tinybpf --input <file> [flags]' still works as an
+alias for 'tinybpf link'.
 `, Version)
 }
 
@@ -90,7 +88,17 @@ func newFlagSet(w io.Writer, usage, desc string) *flag.FlagSet {
 	fs := flag.NewFlagSet("tinybpf", flag.ContinueOnError)
 	fs.SetOutput(w)
 	fs.Usage = func() {
-		fmt.Fprintf(w, "Usage: %s\n\n%s\n\nFlags:\n", usage, desc)
+		fmt.Fprintf(w, "Usage: %s\n\n%s\n", usage, desc)
+		var hasFlags bool
+		fs.VisitAll(func(f *flag.Flag) {
+			if f.Usage != "" {
+				hasFlags = true
+			}
+		})
+		if !hasFlags {
+			return
+		}
+		fmt.Fprintln(w, "\nFlags:")
 		fs.VisitAll(func(f *flag.Flag) {
 			if f.Usage == "" {
 				return
@@ -122,20 +130,8 @@ func runVersion(stdout io.Writer) int {
 	return 0
 }
 
-// runLink links the TinyGo LLVM IR into a BPF ELF object.
-func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	var inputs multiStringFlag
-	var programs multiStringFlag
-	var sectionFlags multiStringFlag
-	var profilePath string
-	cfg := pipeline.Config{
-		Stdout: stdout,
-		Stderr: stderr,
-	}
-
-	fs := newFlagSet(stderr, "tinybpf --input <file> [flags]", "Link TinyGo LLVM IR into a BPF ELF object.")
-
-	fs.Var(&inputs, "input", "Input LLVM file (.ll, .bc, .o, .a). Repeat for multiple modules.")
+// registerPipelineFlags registers the flags shared by build and link.
+func registerPipelineFlags(fs *flag.FlagSet, cfg *pipeline.Config, programs, sections *multiStringFlag) {
 	fs.StringVar(&cfg.Output, "output", "bpf.o", "Output eBPF ELF object path.")
 	fs.StringVar(&cfg.Output, "o", "bpf.o", "Output eBPF ELF object path (shorthand).")
 	fs.StringVar(&cfg.CPU, "cpu", "v3", "BPF CPU version passed to llc as -mcpu.")
@@ -147,113 +143,22 @@ func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.DurationVar(&cfg.Timeout, "timeout", 30*time.Second, "Per-stage command timeout.")
 	fs.StringVar(&cfg.TempDir, "tmpdir", "", "Directory for intermediate artifacts (kept after run).")
 	fs.BoolVar(&cfg.EnableBTF, "btf", false, "Enable BTF injection via pahole.")
-	fs.Var(&programs, "program", "Program function name to keep. Repeat for multiple programs. Auto-detected if omitted.")
-	fs.Var(&sectionFlags, "section", "Program-to-section mapping (e.g., handle_connect=tracepoint/syscalls/sys_enter_connect). Repeat for multiple.")
+	fs.Var(programs, "program", "Program function name to keep. Repeat for multiple programs. Auto-detected if omitted.")
+	fs.Var(sections, "section", "Program-to-section mapping (e.g., handle_connect=tracepoint/syscalls/sys_enter_connect). Repeat for multiple.")
 	registerToolFlags(fs, &cfg.Tools)
+}
 
-	fs.IntVar(&cfg.Jobs, "jobs", 1, "Number of parallel input normalization workers.")
-	fs.IntVar(&cfg.Jobs, "j", 1, "Number of parallel input normalization workers (shorthand).")
-	fs.StringVar(&profilePath, "profile", "", "")
-	fs.StringVar(&cfg.ConfigPath, "config", "", "Path to linker-config.json for custom passes and settings.")
-
-	if code, ok := parseFlags(fs, args); !ok {
-		return code
-	}
-
-	if len(inputs) == 0 {
-		fmt.Fprintln(stderr, "error: at least one --input is required")
-		fs.Usage()
-		return 2
-	}
-	cfg.Inputs = inputs
-	cfg.Programs = programs
-	cfg.Sections = parseSectionFlags(sectionFlags)
-
-	if cfg.ConfigPath != "" {
-		linkerCfg, err := llvm.LoadConfig(cfg.ConfigPath)
-		if err != nil {
-			fmt.Fprintf(stderr, "error: %v\n", err)
-			return 1
-		}
-		cfg.CustomPasses = linkerCfg.CustomPasses
-	}
-
-	if profilePath != "" {
-		cleanup, err := startProfiling(profilePath, stderr)
-		if err != nil {
-			fmt.Fprintf(stderr, "warning: profiling failed to start: %v\n", err)
-		} else {
-			defer cleanup()
-		}
-	}
-
+// runPipelineAndReport runs the link pipeline and prints the result.
+func runPipelineAndReport(ctx context.Context, cfg pipeline.Config, stdout, stderr io.Writer) int {
 	artifacts, err := pipeline.Run(ctx, cfg)
 	if err != nil {
 		fmt.Fprintln(stderr, err.Error())
 		return 1
 	}
-
 	if cfg.Verbose || cfg.KeepTemp || cfg.TempDir != "" {
 		fmt.Fprintf(stdout, "intermediates: %s\n", artifacts.TempDir)
 	}
 	fmt.Fprintf(stdout, "wrote %s\n", cfg.Output)
-	return 0
-}
-
-// startProfiling starts CPU profiling and returns a cleanup function that
-// stops the CPU profile and writes a heap memory profile on completion.
-func startProfiling(basePath string, w io.Writer) (func(), error) {
-	cpuPath := basePath + ".cpu.prof"
-	f, err := os.Create(cpuPath)
-	if err != nil {
-		return nil, fmt.Errorf("creating CPU profile: %w", err)
-	}
-	if err := pprof.StartCPUProfile(f); err != nil {
-		_ = f.Close()
-		return nil, fmt.Errorf("starting CPU profile: %w", err)
-	}
-
-	cleanup := func() {
-		pprof.StopCPUProfile()
-		_ = f.Close()
-		fmt.Fprintf(w, "cpu profile: %s\n", cpuPath)
-
-		memPath := basePath + ".mem.prof"
-		mf, err := os.Create(memPath)
-		if err != nil {
-			fmt.Fprintf(w, "warning: memory profile: %v\n", err)
-			return
-		}
-		defer func() { _ = mf.Close() }()
-		runtime.GC()
-		if err := pprof.WriteHeapProfile(mf); err != nil {
-			fmt.Fprintf(w, "warning: memory profile: %v\n", err)
-			return
-		}
-		fmt.Fprintf(w, "memory profile: %s\n", memPath)
-	}
-	return cleanup, nil
-}
-
-// runDoctor checks the toolchain installation and version compatibility.
-func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	cfg := doctor.Config{
-		Stdout: stdout,
-		Stderr: stderr,
-	}
-
-	fs := newFlagSet(stderr, "tinybpf doctor [flags]", "Check toolchain installation and version compatibility.")
-	fs.DurationVar(&cfg.Timeout, "timeout", 10*time.Second, "Timeout for each version check.")
-	registerToolFlags(fs, &cfg.Tools)
-
-	if code, ok := parseFlags(fs, args); !ok {
-		return code
-	}
-
-	if err := doctor.Run(ctx, cfg); err != nil {
-		fmt.Fprintln(stderr, err.Error())
-		return 1
-	}
 	return 0
 }
 
@@ -267,23 +172,17 @@ func registerToolFlags(fs *flag.FlagSet, tools *llvm.ToolOverrides) {
 	fs.StringVar(&tools.Pahole, "pahole", "", "Path to pahole binary (used with --btf).")
 }
 
-// runInit scaffolds a new BPF project in the current directory.
-func runInit(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
-		fmt.Fprintln(stdout, "Usage: tinybpf init <name>\n\nScaffold a new BPF project in the current directory.")
-		return 0
-	}
-	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
-		fmt.Fprintln(stderr, "Usage: tinybpf init <name>")
-		return 2
-	}
+// cliErrorf prints a formatted error message and returns exit code 1.
+func cliErrorf(w io.Writer, format string, args ...any) int {
+	fmt.Fprintf(w, "error: "+format+"\n", args...)
+	return 1
+}
 
-	cfg := scaffold.Config{Dir: ".", Program: args[0], Stdout: stdout}
-	if err := scaffold.Run(cfg); err != nil {
-		fmt.Fprintf(stderr, "error: %v\n", err)
-		return 1
-	}
-	return 0
+// usageErrorf prints a formatted error message, shows the flagset usage, and returns exit code 2.
+func usageErrorf(fs *flag.FlagSet, w io.Writer, format string, args ...any) int {
+	fmt.Fprintf(w, "error: "+format+"\n", args...)
+	fs.Usage()
+	return 2
 }
 
 // parseSectionFlags parses "name=section" strings into a map.

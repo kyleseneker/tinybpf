@@ -26,6 +26,7 @@ const (
 	StageFinalize  Stage = "finalize"
 	StageBTF       Stage = "btf"
 	StageValidate  Stage = "elf-validate"
+	StageCompile   Stage = "tinygo-compile"
 )
 
 const (
