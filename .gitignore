@@ -36,3 +36,6 @@ Thumbs.db
 
 # LLVM intermediates (keep testdata fixtures)
 *.bpf.o
+
+# Internal planning docs
+docs/ROADMAP.md

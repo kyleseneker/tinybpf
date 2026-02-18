@@ -147,7 +147,7 @@ See [`examples/network-sidecar/`](examples/network-sidecar/) for a complete work
 | [Writing Go for eBPF](docs/TINYGO_COMPAT.md) | Language constraints, probe structure, and supported BPF helpers |
 | [Architecture](docs/ARCHITECTURE.md) | Pipeline design and the 11-step IR transformation |
 | [Support Matrix](docs/SUPPORT_MATRIX.md) | Tested toolchain versions and platforms |
-| [Roadmap](docs/ROADMAP.md) | Release milestones and planned work |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Setup issues, pipeline errors, and verifier debugging |
 | [Contributing](CONTRIBUTING.md) | Development setup, guidelines, and PR process |
 
 ## Related projects

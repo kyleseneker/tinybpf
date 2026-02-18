@@ -93,6 +93,109 @@ See [`examples/network-sidecar/bpf/probe.go`](../examples/network-sidecar/bpf/pr
 
 Unrecognized helpers produce an explicit error during transformation rather than silently emitting invalid IR.
 
+## Common patterns
+
+Concrete examples of Go code patterns that work in BPF programs.
+
+### Bounded loops
+
+The BPF verifier requires loops to have a provably finite iteration count. Use fixed-bound `for` loops:
+
+```go
+// OK: bounded iteration
+var buf [16]byte
+for i := 0; i < 16; i++ {
+    buf[i] = 0
+}
+
+// NOT OK: verifier rejects unbounded loops
+// for i := 0; i < n; i++ { ... }  // n is runtime-variable
+```
+
+### Fixed-size arrays instead of slices
+
+BPF has no heap, so slices and dynamic arrays cannot be used. Use fixed-size arrays:
+
+```go
+// OK: fixed-size array
+type event struct {
+    Comm [16]byte
+    PID  uint32
+}
+
+// NOT OK: slices require heap allocation
+// comm := make([]byte, 16)
+```
+
+### Struct field access from context
+
+Probe context pointers must be cast to typed struct pointers for field access:
+
+```go
+type tpArgs struct {
+    _         [16]byte // padding to match kernel layout
+    Fd        int64
+    Uservaddr uint64
+}
+
+//export my_probe
+func my_probe(ctx unsafe.Pointer) int32 {
+    args := (*tpArgs)(ctx)
+    fd := args.Fd
+    _ = fd
+    return 0
+}
+```
+
+The struct layout must exactly match the kernel's tracepoint or kprobe context. Check the format with:
+
+```bash
+cat /sys/kernel/tracing/events/<category>/<event>/format
+```
+
+### Reading user memory
+
+Use `bpf_probe_read_user` to safely copy data from userspace pointers:
+
+```go
+//go:extern bpf_probe_read_user
+func bpfProbeReadUser(dst unsafe.Pointer, size uint32, src unsafe.Pointer) int64
+
+var sa sockaddrIn
+bpfProbeReadUser(unsafe.Pointer(&sa), uint32(unsafe.Sizeof(sa)), unsafe.Pointer(uintptr(args.Addr)))
+```
+
+Direct dereference of userspace pointers is rejected by the verifier.
+
+### Map operations
+
+BPF maps are declared as globals with `bpfMapDef` and operated on via helpers:
+
+```go
+//go:extern bpf_map_lookup_elem
+func bpfMapLookupElem(mapPtr unsafe.Pointer, key unsafe.Pointer) unsafe.Pointer
+
+//go:extern bpf_map_update_elem
+func bpfMapUpdateElem(mapPtr unsafe.Pointer, key unsafe.Pointer, value unsafe.Pointer, flags uint64) int64
+
+var counters = bpfMapDef{
+    Type:       2, // BPF_MAP_TYPE_ARRAY
+    KeySize:    4,
+    ValueSize:  8,
+    MaxEntries: 256,
+}
+
+func incrementCounter(idx uint32) {
+    valPtr := bpfMapLookupElem(unsafe.Pointer(&counters), unsafe.Pointer(&idx))
+    if valPtr != nil {
+        val := (*uint64)(valPtr)
+        *val++
+    }
+}
+```
+
+Always check the return value of `bpf_map_lookup_elem` for `nil` before dereferencing.
+
 ## What tinybpf does to the IR
 
 The workflow is: compile with TinyGo targeting the host architecture, then run `tinybpf` to transform and retarget the IR into a valid eBPF ELF object. TinyGo 0.40.x does not include a BPF backend, so the tool handles retargeting during transformation.
@@ -190,3 +293,9 @@ TinyGo 0.40.x does not include an LLVM BPF backend. Its bundled LLVM targets ARM
 A prior effort to fork TinyGo and add BPF to its LLVM build ([miekg/bpf](https://github.com/miekg/bpf)) encountered fundamental LLVM errors in TinyGo's runtime code and was [archived](https://miek.nl/2024/august/29/ebpf-from-go-first-steps/).
 
 `tinybpf` takes a different approach: compile for the host architecture, then retarget to BPF during the IR transformation stage.
+
+## Further reading
+
+- [Troubleshooting](TROUBLESHOOTING.md) — setup issues, pipeline errors, and verifier debugging
+- [Architecture](ARCHITECTURE.md) — full pipeline design and IR transformation details
+- [Support Matrix](SUPPORT_MATRIX.md) — tested toolchain versions and platforms
