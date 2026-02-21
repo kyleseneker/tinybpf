@@ -25,9 +25,9 @@ If you prefer to install dependencies yourself:
 
 | Dependency | Version | Required | Notes |
 |------------|---------|----------|-------|
-| Go | 1.23+ | Yes | |
+| Go | 1.24+ | Yes | |
 | TinyGo | 0.40+ | Yes | |
-| LLVM (`llvm-link`, `opt`, `llc`) | 20+ | Yes | Must match TinyGo's bundled LLVM |
+| LLVM (`llvm-link`, `opt`, `llc`) | 20+ | Yes | Must be >= TinyGo's bundled LLVM |
 | `llvm-ar`, `llvm-objcopy` | 20+ | For `.a` / `.o` inputs | |
 | `pahole` | | For BTF injection | |
 | `golangci-lint` | | For `make lint` | |

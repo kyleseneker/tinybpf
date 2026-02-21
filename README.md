@@ -55,9 +55,9 @@ make build
 
 | Dependency | Version | Required |
 |------------|---------|----------|
-| Go | 1.23+ | Yes |
+| Go | 1.24+ | Yes |
 | TinyGo | 0.40+ | Yes |
-| LLVM (`llvm-link`, `opt`, `llc`) | 20+ (must match TinyGo's LLVM) | Yes |
+| LLVM (`llvm-link`, `opt`, `llc`) | 20+ (>= TinyGo's bundled LLVM) | Yes |
 | `llvm-ar`, `llvm-objcopy` | 20+ | For `.a` / `.o` inputs |
 | `pahole` | | For BTF injection |
 

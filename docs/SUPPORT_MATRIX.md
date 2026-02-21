@@ -8,7 +8,7 @@ Tested toolchain versions and platforms for `tinybpf`.
 |------------|-----------------|-------|
 | Go | 1.24.x, 1.25.x | |
 | TinyGo | 0.40.1 | Bundles LLVM 20.1.1 |
-| LLVM | 20, 21 | System LLVM must match TinyGo's major version |
+| LLVM | 20, 21 | System LLVM must be >= TinyGo's bundled LLVM major version |
 | bpftool | 7.4.0 | Used for verifier validation on Linux |
 
 ### LLVM version compatibility

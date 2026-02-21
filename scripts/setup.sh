@@ -91,7 +91,7 @@ setup_linux() {
 
   GO_VERSION="1.24.5"
   TINYGO_VERSION="0.40.1"
-  # Must match TinyGo's bundled LLVM major version. TinyGo 0.40.x ships LLVM 20.
+  # Must be >= TinyGo's bundled LLVM major version. TinyGo 0.40.x ships LLVM 20.
   LLVM_VERSION="20"
 
   echo "=== tinybpf setup (Linux) ==="

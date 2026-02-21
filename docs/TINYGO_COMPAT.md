@@ -378,7 +378,7 @@ Removes orphaned `declare` statements, unreferenced globals (except those with e
 
 - **`ld.lld` does not support BPF relocatable linking.** `ld.lld -r` rejects BPF ELF objects. The pipeline uses `llc` output directly; multi-module linking uses `llvm-link` at the IR level.
 
-- **LLVM version must match TinyGo.** TinyGo 0.40.x bundles LLVM 20. System LLVM tools must be version 20 or later. Ubuntu 24.04 defaults to LLVM 18; install LLVM 20+ from [apt.llvm.org](https://apt.llvm.org).
+- **LLVM version must be >= TinyGo's bundled LLVM.** TinyGo 0.40.x bundles LLVM 20. System LLVM tools must be version 20 or later (newer is forward-compatible). Ubuntu 24.04 defaults to LLVM 18; install LLVM 20+ from [apt.llvm.org](https://apt.llvm.org).
 
 - **macOS development workflow.** The pipeline through `llc` works on macOS for development and testing. Kernel loading and verifier validation require a Linux host.
 

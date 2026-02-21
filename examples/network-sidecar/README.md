@@ -40,7 +40,7 @@ scripts/
 ## Prerequisites
 
 - Linux host with BPF and tracepoint support
-- Go 1.23+
+- Go 1.24+
 - TinyGo 0.40+
 - LLVM tools (`llvm-link`, `opt`, `llc`) version 20+
 - Root privileges or `CAP_BPF` + `CAP_PERFMON`

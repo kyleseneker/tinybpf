@@ -8,7 +8,7 @@ Common issues and solutions when using `tinybpf`. Run `tinybpf --help` for a qui
 
 **Symptom:** `tinybpf` fails at the `llvm-link` or `opt` stage with parse errors, or `tinybpf doctor` reports a version warning.
 
-**Cause:** System LLVM tools must match the LLVM version bundled with TinyGo. TinyGo 0.40.x bundles LLVM 20; system tools must be version 20 or later.
+**Cause:** System LLVM tools must be >= the LLVM version bundled with TinyGo. TinyGo 0.40.x bundles LLVM 20; system tools must be version 20 or later.
 
 **Fix:**
 
