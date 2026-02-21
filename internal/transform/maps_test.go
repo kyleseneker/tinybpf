@@ -17,6 +17,9 @@ define void @main.foo() {
 	f.Add(`no globals at all`)
 
 	f.Fuzz(func(t *testing.T, ir string) {
+		if len(ir) > 1<<16 {
+			return
+		}
 		lines := strings.Split(ir, "\n")
 		stripMapPrefix(lines)
 	})

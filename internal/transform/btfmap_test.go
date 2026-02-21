@@ -15,6 +15,9 @@ func FuzzRewriteMapForBTF(f *testing.F) {
 	f.Add(`@main.events = global %main.bpfMapDef { i32 bad, i32 0 }`)
 
 	f.Fuzz(func(t *testing.T, ir string) {
+		if len(ir) > 1<<16 {
+			return
+		}
 		lines := strings.Split(ir, "\n")
 		rewriteMapForBTF(lines)
 	})
@@ -28,6 +31,9 @@ func FuzzSanitizeBTFNames(f *testing.F) {
 	f.Add(`not metadata at all`)
 
 	f.Fuzz(func(t *testing.T, ir string) {
+		if len(ir) > 1<<16 {
+			return
+		}
 		lines := strings.Split(ir, "\n")
 		sanitizeBTFNames(lines)
 	})

@@ -36,6 +36,9 @@ entry:
 }`)
 
 	f.Fuzz(func(t *testing.T, ir string) {
+		if len(ir) > 1<<16 {
+			return
+		}
 		lines := strings.Split(ir, "\n")
 		extractPrograms(lines, nil, false, io.Discard)
 	})

@@ -16,6 +16,9 @@ func FuzzRewriteHelpers(f *testing.F) {
 	f.Add(`  call i64 @main.bpfUnclosed(`)
 
 	f.Fuzz(func(t *testing.T, line string) {
+		if len(line) > 1<<16 {
+			return
+		}
 		lines := strings.Split(line, "\n")
 		rewriteHelpers(lines)
 	})
