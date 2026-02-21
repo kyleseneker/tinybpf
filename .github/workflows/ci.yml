@@ -23,7 +23,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.24.x"
+          go-version: "1.25.x"
 
       - name: Vet
         run: go vet ./...
@@ -71,16 +71,33 @@ jobs:
           version: "~> v2"
           args: check
 
+      - name: Audit support matrix
+        run: |
+          status=0
+          for gv in 1.24 1.25; do
+            if ! grep -q "${gv}" docs/SUPPORT_MATRIX.md; then
+              echo "::error::Go ${gv}.x tested in CI but not in docs/SUPPORT_MATRIX.md"
+              status=1
+            fi
+          done
+          for lv in 20 21; do
+            if ! grep -q "LLVM.*${lv}" docs/SUPPORT_MATRIX.md; then
+              echo "::error::LLVM ${lv} tested in CI but not in docs/SUPPORT_MATRIX.md"
+              status=1
+            fi
+          done
+          exit $status
+
   test:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        go-version: ["1.23.x", "1.24.x"]
+        go-version: ["1.24.x", "1.25.x"]
         llvm-version: ["20", "21"]
         include:
-          - go-version: "1.24.x"
+          - go-version: "1.25.x"
             llvm-version: "20"
             primary: true
     steps:
@@ -108,7 +125,7 @@ jobs:
           sudo dpkg -i /tmp/tinygo.deb
 
       - name: Generate fresh IR fixture
-        if: matrix.primary
+        if: matrix.go-version == '1.24.x' && matrix.llvm-version == '20'
         run: |
           cd examples/network-sidecar
           tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o ../../testdata/tinygo_probe.ll ./bpf
@@ -182,7 +199,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.24.x"
+          go-version: "1.25.x"
 
       - name: Benchmark PR
         run: go test -bench=. -benchmem -count=6 -timeout=5m ./internal/transform/ | tee /tmp/bench-pr.txt
