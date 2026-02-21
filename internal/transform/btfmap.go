@@ -13,7 +13,8 @@ type mapFieldInfo struct {
 	cName  string
 }
 
-var mapFields = []mapFieldInfo{
+// mapFields5 is the standard 5-field bpfMapDef layout.
+var mapFields5 = []mapFieldInfo{
 	{"Type", "type"},
 	{"KeySize", "key_size"},
 	{"ValueSize", "value_size"},
@@ -21,10 +22,25 @@ var mapFields = []mapFieldInfo{
 	{"MapFlags", "map_flags"},
 }
 
+// mapFields6 extends the standard layout with an optional 6th pinning field.
+var mapFields6 = []mapFieldInfo{
+	{"Type", "type"},
+	{"KeySize", "key_size"},
+	{"ValueSize", "value_size"},
+	{"MaxEntries", "max_entries"},
+	{"MapFlags", "map_flags"},
+	{"Pinning", "pinning"},
+}
+
 var reMapGlobal = regexp.MustCompile(
 	`^@([\w.]+)\s*=\s*(global|internal global)\s+%[\w.]*bpfMapDef\s*\{\s*(.*?)\}`)
 
+// reMapGlobalZero matches zeroinitializer map globals (all fields default to 0).
+var reMapGlobalZero = regexp.MustCompile(
+	`^@([\w.]+)\s*=\s*(global|internal global)\s+%[\w.]*bpfMapDef\s+zeroinitializer`)
+
 // rewriteMapForBTF rewrites bpfMapDef map globals and their debug metadata to use the libbpf-compatible BTF encoding.
+// Supports both 5-field (standard) and 6-field (with pinning) bpfMapDef layouts.
 func rewriteMapForBTF(lines []string) []string {
 	type mapDef struct {
 		lineIdx int
@@ -33,16 +49,23 @@ func rewriteMapForBTF(lines []string) []string {
 	}
 	var maps []mapDef
 
+	fieldCount := detectMapFieldCount(lines)
+
 	for i, line := range lines {
-		m := reMapGlobal.FindStringSubmatch(strings.TrimSpace(line))
-		if m == nil {
+		trimmed := strings.TrimSpace(line)
+		m := reMapGlobal.FindStringSubmatch(trimmed)
+		if m != nil {
+			vals := parseI32Initializer(m[3])
+			if len(vals) != fieldCount {
+				continue
+			}
+			maps = append(maps, mapDef{lineIdx: i, name: m[1], values: vals})
 			continue
 		}
-		vals := parseI32Initializer(m[3])
-		if len(vals) != 5 {
-			continue
+		mz := reMapGlobalZero.FindStringSubmatch(trimmed)
+		if mz != nil {
+			maps = append(maps, mapDef{lineIdx: i, name: mz[1], values: make([]int, fieldCount)})
 		}
-		maps = append(maps, mapDef{lineIdx: i, name: m[1], values: vals})
 	}
 	if len(maps) == 0 {
 		return lines
@@ -59,7 +82,12 @@ func rewriteMapForBTF(lines []string) []string {
 		newMeta = append(newMeta,
 			fmt.Sprintf("!%d = !DIBasicType(name: \"int\", size: 32, encoding: DW_ATE_signed)", intTypeID))
 
-		fieldPtrIDs := make([]int, 5)
+		mapFields := mapFields5
+		if fieldCount == 6 {
+			mapFields = mapFields6
+		}
+
+		fieldPtrIDs := make([]int, fieldCount)
 		for fi := range mapFields {
 			subrangeID := nextID
 			nextID++
@@ -100,7 +128,10 @@ func rewriteMapForBTF(lines []string) []string {
 			}
 		}
 
-		// Update struct size from 160 (5×i32) to 320 (5×ptr) via the typedef
+		origStructSize := fmt.Sprintf("%d", fieldCount*32)
+		newStructSize := fmt.Sprintf("%d", fieldCount*64)
+		reOldStructSize := regexp.MustCompile(`size:\s*` + origStructSize)
+
 		typedefTarget := ""
 		for _, line := range lines {
 			if strings.Contains(line, "DW_TAG_typedef") && strings.Contains(line, "bpfMapDef") {
@@ -119,20 +150,30 @@ func rewriteMapForBTF(lines []string) []string {
 			if isTarget || (strings.Contains(line, "DICompositeType") &&
 				strings.Contains(line, "DW_TAG_structure_type") &&
 				strings.Contains(line, "bpfMapDef")) {
-				lines[i] = reStructSize.ReplaceAllString(line, "size: 320")
+				lines[i] = reOldStructSize.ReplaceAllString(line, "size: "+newStructSize)
 			}
 		}
 
+		ptrFields := strings.TrimSuffix(strings.Repeat("ptr, ", fieldCount), ", ")
+		origI32Fields := strings.TrimSuffix(strings.Repeat("i32, ", fieldCount), ", ")
+
 		origLine := lines[md.lineIdx]
-		newGlobal := reMapGlobal.ReplaceAllStringFunc(strings.TrimSpace(origLine), func(s string) string {
-			return fmt.Sprintf("@%s = global { ptr, ptr, ptr, ptr, ptr } zeroinitializer", md.name) //nolint:dupword
+		trimmedOrig := strings.TrimSpace(origLine)
+		replacement := fmt.Sprintf("@%s = global { %s } zeroinitializer", md.name, ptrFields)
+		newGlobal := reMapGlobal.ReplaceAllStringFunc(trimmedOrig, func(string) string {
+			return replacement
 		})
+		if newGlobal == trimmedOrig {
+			newGlobal = reMapGlobalZero.ReplaceAllStringFunc(trimmedOrig, func(string) string {
+				return replacement
+			})
+		}
 		newGlobal = strings.Replace(newGlobal, "align 4", "align 8", 1)
 		lines[md.lineIdx] = newGlobal
 
 		for i, line := range lines {
 			if strings.Contains(line, "bpfMapDef") && strings.Contains(line, "= type {") {
-				lines[i] = strings.Replace(line, "{ i32, i32, i32, i32, i32 }", "{ ptr, ptr, ptr, ptr, ptr }", 1) //nolint:dupword
+				lines[i] = strings.Replace(line, "{ "+origI32Fields+" }", "{ "+ptrFields+" }", 1)
 			}
 		}
 
@@ -157,8 +198,26 @@ var (
 	reBaseType     = regexp.MustCompile(`baseType:\s*!\d+`)
 	reMemberSize   = regexp.MustCompile(`size:\s*\d+`)
 	reMemberOffset = regexp.MustCompile(`offset:\s*\d+`)
-	reStructSize   = regexp.MustCompile(`size:\s*160`)
+
+	reMapDefType = regexp.MustCompile(`%[\w.]*bpfMapDef\s*=\s*type\s*\{([^}]+)\}`)
 )
+
+// detectMapFieldCount determines whether the bpfMapDef struct has 5 or 6 fields
+// by inspecting the type definition. Returns 5 (standard) or 6 (with pinning).
+func detectMapFieldCount(lines []string) int {
+	for _, line := range lines {
+		m := reMapDefType.FindStringSubmatch(line)
+		if m == nil {
+			continue
+		}
+		fields := strings.Split(m[1], ",")
+		if len(fields) == 6 {
+			return 6
+		}
+		return 5
+	}
+	return 5
+}
 
 // parseI32Initializer extracts integer values from an LLVM IR struct initializer.
 func parseI32Initializer(s string) []int {

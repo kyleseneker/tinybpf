@@ -126,6 +126,158 @@ func TestRewriteMapForBTF(t *testing.T) {
 	})
 }
 
+func TestRewriteMapForBTFMultipleMaps(t *testing.T) {
+	//nolint:dupword
+	input := strings.Split(strings.TrimSpace(`
+%main.bpfMapDef = type { i32, i32, i32, i32, i32 }
+@main.events = global %main.bpfMapDef { i32 27, i32 0, i32 0, i32 16777216, i32 0 }, align 4
+@main.counters = global %main.bpfMapDef { i32 2, i32 4, i32 8, i32 256, i32 0 }, align 4
+!0 = !DIDerivedType(tag: DW_TAG_member, name: "Type", baseType: !1, size: 32, offset: 0)
+!1 = !DIBasicType(name: "uint32", size: 32, encoding: DW_ATE_unsigned)
+!2 = !DIDerivedType(tag: DW_TAG_member, name: "KeySize", baseType: !1, size: 32, offset: 32)
+!3 = !DIDerivedType(tag: DW_TAG_member, name: "ValueSize", baseType: !1, size: 32, offset: 64)
+!4 = !DIDerivedType(tag: DW_TAG_member, name: "MaxEntries", baseType: !1, size: 32, offset: 96)
+!5 = !DIDerivedType(tag: DW_TAG_member, name: "MapFlags", baseType: !1, size: 32, offset: 128)
+!6 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfMapDef", size: 160, elements: !{!0, !2, !3, !4, !5})
+`), "\n")
+
+	got := rewriteMapForBTF(input)
+	text := strings.Join(got, "\n")
+
+	t.Run("both maps rewritten to ptr struct", func(t *testing.T) {
+		count := strings.Count(text, "global { ptr, ptr, ptr, ptr, ptr } zeroinitializer") //nolint:dupword
+		if count != 2 {
+			t.Errorf("expected 2 map globals rewritten, got %d", count)
+		}
+	})
+
+	t.Run("subrange for events Type=27", func(t *testing.T) {
+		if !strings.Contains(text, "DISubrange(count: 27)") {
+			t.Error("subrange for events Type (27) not found")
+		}
+	})
+
+	t.Run("subrange for counters Type=2", func(t *testing.T) {
+		if !strings.Contains(text, "DISubrange(count: 2)") {
+			t.Error("subrange for counters Type (2) not found")
+		}
+	})
+
+	t.Run("subrange for counters MaxEntries=256", func(t *testing.T) {
+		if !strings.Contains(text, "DISubrange(count: 256)") {
+			t.Error("subrange for counters MaxEntries (256) not found")
+		}
+	})
+}
+
+func TestRewriteMapForBTFZeroinitializer(t *testing.T) {
+	//nolint:dupword
+	input := strings.Split(strings.TrimSpace(`
+%main.bpfMapDef = type { i32, i32, i32, i32, i32 }
+@main.empty_map = global %main.bpfMapDef zeroinitializer, align 4
+!0 = !DIDerivedType(tag: DW_TAG_member, name: "Type", baseType: !1, size: 32, offset: 0)
+!1 = !DIBasicType(name: "uint32", size: 32, encoding: DW_ATE_unsigned)
+!2 = !DIDerivedType(tag: DW_TAG_member, name: "KeySize", baseType: !1, size: 32, offset: 32)
+!3 = !DIDerivedType(tag: DW_TAG_member, name: "ValueSize", baseType: !1, size: 32, offset: 64)
+!4 = !DIDerivedType(tag: DW_TAG_member, name: "MaxEntries", baseType: !1, size: 32, offset: 96)
+!5 = !DIDerivedType(tag: DW_TAG_member, name: "MapFlags", baseType: !1, size: 32, offset: 128)
+!6 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfMapDef", size: 160, elements: !{!0, !2, !3, !4, !5})
+`), "\n")
+
+	got := rewriteMapForBTF(input)
+	text := strings.Join(got, "\n")
+
+	t.Run("zeroinitializer map rewritten", func(t *testing.T) {
+		if !strings.Contains(text, "global { ptr, ptr, ptr, ptr, ptr } zeroinitializer") { //nolint:dupword
+			t.Error("zeroinitializer map not rewritten to pointer struct")
+		}
+	})
+
+	t.Run("all subranges are zero", func(t *testing.T) {
+		count := strings.Count(text, "DISubrange(count: 0)")
+		if count < 5 {
+			t.Errorf("expected 5 zero subranges, got %d", count)
+		}
+	})
+}
+
+func TestRewriteMapForBTFInternalLinkage(t *testing.T) {
+	//nolint:dupword
+	input := strings.Split(strings.TrimSpace(`
+%main.bpfMapDef = type { i32, i32, i32, i32, i32 }
+@main.events = internal global %main.bpfMapDef { i32 27, i32 0, i32 0, i32 16777216, i32 0 }, align 4
+!0 = !DIDerivedType(tag: DW_TAG_member, name: "Type", baseType: !1, size: 32, offset: 0)
+!1 = !DIBasicType(name: "uint32", size: 32, encoding: DW_ATE_unsigned)
+!2 = !DIDerivedType(tag: DW_TAG_member, name: "KeySize", baseType: !1, size: 32, offset: 32)
+!3 = !DIDerivedType(tag: DW_TAG_member, name: "ValueSize", baseType: !1, size: 32, offset: 64)
+!4 = !DIDerivedType(tag: DW_TAG_member, name: "MaxEntries", baseType: !1, size: 32, offset: 96)
+!5 = !DIDerivedType(tag: DW_TAG_member, name: "MapFlags", baseType: !1, size: 32, offset: 128)
+!6 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfMapDef", size: 160, elements: !{!0, !2, !3, !4, !5})
+`), "\n")
+
+	got := rewriteMapForBTF(input)
+	text := strings.Join(got, "\n")
+
+	if !strings.Contains(text, "global { ptr, ptr, ptr, ptr, ptr } zeroinitializer") { //nolint:dupword
+		t.Error("internal linkage map not rewritten")
+	}
+}
+
+func TestRewriteMapForBTFSixFields(t *testing.T) {
+	//nolint:dupword
+	input := strings.Split(strings.TrimSpace(`
+%main.bpfMapDef = type { i32, i32, i32, i32, i32, i32 }
+@main.pinned = global %main.bpfMapDef { i32 1, i32 4, i32 4, i32 1024, i32 0, i32 1 }, align 4
+!0 = !DIDerivedType(tag: DW_TAG_member, name: "Type", baseType: !1, size: 32, offset: 0)
+!1 = !DIBasicType(name: "uint32", size: 32, encoding: DW_ATE_unsigned)
+!2 = !DIDerivedType(tag: DW_TAG_member, name: "KeySize", baseType: !1, size: 32, offset: 32)
+!3 = !DIDerivedType(tag: DW_TAG_member, name: "ValueSize", baseType: !1, size: 32, offset: 64)
+!4 = !DIDerivedType(tag: DW_TAG_member, name: "MaxEntries", baseType: !1, size: 32, offset: 96)
+!5 = !DIDerivedType(tag: DW_TAG_member, name: "MapFlags", baseType: !1, size: 32, offset: 128)
+!6 = !DIDerivedType(tag: DW_TAG_member, name: "Pinning", baseType: !1, size: 32, offset: 160)
+!7 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfMapDef", size: 192, elements: !{!0, !2, !3, !4, !5, !6})
+`), "\n")
+
+	got := rewriteMapForBTF(input)
+	text := strings.Join(got, "\n")
+
+	t.Run("6-field struct rewritten to 6 ptrs", func(t *testing.T) {
+		if !strings.Contains(text, "global { ptr, ptr, ptr, ptr, ptr, ptr } zeroinitializer") { //nolint:dupword
+			t.Error("6-field map not rewritten to 6-pointer struct")
+		}
+	})
+
+	t.Run("pinning field name rewritten", func(t *testing.T) {
+		if !strings.Contains(text, `name: "pinning"`) {
+			t.Error("Pinning field not rewritten to pinning")
+		}
+	})
+
+	t.Run("struct size rewritten to 384", func(t *testing.T) {
+		if !strings.Contains(text, "size: 384") {
+			t.Error("6-field struct size not updated to 384 (6*64)")
+		}
+	})
+
+	t.Run("subrange for pinning=1", func(t *testing.T) {
+		if !strings.Contains(text, "DISubrange(count: 1)") {
+			t.Error("subrange for Pinning (1) not found")
+		}
+	})
+}
+
+func TestRewriteMapForBTFWrongFieldCount(t *testing.T) {
+	input := strings.Split(strings.TrimSpace(`
+%main.bpfMapDef = type { i32, i32, i32 }
+@main.events = global %main.bpfMapDef { i32 27, i32 0, i32 0 }, align 4
+`), "\n")
+
+	got := rewriteMapForBTF(input)
+	if strings.Contains(strings.Join(got, "\n"), "zeroinitializer") {
+		t.Error("should not rewrite a struct with != 5 fields")
+	}
+}
+
 func TestSanitizeBTFNames(t *testing.T) {
 	input := strings.Split(strings.TrimSpace(`
 !0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfMapDef", size: 160)
