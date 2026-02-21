@@ -10,6 +10,29 @@ import (
 	"testing"
 )
 
+func BenchmarkTransformLines(b *testing.B) {
+	fixture := filepath.Join("..", "..", "testdata", "tinygo_probe.ll")
+	data, err := os.ReadFile(fixture)
+	if err != nil {
+		b.Skipf("fixture not found: %v", err)
+	}
+	srcLines := strings.Split(string(data), "\n")
+	opts := Options{
+		Sections: map[string]string{"handle_connect": "kprobe/sys_connect"},
+		Stdout:   io.Discard,
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		lines := make([]string, len(srcLines))
+		copy(lines, srcLines)
+		if _, err := TransformLines(context.Background(), lines, opts); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func FuzzTransformLines(f *testing.F) {
 	f.Add(`target datalayout = "e-m:o-p270:32:32-p271:32:32"
 target triple = "arm64-apple-macosx11.0.0"
