@@ -81,7 +81,7 @@ func cleanup(lines []string) []string {
 		if strings.HasPrefix(trimmed, "attributes #") {
 			continue
 		}
-		for pos := 0; pos < len(line); pos++ {
+		for pos := range len(line) {
 			if line[pos] != '#' {
 				continue
 			}

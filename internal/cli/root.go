@@ -184,4 +184,3 @@ func usageErrorf(fs *flag.FlagSet, w io.Writer, format string, args ...any) int 
 	fs.Usage()
 	return 2
 }
-

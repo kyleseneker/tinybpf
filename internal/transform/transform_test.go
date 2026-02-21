@@ -24,7 +24,7 @@ func BenchmarkTransformLines(b *testing.B) {
 
 	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		lines := make([]string, len(srcLines))
 		copy(lines, srcLines)
 		if _, err := TransformLines(context.Background(), lines, opts); err != nil {
