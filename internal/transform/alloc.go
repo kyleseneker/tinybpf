@@ -33,7 +33,7 @@ func replaceAlloc(lines []string) ([]string, error) {
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !inDef {
-			if reDefine.MatchString(trimmed) {
+			if isDefineLine(trimmed) {
 				inDef = true
 				depth = strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
 				funcs = append(funcs, funcInfo{startIdx: i, entryIdx: -1})

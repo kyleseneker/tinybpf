@@ -15,11 +15,10 @@ func stripMapPrefix(lines []string) []string {
 		if !strings.Contains(line, `section ".maps"`) {
 			continue
 		}
-		m := reGlobal.FindStringSubmatch(trimmed)
-		if m == nil {
+		name, ok := parseGlobalName(trimmed)
+		if !ok {
 			continue
 		}
-		name := m[1]
 		dot := strings.IndexByte(name, '.')
 		if dot < 0 {
 			continue

@@ -177,29 +177,44 @@ func parseI32Initializer(s string) []int {
 	return vals
 }
 
-var reMetadataID = regexp.MustCompile(`^!(\d+)\s*=`)
-
 // findMaxMetadataID scans for the highest numbered metadata node.
 func findMaxMetadataID(lines []string) int {
 	max := 0
 	for _, line := range lines {
-		if m := reMetadataID.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
-			n, _ := strconv.Atoi(m[1])
-			if n > max {
-				max = n
-			}
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) == 0 || trimmed[0] != '!' {
+			continue
+		}
+		i := 1
+		for i < len(trimmed) && trimmed[i] >= '0' && trimmed[i] <= '9' {
+			i++
+		}
+		if i == 1 {
+			continue
+		}
+		if i >= len(trimmed) || (trimmed[i] != ' ' && trimmed[i] != '=') {
+			continue
+		}
+		n, err := strconv.Atoi(trimmed[1:i])
+		if err != nil {
+			continue
+		}
+		if n > max {
+			max = n
 		}
 	}
 	return max
 }
 
-var reDINameField = regexp.MustCompile(`((?:linkage)?[Nn]ame):\s*"([^"]*)"`)
-
 // sanitizeBTFNames replaces dots in DWARF type/variable names with underscores.
 func sanitizeBTFNames(lines []string) []string {
+	var buf strings.Builder
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "!") {
+		if len(trimmed) == 0 || trimmed[0] != '!' {
+			continue
+		}
+		if !strings.Contains(line, "DI") {
 			continue
 		}
 		if !strings.Contains(line, "DIBasicType") &&
@@ -209,16 +224,86 @@ func sanitizeBTFNames(lines []string) []string {
 			!strings.Contains(line, "DISubprogram") {
 			continue
 		}
-		// Pointer types must not have names in BTF
 		if strings.Contains(line, "DW_TAG_pointer_type") {
-			lines[i] = rePointerName.ReplaceAllString(line, "")
+			lines[i] = stripPointerName(line)
 			continue
 		}
-		lines[i] = reDINameField.ReplaceAllStringFunc(line, func(m string) string {
-			return strings.ReplaceAll(m, ".", "_")
-		})
+		if strings.Contains(line, ".") {
+			buf.Reset()
+			lines[i] = replaceDotInNameFields(line, &buf)
+		}
 	}
 	return lines
 }
 
-var rePointerName = regexp.MustCompile(`,?\s*name:\s*"[^"]*"`)
+// nameFieldPrefixes are the LLVM DI metadata name field prefixes we rewrite.
+var nameFieldPrefixes = []string{"linkageName: \"", "linkagename: \"", "name: \"", "Name: \""}
+
+// replaceDotInNameFields replaces dots with underscores inside name: "..."
+// fields without using regexp. The caller-owned buf is reused across calls.
+func replaceDotInNameFields(line string, buf *strings.Builder) string {
+	pos := 0
+	modified := false
+	for pos < len(line) {
+		matched := false
+		for _, prefix := range nameFieldPrefixes {
+			if !strings.HasPrefix(line[pos:], prefix) {
+				continue
+			}
+			valueStart := pos + len(prefix)
+			quoteEnd := strings.IndexByte(line[valueStart:], '"')
+			if quoteEnd < 0 {
+				break
+			}
+			quoteEnd += valueStart
+			value := line[valueStart:quoteEnd]
+			if !strings.Contains(value, ".") {
+				break
+			}
+			if !modified {
+				buf.Grow(len(line))
+				buf.WriteString(line[:pos])
+				modified = true
+			}
+			buf.WriteString(prefix)
+			buf.WriteString(strings.ReplaceAll(value, ".", "_"))
+			buf.WriteByte('"')
+			pos = quoteEnd + 1
+			matched = true
+			break
+		}
+		if !matched {
+			if modified {
+				buf.WriteByte(line[pos])
+			}
+			pos++
+		}
+	}
+	if !modified {
+		return line
+	}
+	return buf.String()
+}
+
+// stripPointerName removes a name: "..." field from a pointer type metadata
+// line without using regexp.
+func stripPointerName(line string) string {
+	idx := strings.Index(line, `name: "`)
+	if idx < 0 {
+		return line
+	}
+	valueStart := idx + len(`name: "`)
+	quoteEnd := strings.IndexByte(line[valueStart:], '"')
+	if quoteEnd < 0 {
+		return line
+	}
+	quoteEnd += valueStart + 1
+	start := idx
+	for start > 0 && line[start-1] == ' ' {
+		start--
+	}
+	if start > 0 && line[start-1] == ',' {
+		start--
+	}
+	return line[:start] + line[quoteEnd:]
+}

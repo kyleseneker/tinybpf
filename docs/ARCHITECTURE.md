@@ -28,7 +28,7 @@ internal/
   transform/               TinyGo IR -> BPF IR rewriting (11 transform steps)
   llvm/                    Tool discovery, optimization profiles, process execution, config loading
   elfcheck/                Post-link ELF validation
-  diag/                    Structured error types with stage, code, and hints
+  diag/                    Structured error types with stage context and hints
   doctor/                  Toolchain diagnostic subcommand
 testdata/                  TinyGo IR fixtures for transform tests
 examples/
@@ -43,7 +43,7 @@ The linker drives standalone LLVM tools (`llvm-link`, `opt`, `llc`) rather than 
 
 ### Text-based IR transformation
 
-The `internal/transform` package operates on LLVM IR text (`.ll` files) using regular expressions and line-level rewriting. This avoids a CGo/libLLVM dependency, works across LLVM versions that produce text IR, and is straightforward to test and debug.
+The `internal/transform` package operates on LLVM IR text (`.ll` files) using line-level string parsing and rewriting. Hot paths use hand-written scanners instead of compiled regular expressions, keeping the transform pipeline allocation-light and fast. This avoids a CGo/libLLVM dependency, works across LLVM versions that produce text IR, and is straightforward to test and debug.
 
 The tradeoff is reliance on textual patterns rather than a semantic AST. In practice, TinyGo's IR output is consistent and well-characterized, making this approach reliable.
 

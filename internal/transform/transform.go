@@ -9,16 +9,101 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"strings"
 )
 
-// Shared LLVM IR patterns used by multiple transformation passes.
-var (
-	reDefine  = regexp.MustCompile(`^define\s+.*@(\w[\w.]*)\(`)
-	reDeclare = regexp.MustCompile(`^declare\s+.*@([\w.]+)\(`)
-	reGlobal  = regexp.MustCompile(`^@([\w.]+)\s*=`)
-)
+// parseDefineName extracts the function name from a trimmed "define ... @name("
+// line. Equivalent to regexp `^define\s+.*@(\w[\w.]*)\(`.
+func parseDefineName(trimmed string) (string, bool) {
+	if !strings.HasPrefix(trimmed, "define ") {
+		return "", false
+	}
+	atIdx := strings.IndexByte(trimmed, '@')
+	if atIdx < 0 {
+		return "", false
+	}
+	start := atIdx + 1
+	if start >= len(trimmed) || !isWordChar(trimmed[start]) {
+		return "", false
+	}
+	end := start + 1
+	for end < len(trimmed) && isIdentChar(trimmed[end]) {
+		end++
+	}
+	if end >= len(trimmed) || trimmed[end] != '(' {
+		return "", false
+	}
+	return trimmed[start:end], true
+}
+
+// isDefineLine reports whether a trimmed line is a define statement.
+func isDefineLine(trimmed string) bool {
+	_, ok := parseDefineName(trimmed)
+	return ok
+}
+
+// parseDeclareName extracts the function name from a trimmed "declare ... @name("
+// line. Equivalent to regexp `^declare\s+.*@([\w.]+)\(`.
+func parseDeclareName(trimmed string) (string, bool) {
+	if !strings.HasPrefix(trimmed, "declare ") {
+		return "", false
+	}
+	atIdx := strings.IndexByte(trimmed, '@')
+	if atIdx < 0 {
+		return "", false
+	}
+	start := atIdx + 1
+	if start >= len(trimmed) || !isIdentChar(trimmed[start]) {
+		return "", false
+	}
+	end := start + 1
+	for end < len(trimmed) && isIdentChar(trimmed[end]) {
+		end++
+	}
+	if end >= len(trimmed) || trimmed[end] != '(' {
+		return "", false
+	}
+	return trimmed[start:end], true
+}
+
+// parseGlobalName extracts the global name from a trimmed "@name = ..." line.
+// Equivalent to regexp `^@([\w.]+)\s*=`.
+func parseGlobalName(trimmed string) (string, bool) {
+	if len(trimmed) == 0 || trimmed[0] != '@' {
+		return "", false
+	}
+	start := 1
+	if start >= len(trimmed) || !isIdentChar(trimmed[start]) {
+		return "", false
+	}
+	end := start + 1
+	for end < len(trimmed) && isIdentChar(trimmed[end]) {
+		end++
+	}
+	rest := trimmed[end:]
+	if len(rest) == 0 {
+		return "", false
+	}
+	i := 0
+	for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t') {
+		i++
+	}
+	if i >= len(rest) || rest[i] != '=' {
+		return "", false
+	}
+	return trimmed[start:end], true
+}
+
+// isGlobalLine reports whether a trimmed line is a global variable definition.
+func isGlobalLine(trimmed string) bool {
+	_, ok := parseGlobalName(trimmed)
+	return ok
+}
+
+func isWordChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') || c == '_'
+}
 
 // Options configures the IR transformation pass.
 type Options struct {

@@ -1,15 +1,6 @@
 package transform
 
-import (
-	"regexp"
-	"strings"
-)
-
-var (
-	reAttrRef = regexp.MustCompile(`#(\d+)`)
-	reAttrDef = regexp.MustCompile(`^attributes #(\d+)`)
-	reAtIdent = regexp.MustCompile(`@[\w.]+`)
-)
+import "strings"
 
 // cleanup removes orphaned declares, globals, attribute groups, and stale "; Function Attrs:" comments, then condenses blank lines.
 func cleanup(lines []string) []string {
@@ -22,8 +13,18 @@ func cleanup(lines []string) []string {
 
 	identLines := make(map[string][]int)
 	for i, line := range lines {
-		for _, m := range reAtIdent.FindAllString(line, -1) {
-			identLines[m] = append(identLines[m], i)
+		for pos := 0; pos < len(line); pos++ {
+			if line[pos] != '@' {
+				continue
+			}
+			j := pos + 1
+			for j < len(line) && isIdentChar(line[j]) {
+				j++
+			}
+			if j > pos+1 {
+				identLines[line[pos:j]] = append(identLines[line[pos:j]], i)
+				pos = j - 1
+			}
 		}
 	}
 
@@ -39,8 +40,8 @@ func cleanup(lines []string) []string {
 	var decls []ref
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if m := reDeclare.FindStringSubmatch(trimmed); m != nil {
-			decls = append(decls, ref{name: m[1], idx: i})
+		if name, ok := parseDeclareName(trimmed); ok {
+			decls = append(decls, ref{name: name, idx: i})
 		}
 	}
 	for _, d := range decls {
@@ -58,8 +59,8 @@ func cleanup(lines []string) []string {
 			continue
 		}
 		trimmed := strings.TrimSpace(line)
-		if m := reGlobal.FindStringSubmatch(trimmed); m != nil {
-			globals = append(globals, ref{name: m[1], idx: i})
+		if name, ok := parseGlobalName(trimmed); ok {
+			globals = append(globals, ref{name: name, idx: i})
 		}
 	}
 	for _, g := range globals {
@@ -77,11 +78,20 @@ func cleanup(lines []string) []string {
 			continue
 		}
 		trimmed := strings.TrimSpace(line)
-		if reAttrDef.MatchString(trimmed) {
+		if strings.HasPrefix(trimmed, "attributes #") {
 			continue
 		}
-		for _, m := range reAttrRef.FindAllStringSubmatch(line, -1) {
-			used[m[1]] = true
+		for pos := 0; pos < len(line); pos++ {
+			if line[pos] != '#' {
+				continue
+			}
+			j := pos + 1
+			for j < len(line) && line[j] >= '0' && line[j] <= '9' {
+				j++
+			}
+			if j > pos+1 {
+				used[line[pos+1:j]] = true
+			}
 		}
 	}
 	for i, line := range lines {
@@ -89,14 +99,13 @@ func cleanup(lines []string) []string {
 			continue
 		}
 		trimmed := strings.TrimSpace(line)
-		if m := reAttrDef.FindStringSubmatch(trimmed); m != nil {
-			if !used[m[1]] {
+		if id, ok := parseAttrDef(trimmed); ok {
+			if !used[id] {
 				remove[i] = true
 			}
 		}
 	}
 
-	// Remove orphaned "; Function Attrs:" comments
 	for i, line := range lines {
 		if remove[i] {
 			continue
@@ -124,7 +133,7 @@ func cleanup(lines []string) []string {
 		}
 	}
 
-	var result []string
+	n := 0
 	prevBlank := false
 	for i, line := range lines {
 		if remove[i] {
@@ -134,13 +143,36 @@ func cleanup(lines []string) []string {
 		if blank && prevBlank {
 			continue
 		}
-		result = append(result, line)
+		lines[n] = line
+		n++
 		prevBlank = blank
 	}
-
-	for len(result) > 0 && strings.TrimSpace(result[len(result)-1]) == "" {
-		result = result[:len(result)-1]
+	lines = lines[:n]
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
 	}
-	result = append(result, "")
-	return result
+	return append(lines, "")
+}
+
+// isIdentChar checks if a byte is a valid identifier character.
+func isIdentChar(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') || c == '_' || c == '.'
+}
+
+// parseAttrDef parses an attribute definition from a trimmed string.
+func parseAttrDef(trimmed string) (string, bool) {
+	const prefix = "attributes #"
+	if !strings.HasPrefix(trimmed, prefix) {
+		return "", false
+	}
+	rest := trimmed[len(prefix):]
+	i := 0
+	for i < len(rest) && rest[i] >= '0' && rest[i] <= '9' {
+		i++
+	}
+	if i == 0 {
+		return "", false
+	}
+	return rest[:i], true
 }

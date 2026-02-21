@@ -34,9 +34,9 @@ func extractPrograms(lines []string, programNames []string, verbose bool, w io.W
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !inDef {
-			if m := reDefine.FindStringSubmatch(trimmed); m != nil {
+			if name, ok := parseDefineName(trimmed); ok {
 				inDef = true
-				cur = defineBlock{name: m[1], startLine: i}
+				cur = defineBlock{name: name, startLine: i}
 				depth = strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
 				if depth <= 0 {
 					cur.endLine = i
@@ -111,19 +111,19 @@ func extractPrograms(lines []string, programNames []string, verbose bool, w io.W
 			continue
 		}
 		trimmed := strings.TrimSpace(line)
-		if m := reGlobal.FindStringSubmatch(trimmed); m != nil {
-			name := m[1]
+		if name, ok := parseGlobalName(trimmed); ok {
 			if strings.HasPrefix(name, "runtime.") || name == ".string" {
 				remove[i] = true
 			}
 		}
 	}
 
-	result := make([]string, 0, len(lines)/2)
+	n := 0
 	for i, line := range lines {
 		if !remove[i] {
-			result = append(result, line)
+			lines[n] = line
+			n++
 		}
 	}
-	return result, nil
+	return lines[:n], nil
 }

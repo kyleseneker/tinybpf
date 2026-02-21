@@ -11,8 +11,7 @@ func assignSections(lines []string, sections map[string]string) []string {
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		if m := reDefine.FindStringSubmatch(trimmed); m != nil {
-			name := m[1]
+		if name, ok := parseDefineName(trimmed); ok {
 			sec := ""
 			if sections != nil {
 				sec = sections[name]
@@ -25,7 +24,7 @@ func assignSections(lines []string, sections map[string]string) []string {
 			}
 		}
 
-		if reGlobal.MatchString(trimmed) && strings.Contains(line, "bpfMapDef") {
+		if isGlobalLine(trimmed) && strings.Contains(line, "bpfMapDef") {
 			if strings.Contains(line, " internal ") {
 				lines[i] = strings.Replace(lines[i], " internal ", " ", 1)
 				line = lines[i]
