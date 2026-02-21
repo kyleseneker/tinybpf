@@ -193,30 +193,3 @@ func TestMultiStringFlag(t *testing.T) {
 	})
 }
 
-func TestParseSectionFlags(t *testing.T) {
-	tests := []struct {
-		name  string
-		flags []string
-		want  map[string]string
-	}{
-		{"nil", nil, nil},
-		{"valid entries", []string{"handle_connect=kprobe/sys_connect", "xdp_filter=xdp"}, map[string]string{"handle_connect": "kprobe/sys_connect", "xdp_filter": "xdp"}},
-		{"malformed skipped", []string{"no-equals", "valid=section"}, map[string]string{"valid": "section"}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := parseSectionFlags(tt.flags)
-			if tt.want == nil {
-				if m != nil {
-					t.Fatalf("expected nil, got %v", m)
-				}
-				return
-			}
-			for k, v := range tt.want {
-				if m[k] != v {
-					t.Fatalf("key %q: got %q, want %q", k, m[k], v)
-				}
-			}
-		})
-	}
-}

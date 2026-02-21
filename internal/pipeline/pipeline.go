@@ -64,7 +64,7 @@ func Run(ctx context.Context, cfg Config) (*Artifacts, error) {
 
 	workDir, cleanup, err := makeWorkDir(cfg.TempDir, cfg.KeepTemp)
 	if err != nil {
-		return nil, diag.New(diag.StageInput, err, "", "", "failed to create temporary workspace")
+		return nil, &diag.Error{Stage: diag.StageInput, Err: err, Hint: "failed to create temporary workspace"}
 	}
 	defer cleanup()
 
@@ -94,22 +94,22 @@ func Run(ctx context.Context, cfg Config) (*Artifacts, error) {
 		Verbose:  cfg.Verbose,
 		Stdout:   cfg.Stdout,
 	}
-	if err := transform.Run(artifacts.LinkedBC, artifacts.TransformedLL, transformOpts); err != nil {
-		return nil, diag.New(diag.StageTransform, err, "", "",
-			"check that the input IR was produced by TinyGo with --gc=none --scheduler=none")
+	if err := transform.Run(ctx, artifacts.LinkedBC, artifacts.TransformedLL, transformOpts); err != nil {
+		return nil, &diag.Error{Stage: diag.StageTransform, Err: err,
+			Hint: "check that the input IR was produced by TinyGo with --gc=none --scheduler=none"}
 	}
 
 	if err := stripHostPaths(artifacts.TransformedLL, workDir); err != nil {
-		return nil, diag.New(diag.StageOpt, err, "", "",
-			"failed to sanitize paths in intermediate IR")
+		return nil, &diag.Error{Stage: diag.StageOpt, Err: err,
+			Hint: "failed to sanitize paths in intermediate IR"}
 	}
 
 	optArgs := llvm.BuildOptArgs(artifacts.TransformedLL, artifacts.OptimizedLL, cfg.PassPipeline, cfg.OptProfile)
 	if len(cfg.CustomPasses) > 0 {
 		validated, vErr := llvm.AppendCustomPasses(optArgs, cfg.CustomPasses)
 		if vErr != nil {
-			return nil, diag.New(diag.StageOpt, vErr, "", "",
-				"custom pass validation failed; check linker-config.json")
+			return nil, &diag.Error{Stage: diag.StageOpt, Err: vErr,
+				Hint: "custom pass validation failed; check linker-config.json"}
 		}
 		optArgs = validated
 	}
@@ -124,11 +124,11 @@ func Run(ctx context.Context, cfg Config) (*Artifacts, error) {
 		return nil, err
 	}
 	if err := os.MkdirAll(filepath.Dir(cfg.Output), 0o755); err != nil {
-		return nil, diag.New(diag.StageFinalize, err, "", "", "failed to create output directory")
+		return nil, &diag.Error{Stage: diag.StageFinalize, Err: err, Hint: "failed to create output directory"}
 	}
 	if err := copyFile(artifacts.CodegenObj, cfg.Output); err != nil {
-		return nil, diag.New(diag.StageFinalize, err, "", "",
-			"failed to produce final output object")
+		return nil, &diag.Error{Stage: diag.StageFinalize, Err: err,
+			Hint: "failed to produce final output object"}
 	}
 
 	if cfg.EnableBTF {
@@ -147,12 +147,12 @@ func Run(ctx context.Context, cfg Config) (*Artifacts, error) {
 // validateConfig applies defaults and checks required fields.
 func validateConfig(cfg *Config) error {
 	if len(cfg.Inputs) == 0 {
-		return diag.New(diag.StageInput, fmt.Errorf("no inputs provided"), "", "",
-			"provide at least one --input file")
+		return &diag.Error{Stage: diag.StageInput, Err: fmt.Errorf("no inputs provided"),
+			Hint: "provide at least one --input file"}
 	}
 	if strings.TrimSpace(cfg.Output) == "" {
-		return diag.New(diag.StageInput, fmt.Errorf("no output path provided"), "", "",
-			"provide --output path")
+		return &diag.Error{Stage: diag.StageInput, Err: fmt.Errorf("no output path provided"),
+			Hint: "provide --output path"}
 	}
 
 	for _, input := range cfg.Inputs {
@@ -182,9 +182,9 @@ func ensureInputSupported(path string) error {
 	case ".ll", ".bc", ".o", ".a":
 		return nil
 	default:
-		return diag.New(diag.StageInput,
-			fmt.Errorf("unsupported input format %q", path), "", "",
-			"supported inputs are .ll, .bc, .o, and .a")
+		return &diag.Error{Stage: diag.StageInput,
+			Err:  fmt.Errorf("unsupported input format %q", path),
+			Hint: "supported inputs are .ll, .bc, .o, and .a"}
 	}
 }
 
@@ -201,7 +201,7 @@ func runStage(ctx context.Context, cfg Config, stage diag.Stage, bin string, arg
 		}
 	}
 	if err != nil {
-		return diag.New(stage, err, res.Command, res.Stderr, hint)
+		return &diag.Error{Stage: stage, Err: err, Command: res.Command, Stderr: res.Stderr, Hint: hint}
 	}
 	return nil
 }
@@ -249,6 +249,22 @@ func buildLLCArgs(cpu, inputPath, outputPath string) []string {
 		"-o",
 		outputPath,
 	}
+}
+
+// ParseSectionFlags parses "name=section" flag strings into a map.
+func ParseSectionFlags(flags []string) (map[string]string, error) {
+	if len(flags) == 0 {
+		return nil, nil
+	}
+	m := make(map[string]string, len(flags))
+	for _, f := range flags {
+		parts := strings.SplitN(f, "=", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return nil, fmt.Errorf("invalid --section %q: expected format name=section", f)
+		}
+		m[parts[0]] = parts[1]
+	}
+	return m, nil
 }
 
 // copyFile copies src to dst, creating or overwriting dst.

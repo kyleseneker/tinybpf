@@ -152,21 +152,28 @@ func TestBuildWorkDir(t *testing.T) {
 	tests := []struct {
 		name      string
 		setup     func(t *testing.T)
-		input     string
-		wantDir   string
+		input     func(t *testing.T) string
 		wantError bool
+		checkDir  bool
 	}{
 		{
-			name:    "explicit dir",
-			input:   "/some/explicit/path",
-			wantDir: "/some/explicit/path",
+			name:     "explicit dir created",
+			input:    func(t *testing.T) string { t.Helper(); return filepath.Join(t.TempDir(), "new", "subdir") },
+			checkDir: true,
 		},
 		{
-			name: "temp dir created",
+			name:  "temp dir created",
+			input: func(t *testing.T) string { t.Helper(); return "" },
 		},
 		{
 			name:      "temp dir error",
 			setup:     func(t *testing.T) { t.Helper(); t.Setenv("TMPDIR", "/nonexistent/path") },
+			input:     func(t *testing.T) string { t.Helper(); return "" },
+			wantError: true,
+		},
+		{
+			name:      "explicit dir bad parent",
+			input:     func(t *testing.T) string { t.Helper(); return "/dev/null/impossible/sub" },
 			wantError: true,
 		},
 	}
@@ -175,7 +182,8 @@ func TestBuildWorkDir(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup(t)
 			}
-			dir, cleanup, err := buildWorkDir(tt.input)
+			in := tt.input(t)
+			dir, cleanup, err := buildWorkDir(in)
 			if tt.wantError {
 				if err == nil {
 					t.Fatal("expected error")
@@ -186,11 +194,20 @@ func TestBuildWorkDir(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer cleanup()
-			if tt.wantDir != "" && dir != tt.wantDir {
-				t.Fatalf("got %q, want %q", dir, tt.wantDir)
-			}
-			if tt.wantDir == "" && dir == "" {
+			if dir == "" {
 				t.Fatal("expected non-empty dir")
+			}
+			if tt.checkDir {
+				if dir != in {
+					t.Fatalf("got %q, want %q", dir, in)
+				}
+				info, statErr := os.Stat(dir)
+				if statErr != nil {
+					t.Fatalf("directory not created: %v", statErr)
+				}
+				if !info.IsDir() {
+					t.Fatal("expected a directory")
+				}
 			}
 		})
 	}

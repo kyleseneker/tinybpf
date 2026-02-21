@@ -14,21 +14,21 @@ import (
 func Validate(path string) error {
 	f, err := elf.Open(path)
 	if err != nil {
-		return diag.New(diag.StageValidate, err, "", "",
-			"output is not a readable ELF object")
+		return &diag.Error{Stage: diag.StageValidate, Err: err,
+			Hint: "output is not a readable ELF object"}
 	}
 	defer func() { _ = f.Close() }()
 
 	if f.Class != elf.ELFCLASS64 {
-		return diag.New(diag.StageValidate,
-			fmt.Errorf("expected ELFCLASS64, got %s", f.Class), "", "",
-			"use llc with BPF target")
+		return &diag.Error{Stage: diag.StageValidate,
+			Err:  fmt.Errorf("expected ELFCLASS64, got %s", f.Class),
+			Hint: "use llc with BPF target"}
 	}
 
 	if f.Machine != elf.EM_BPF {
-		return diag.New(diag.StageValidate,
-			fmt.Errorf("expected machine %s, got %s", elf.EM_BPF, f.Machine), "", "",
-			"ensure llc uses -march=bpf")
+		return &diag.Error{Stage: diag.StageValidate,
+			Err:  fmt.Errorf("expected machine %s, got %s", elf.EM_BPF, f.Machine),
+			Hint: "ensure llc uses -march=bpf"}
 	}
 
 	hasCode := false
@@ -39,16 +39,16 @@ func Validate(path string) error {
 		}
 	}
 	if !hasCode {
-		return diag.New(diag.StageValidate,
-			fmt.Errorf("missing executable program section"), "", "",
-			"verify input IR contains at least one BPF program function section")
+		return &diag.Error{Stage: diag.StageValidate,
+			Err:  fmt.Errorf("missing executable program section"),
+			Hint: "verify input IR contains at least one BPF program function section"}
 	}
 
 	syms, err := f.Symbols()
 	if err == nil && len(syms) == 0 {
-		return diag.New(diag.StageValidate,
-			fmt.Errorf("object contains no symbols"), "", "",
-			"expected at least one global function symbol for a BPF program")
+		return &diag.Error{Stage: diag.StageValidate,
+			Err:  fmt.Errorf("object contains no symbols"),
+			Hint: "expected at least one global function symbol for a BPF program"}
 	}
 
 	return nil

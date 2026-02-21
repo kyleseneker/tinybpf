@@ -1,6 +1,7 @@
 package transform
 
 import (
+	"context"
 	"io"
 	"os"
 	"os/exec"
@@ -43,25 +44,61 @@ entry:
 
 	f.Fuzz(func(t *testing.T, ir string) {
 		lines := strings.Split(ir, "\n")
-		TransformLines(lines, Options{Stdout: io.Discard})
+		TransformLines(context.Background(), lines, Options{Stdout: io.Discard})
 	})
 }
 
 func TestRun(t *testing.T) {
-	t.Run("read error", func(t *testing.T) {
-		if err := Run("/does/not/exist.ll", filepath.Join(t.TempDir(), "out.ll"), Options{}); err == nil {
-			t.Fatal("expected error")
-		}
-	})
-
-	t.Run("write error", func(t *testing.T) {
-		tmp := t.TempDir()
-		input := filepath.Join(tmp, "in.ll")
-		os.WriteFile(input, []byte("define i32 @my_func(ptr %ctx) {\nentry:\n  ret i32 0\n}\n"), 0o644)
-		if err := Run(input, filepath.Join(input, "out.ll"), Options{Stdout: io.Discard}); err == nil {
-			t.Fatal("expected error")
-		}
-	})
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T) (ctx context.Context, in, out string, opts Options)
+		wantErr string
+	}{
+		{
+			name: "read error",
+			setup: func(t *testing.T) (context.Context, string, string, Options) {
+				t.Helper()
+				return context.Background(), "/does/not/exist.ll", filepath.Join(t.TempDir(), "out.ll"), Options{}
+			},
+			wantErr: "read input:",
+		},
+		{
+			name: "write error",
+			setup: func(t *testing.T) (context.Context, string, string, Options) {
+				t.Helper()
+				tmp := t.TempDir()
+				input := filepath.Join(tmp, "in.ll")
+				os.WriteFile(input, []byte("define i32 @my_func(ptr %ctx) {\nentry:\n  ret i32 0\n}\n"), 0o644)
+				return context.Background(), input, filepath.Join(input, "out.ll"), Options{Stdout: io.Discard}
+			},
+			wantErr: "write",
+		},
+		{
+			name: "cancelled context",
+			setup: func(t *testing.T) (context.Context, string, string, Options) {
+				t.Helper()
+				tmp := t.TempDir()
+				input := filepath.Join(tmp, "in.ll")
+				os.WriteFile(input, []byte("target triple = \"x86_64\"\ndefine i32 @f(ptr %ctx) {\nentry:\n  ret i32 0\n}\n"), 0o644)
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx, input, filepath.Join(tmp, "out.ll"), Options{Stdout: io.Discard}
+			},
+			wantErr: "context canceled",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, in, out, opts := tt.setup(t)
+			err := Run(ctx, in, out, opts)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected %q in error, got: %v", tt.wantErr, err)
+			}
+		})
+	}
 }
 
 // --- Integration tests (require fixtures + LLVM tools) ---
@@ -81,7 +118,7 @@ func TestFullTransform(t *testing.T) {
 		Sections: map[string]string{"handle_connect": "kprobe/sys_connect"},
 		Stdout:   io.Discard,
 	}
-	got, err := TransformLines(strings.Split(string(data), "\n"), opts)
+	got, err := TransformLines(context.Background(), strings.Split(string(data), "\n"), opts)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +187,7 @@ func TestFullTransformLLC(t *testing.T) {
 		Sections: map[string]string{"handle_connect": "kprobe/sys_connect"},
 		Stdout:   io.Discard,
 	}
-	if err := Run(fixture, outputLL, opts); err != nil {
+	if err := Run(context.Background(), fixture, outputLL, opts); err != nil {
 		t.Fatalf("transform failed: %v", err)
 	}
 
@@ -186,7 +223,7 @@ func TestAllOptProfilesProduceValidBPF(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	transformedLL := filepath.Join(tmpDir, "transformed.ll")
-	if err := Run(fixture, transformedLL, Options{
+	if err := Run(context.Background(), fixture, transformedLL, Options{
 		Sections: map[string]string{"handle_connect": "kprobe/sys_connect"},
 		Stdout:   io.Discard,
 	}); err != nil {

@@ -28,12 +28,12 @@ const VerifierSafePipeline = "function(" +
 	"simplifycfg<bonus-inst-threshold=4>," +
 	"adce)"
 
-// Profiles maps named optimization profiles to LLVM pass pipeline strings.
+// profiles maps named optimization profiles to LLVM pass pipeline strings.
 //
 // Profiled against network-sidecar kprobe IR:
 //
 //	conservative=37 insns, default=36, aggressive=36, verifier-safe=36
-var Profiles = map[string]string{
+var profiles = map[string]string{
 	"conservative":  "default<O1>",
 	"default":       DefaultPassPipeline,
 	"aggressive":    "default<O2>",
@@ -91,7 +91,7 @@ func AppendCustomPasses(args []string, passes []string) ([]string, error) {
 func resolvePassPipeline(passPipeline, profile string) string {
 	pipeline := strings.TrimSpace(passPipeline)
 	if pipeline == "" {
-		if p, ok := Profiles[strings.ToLower(strings.TrimSpace(profile))]; ok {
+		if p, ok := profiles[strings.ToLower(strings.TrimSpace(profile))]; ok {
 			pipeline = p
 		}
 	}

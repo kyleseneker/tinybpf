@@ -52,7 +52,7 @@ func replaceAlloc(lines []string) ([]string, error) {
 		if m := reAllocCall.FindStringSubmatch(line); m != nil && cur != nil {
 			size, err := strconv.Atoi(m[3])
 			if err != nil {
-				return nil, fmt.Errorf("transform: parse alloc size: %w", err)
+				return nil, fmt.Errorf("parse alloc size: %w", err)
 			}
 			cur.allocs = append(cur.allocs, allocInfo{
 				lineIdx: i,

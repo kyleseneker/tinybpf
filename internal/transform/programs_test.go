@@ -126,6 +126,28 @@ entry:
 		}
 	})
 
+	t.Run("explicit name not found", func(t *testing.T) {
+		input := strings.Split(strings.TrimSpace(`
+define i32 @foo() {
+entry:
+  ret i32 0
+}
+`), "\n")
+		_, err := extractPrograms(input, []string{"nonexistent"}, false, io.Discard)
+		if err == nil {
+			t.Fatal("expected error for missing program name")
+		}
+		if !strings.Contains(err.Error(), "not found in IR:") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !strings.Contains(err.Error(), "nonexistent") {
+			t.Fatalf("error should name the missing program: %v", err)
+		}
+		if !strings.Contains(err.Error(), "foo") {
+			t.Fatalf("error should list available functions: %v", err)
+		}
+	})
+
 	t.Run("verbose", func(t *testing.T) {
 		input := strings.Split("define i32 @my_program(ptr %ctx) {\nentry:\n  ret i32 0\n}\n", "\n")
 		var buf strings.Builder

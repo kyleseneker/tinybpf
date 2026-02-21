@@ -4,6 +4,8 @@
 package transform
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -28,16 +30,27 @@ type Options struct {
 }
 
 // Run reads a .ll file, applies all transformations, and writes the result.
-func Run(inputLL, outputLL string, opts Options) error {
+func Run(ctx context.Context, inputLL, outputLL string, opts Options) error {
 	data, err := os.ReadFile(inputLL)
 	if err != nil {
-		return fmt.Errorf("transform: read input: %w", err)
+		return fmt.Errorf("read input: %w", err)
 	}
-	lines, err := TransformLines(strings.Split(string(data), "\n"), opts)
+	lines, err := TransformLines(ctx, strings.Split(string(data), "\n"), opts)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(outputLL, []byte(strings.Join(lines, "\n")), 0o600)
+	size := len(lines) // newlines
+	for _, line := range lines {
+		size += len(line)
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, size))
+	for i, line := range lines {
+		if i > 0 {
+			buf.WriteByte('\n')
+		}
+		buf.WriteString(line)
+	}
+	return os.WriteFile(outputLL, buf.Bytes(), 0o600)
 }
 
 // TransformLines applies the full transformations to IR text lines:
@@ -52,25 +65,36 @@ func Run(inputLL, outputLL string, opts Options) error {
 // - sanitize BTF names
 // - add license
 // - cleanup
-func TransformLines(lines []string, opts Options) ([]string, error) {
+func TransformLines(ctx context.Context, lines []string, opts Options) ([]string, error) {
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}
 	var err error
 
 	lines = retarget(lines)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	lines = stripAttributes(lines)
 
 	lines, err = extractPrograms(lines, opts.Programs, opts.Verbose, opts.Stdout)
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	lines, err = replaceAlloc(lines)
 	if err != nil {
 		return nil, err
 	}
 	lines, err = rewriteHelpers(lines)
 	if err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 

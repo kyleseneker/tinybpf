@@ -8,25 +8,28 @@ import (
 var (
 	reAttrRef = regexp.MustCompile(`#(\d+)`)
 	reAttrDef = regexp.MustCompile(`^attributes #(\d+)`)
+	reAtIdent = regexp.MustCompile(`@[\w.]+`)
 )
 
 // cleanup removes orphaned declares, globals, attribute groups, and stale "; Function Attrs:" comments, then condenses blank lines.
 func cleanup(lines []string) []string {
-	remove := make(map[int]bool)
+	remove := make([]bool, len(lines))
 
 	type ref struct {
 		name string
 		idx  int
 	}
 
-	// isReferenced reports whether "@name" appears on any non-removed line other than defIdx itself.
-	isReferenced := func(name string, defIdx int) bool {
-		needle := "@" + name
-		for i, line := range lines {
-			if i == defIdx || remove[i] {
-				continue
-			}
-			if strings.Contains(line, needle) {
+	identLines := make(map[string][]int)
+	for i, line := range lines {
+		for _, m := range reAtIdent.FindAllString(line, -1) {
+			identLines[m] = append(identLines[m], i)
+		}
+	}
+
+	referencedElsewhere := func(name string, defIdx int) bool {
+		for _, idx := range identLines["@"+name] {
+			if idx != defIdx {
 				return true
 			}
 		}
@@ -41,7 +44,7 @@ func cleanup(lines []string) []string {
 		}
 	}
 	for _, d := range decls {
-		if !isReferenced(d.name, d.idx) {
+		if !referencedElsewhere(d.name, d.idx) {
 			remove[d.idx] = true
 			if d.idx > 0 && strings.HasPrefix(strings.TrimSpace(lines[d.idx-1]), ";") {
 				remove[d.idx-1] = true
@@ -63,7 +66,7 @@ func cleanup(lines []string) []string {
 		if strings.Contains(lines[g.idx], " section ") {
 			continue
 		}
-		if !isReferenced(g.name, g.idx) {
+		if !referencedElsewhere(g.name, g.idx) {
 			remove[g.idx] = true
 		}
 	}

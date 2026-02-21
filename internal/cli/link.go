@@ -40,7 +40,12 @@ func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	cfg.Inputs = inputs
 	cfg.Programs = programs
-	cfg.Sections = parseSectionFlags(sectionFlags)
+
+	sections, secErr := pipeline.ParseSectionFlags(sectionFlags)
+	if secErr != nil {
+		return cliErrorf(stderr, "%v", secErr)
+	}
+	cfg.Sections = sections
 
 	if cfg.ConfigPath != "" {
 		linkerCfg, err := llvm.LoadConfig(cfg.ConfigPath)

@@ -87,8 +87,9 @@ func normalizeInputsParallel(ctx context.Context, cfg Config, tools llvm.Tools, 
 // requireModules returns an error if no LLVM modules were produced.
 func requireModules(paths []string) ([]string, error) {
 	if len(paths) == 0 {
-		return nil, diag.New(diag.StageInput, fmt.Errorf("no usable modules after normalization"), "", "",
-			"verify provided inputs contain LLVM IR/bitcode")
+		return nil, &diag.Error{Stage: diag.StageInput,
+			Err:  fmt.Errorf("no usable modules after normalization"),
+			Hint: "verify provided inputs contain LLVM IR/bitcode"}
 	}
 	return paths, nil
 }
@@ -120,15 +121,16 @@ func normalizeSingle(ctx context.Context, cfg Config, tools llvm.Tools, workDir,
 // then recursively normalizes each member.
 func expandArchive(ctx context.Context, cfg Config, tools llvm.Tools, archivePath, workDir string) ([]string, error) {
 	if tools.LLVMAr == "" {
-		return nil, diag.New(diag.StageInput,
-			fmt.Errorf("archive input %q requires llvm-ar", archivePath), "", "",
-			"install llvm-ar or pass --llvm-ar")
+		return nil, &diag.Error{Stage: diag.StageInput,
+			Err:  fmt.Errorf("archive input %q requires llvm-ar", archivePath),
+			Hint: "install llvm-ar or pass --llvm-ar"}
 	}
 
 	listRes, err := llvm.Run(ctx, cfg.Timeout, tools.LLVMAr, "t", archivePath)
 	if err != nil {
-		return nil, diag.New(diag.StageInput, err, listRes.Command, listRes.Stderr,
-			"failed to list archive members")
+		return nil, &diag.Error{Stage: diag.StageInput, Err: err,
+			Command: listRes.Command, Stderr: listRes.Stderr,
+			Hint: "failed to list archive members"}
 	}
 
 	var out []string
@@ -140,15 +142,16 @@ func expandArchive(ctx context.Context, cfg Config, tools llvm.Tools, archivePat
 
 		printRes, printErr := llvm.Run(ctx, cfg.Timeout, tools.LLVMAr, "p", archivePath, member)
 		if printErr != nil {
-			return nil, diag.New(diag.StageInput, printErr, printRes.Command, printRes.Stderr,
-				"failed to read archive member")
+			return nil, &diag.Error{Stage: diag.StageInput, Err: printErr,
+				Command: printRes.Command, Stderr: printRes.Stderr,
+				Hint: "failed to read archive member"}
 		}
 
 		memberPath := filepath.Join(workDir,
 			fmt.Sprintf("%s_member_%d_%s", filepath.Base(archivePath), i, sanitizeName(member)))
 		if err := os.WriteFile(memberPath, []byte(printRes.Stdout), 0o600); err != nil {
-			return nil, diag.New(diag.StageInput, err, "", "",
-				"failed to materialize archive member")
+			return nil, &diag.Error{Stage: diag.StageInput, Err: err,
+				Hint: "failed to materialize archive member"}
 		}
 
 		ext := strings.ToLower(filepath.Ext(memberPath))
@@ -165,9 +168,9 @@ func expandArchive(ctx context.Context, cfg Config, tools llvm.Tools, archivePat
 	}
 
 	if len(out) == 0 {
-		return nil, diag.New(diag.StageInput,
-			fmt.Errorf("archive %q contained no LLVM module members", archivePath), "", "",
-			"expected .ll/.bc files or .o with embedded .llvmbc section")
+		return nil, &diag.Error{Stage: diag.StageInput,
+			Err:  fmt.Errorf("archive %q contained no LLVM module members", archivePath),
+			Hint: "expected .ll/.bc files or .o with embedded .llvmbc section"}
 	}
 	return out, nil
 }
@@ -176,9 +179,9 @@ func expandArchive(ctx context.Context, cfg Config, tools llvm.Tools, archivePat
 // from an object file into a standalone bitcode file.
 func extractBitcodeFromObject(ctx context.Context, cfg Config, tools llvm.Tools, objectPath, outPath string) error {
 	if tools.Objcopy == "" {
-		return diag.New(diag.StageInput,
-			fmt.Errorf("object input %q requires llvm-objcopy", objectPath), "", "",
-			"install llvm-objcopy or pass --llvm-objcopy")
+		return &diag.Error{Stage: diag.StageInput,
+			Err:  fmt.Errorf("object input %q requires llvm-objcopy", objectPath),
+			Hint: "install llvm-objcopy or pass --llvm-objcopy"}
 	}
 
 	args := []string{
@@ -187,24 +190,28 @@ func extractBitcodeFromObject(ctx context.Context, cfg Config, tools llvm.Tools,
 	}
 	res, err := llvm.Run(ctx, cfg.Timeout, tools.Objcopy, args...)
 	if err != nil {
-		return diag.New(diag.StageInput, err, res.Command, res.Stderr,
-			"object must include .llvmbc section for extraction")
+		return &diag.Error{Stage: diag.StageInput, Err: err,
+			Command: res.Command, Stderr: res.Stderr,
+			Hint: "object must include .llvmbc section for extraction"}
 	}
 
 	info, statErr := os.Stat(outPath)
 	if statErr != nil {
 		if errors.Is(statErr, os.ErrNotExist) {
-			return diag.New(diag.StageInput,
-				fmt.Errorf("no .llvmbc section found in %q", objectPath), res.Command, res.Stderr,
-				"object likely does not contain embedded bitcode")
+			return &diag.Error{Stage: diag.StageInput,
+				Err:     fmt.Errorf("no .llvmbc section found in %q", objectPath),
+				Command: res.Command, Stderr: res.Stderr,
+				Hint: "object likely does not contain embedded bitcode"}
 		}
-		return diag.New(diag.StageInput, statErr, res.Command, res.Stderr,
-			"failed to verify extracted bitcode")
+		return &diag.Error{Stage: diag.StageInput, Err: statErr,
+			Command: res.Command, Stderr: res.Stderr,
+			Hint: "failed to verify extracted bitcode"}
 	}
 	if info.Size() == 0 {
-		return diag.New(diag.StageInput,
-			fmt.Errorf("empty .llvmbc section in %q", objectPath), res.Command, res.Stderr,
-			".llvmbc section was empty")
+		return &diag.Error{Stage: diag.StageInput,
+			Err:     fmt.Errorf("empty .llvmbc section in %q", objectPath),
+			Command: res.Command, Stderr: res.Stderr,
+			Hint: ".llvmbc section was empty"}
 	}
 	return nil
 }

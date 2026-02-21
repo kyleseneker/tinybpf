@@ -6,8 +6,8 @@ import (
 	"strings"
 )
 
-// KnownHelpers maps TinyGo-mangled BPF helper names to kernel helper IDs.
-var KnownHelpers = map[string]int64{
+// knownHelpers maps TinyGo-mangled BPF helper names to kernel helper IDs.
+var knownHelpers = map[string]int64{
 	"main.bpfMapLookupElem":      1,
 	"main.bpfMapUpdateElem":      2,
 	"main.bpfMapDeleteElem":      3,
@@ -71,10 +71,10 @@ func rewriteHelpers(lines []string) ([]string, error) {
 
 		retType := line[loc[2]:loc[3]]
 		funcName := line[loc[4]:loc[5]]
-		helperID, ok := KnownHelpers[funcName]
+		helperID, ok := knownHelpers[funcName]
 		if !ok {
 			return nil, fmt.Errorf(
-				"transform: unknown BPF helper %q; add it to KnownHelpers or check spelling",
+				"unknown BPF helper %q; add it to knownHelpers or check spelling",
 				funcName)
 		}
 

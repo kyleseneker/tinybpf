@@ -185,17 +185,3 @@ func usageErrorf(fs *flag.FlagSet, w io.Writer, format string, args ...any) int 
 	return 2
 }
 
-// parseSectionFlags parses "name=section" strings into a map.
-func parseSectionFlags(flags []string) map[string]string {
-	if len(flags) == 0 {
-		return nil
-	}
-	m := make(map[string]string, len(flags))
-	for _, f := range flags {
-		parts := strings.SplitN(f, "=", 2)
-		if len(parts) == 2 {
-			m[parts[0]] = parts[1]
-		}
-	}
-	return m
-}

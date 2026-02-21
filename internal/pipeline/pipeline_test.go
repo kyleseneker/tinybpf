@@ -522,6 +522,49 @@ func TestStripHostPaths(t *testing.T) {
 	})
 }
 
+func TestParseSectionFlags(t *testing.T) {
+	tests := []struct {
+		name    string
+		flags   []string
+		want    map[string]string
+		wantErr string
+	}{
+		{"nil", nil, nil, ""},
+		{"valid entries", []string{"handle_connect=kprobe/sys_connect", "xdp_filter=xdp"}, map[string]string{"handle_connect": "kprobe/sys_connect", "xdp_filter": "xdp"}, ""},
+		{"rejects missing equals", []string{"no-equals"}, nil, "invalid --section"},
+		{"rejects empty key", []string{"=kprobe/sys_connect"}, nil, "invalid --section"},
+		{"rejects empty value", []string{"handle_connect="}, nil, "invalid --section"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, err := ParseSectionFlags(tt.flags)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected %q in error, got: %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.want == nil {
+				if m != nil {
+					t.Fatalf("expected nil, got %v", m)
+				}
+				return
+			}
+			for k, v := range tt.want {
+				if m[k] != v {
+					t.Fatalf("key %q: got %q, want %q", k, m[k], v)
+				}
+			}
+		})
+	}
+}
+
 func TestRunE2ESmoke(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("BPF validation requires Linux")

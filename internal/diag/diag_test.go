@@ -1,117 +1,62 @@
 package diag
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
 )
 
-func TestClassify(t *testing.T) {
+func TestErrorFormat(t *testing.T) {
 	tests := []struct {
-		name      string
-		stage     Stage
-		err       error
-		wantCode  Code
-		wantRetry bool
+		name    string
+		err     *Error
+		want    []string
+		notWant []string
 	}{
 		{
-			name:      "deadline exceeded",
-			stage:     StageOpt,
-			err:       context.DeadlineExceeded,
-			wantCode:  CodeTimeout,
-			wantRetry: true,
+			name: "full",
+			err: &Error{
+				Stage:   StageLink,
+				Command: "llvm-link in.ll",
+				Stderr:  "some error output",
+				Hint:    "check your IR",
+				Err:     errors.New("exit status 1"),
+			},
+			want: []string{
+				`stage "llvm-link" failed`,
+				"llvm-link in.ll",
+				"exit status 1",
+				"--- stderr ---",
+				"some error output",
+				"--- hint ---",
+				"check your IR",
+			},
 		},
 		{
-			name:      "timed out message",
-			stage:     StageCodegen,
-			err:       errors.New("command timed out"),
-			wantCode:  CodeTimeout,
-			wantRetry: true,
-		},
-		{
-			name:     "input stage",
-			stage:    StageInput,
-			err:      errors.New("bad input"),
-			wantCode: CodeInvalidInput,
-		},
-		{
-			name:     "discover stage",
-			stage:    StageDiscover,
-			err:      errors.New("not found"),
-			wantCode: CodeToolNotFound,
-		},
-		{
-			name:     "validate stage",
-			stage:    StageValidate,
-			err:      errors.New("bad elf"),
-			wantCode: CodeValidation,
-		},
-		{
-			name:     "default (codegen)",
-			stage:    StageCodegen,
-			err:      errors.New("llc failed"),
-			wantCode: CodeToolExecution,
+			name: "minimal",
+			err:  &Error{Stage: StageOpt, Err: errors.New("fail")},
+			want: []string{`stage "opt" failed`},
+			notWant: []string{
+				"--- stderr ---",
+				"--- hint ---",
+			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			diagErr := New(tt.stage, tt.err, "", "", "")
-			var derr *Error
-			if !errors.As(diagErr, &derr) {
-				t.Fatal("expected diag.Error")
+			s := tt.err.Error()
+			for _, w := range tt.want {
+				if !strings.Contains(s, w) {
+					t.Errorf("missing %q in:\n%s", w, s)
+				}
 			}
-			if derr.Code != tt.wantCode {
-				t.Fatalf("code: got %s, want %s", derr.Code, tt.wantCode)
-			}
-			if derr.Retry != tt.wantRetry {
-				t.Fatalf("retry: got %v, want %v", derr.Retry, tt.wantRetry)
+			for _, nw := range tt.notWant {
+				if strings.Contains(s, nw) {
+					t.Errorf("should not include %q when empty", nw)
+				}
 			}
 		})
 	}
-}
-
-func TestErrorFormat(t *testing.T) {
-	t.Run("full", func(t *testing.T) {
-		err := &Error{
-			Stage:   StageLink,
-			Code:    CodeToolExecution,
-			Retry:   true,
-			Command: "llvm-link in.ll",
-			Stderr:  "some error output",
-			Hint:    "check your IR",
-			Err:     errors.New("exit status 1"),
-		}
-		s := err.Error()
-		for _, want := range []string{
-			`stage "llvm-link" failed`,
-			"[TOOL_EXECUTION_FAILED]",
-			"llvm-link in.ll",
-			"exit status 1",
-			"--- stderr ---",
-			"some error output",
-			"--- hint ---",
-			"check your IR",
-			"--- retry ---",
-		} {
-			if !strings.Contains(s, want) {
-				t.Errorf("missing %q in:\n%s", want, s)
-			}
-		}
-	})
-
-	t.Run("minimal", func(t *testing.T) {
-		err := &Error{Stage: StageOpt, Err: errors.New("fail")}
-		s := err.Error()
-		if !strings.Contains(s, `stage "opt" failed`) {
-			t.Errorf("unexpected: %s", s)
-		}
-		for _, absent := range []string{"--- stderr ---", "--- hint ---", "--- retry ---"} {
-			if strings.Contains(s, absent) {
-				t.Errorf("should not include %q when empty/false", absent)
-			}
-		}
-	})
 }
 
 func TestErrorUnwrap(t *testing.T) {
@@ -129,8 +74,8 @@ func TestIsStage(t *testing.T) {
 		stage Stage
 		want  bool
 	}{
-		{"match", New(StageOpt, errors.New("fail"), "", "", ""), StageOpt, true},
-		{"no match", New(StageOpt, errors.New("fail"), "", "", ""), StageLink, false},
+		{"match", &Error{Stage: StageOpt, Err: errors.New("fail")}, StageOpt, true},
+		{"no match", &Error{Stage: StageOpt, Err: errors.New("fail")}, StageLink, false},
 		{"non-diag error", errors.New("plain"), StageOpt, false},
 	}
 	for _, tt := range tests {
@@ -148,10 +93,9 @@ func TestTrimLong(t *testing.T) {
 		input     string
 		maxLines  int
 		wantTrunc bool
-		wantLines int
 	}{
-		{"no truncation", "line1\nline2\nline3", 5, false, 3},
-		{"truncated", strings.Repeat("line\n", 30), 5, true, 5},
+		{"no truncation", "line1\nline2\nline3", 5, false},
+		{"truncated", strings.Repeat("line\n", 30), 5, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

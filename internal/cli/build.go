@@ -68,15 +68,21 @@ func runBuild(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 	if tgErr != nil {
 		cmd := tinygo + " " + strings.Join(tinygoArgs, " ")
-		diagErr := diag.New(diag.StageCompile, tgErr, cmd, tgRes.stderr,
-			"ensure TinyGo is installed and the package compiles with: tinygo build -gc=none -scheduler=none -panic=trap -opt=1 "+pkg)
+		diagErr := &diag.Error{Stage: diag.StageCompile, Err: tgErr,
+			Command: cmd, Stderr: tgRes.stderr,
+			Hint: "ensure TinyGo is installed and the package compiles with: tinygo build -gc=none -scheduler=none -panic=trap -opt=1 " + pkg}
 		fmt.Fprintln(stderr, diagErr.Error())
 		return 1
 	}
 
 	cfg.Inputs = []string{irFile}
 	cfg.Programs = programs
-	cfg.Sections = parseSectionFlags(sectionFlags)
+
+	sections, secErr := pipeline.ParseSectionFlags(sectionFlags)
+	if secErr != nil {
+		return cliErrorf(stderr, "%v", secErr)
+	}
+	cfg.Sections = sections
 
 	return runPipelineAndReport(ctx, cfg, stdout, stderr)
 }
@@ -85,6 +91,9 @@ func runBuild(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 // and a cleanup function. If explicit is set, no cleanup is performed.
 func buildWorkDir(explicit string) (dir string, cleanup func(), err error) {
 	if explicit != "" {
+		if err := os.MkdirAll(explicit, 0o700); err != nil {
+			return "", nil, err
+		}
 		return explicit, func() {}, nil
 	}
 	dir, err = os.MkdirTemp("", "tinybpf-build-")

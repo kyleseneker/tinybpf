@@ -66,7 +66,7 @@ func TestRewriteHelpers(t *testing.T) {
 	}
 
 	t.Run("all known helpers resolve", func(t *testing.T) {
-		for name, id := range KnownHelpers {
+		for name, id := range knownHelpers {
 			line := fmt.Sprintf(`  %%1 = call i64 @%s(ptr undef) #7`, name)
 			got, err := rewriteHelpers([]string{line})
 			if err != nil {

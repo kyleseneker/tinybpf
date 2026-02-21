@@ -52,7 +52,7 @@ func TestDefaultPipelineIsOs(t *testing.T) {
 }
 
 func TestAllProfilesResolvable(t *testing.T) {
-	for name, pipeline := range Profiles {
+	for name, pipeline := range profiles {
 		if pipeline == "" {
 			t.Errorf("profile %q has empty pipeline", name)
 		}

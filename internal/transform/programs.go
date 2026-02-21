@@ -56,8 +56,25 @@ func extractPrograms(lines []string, programNames []string, verbose bool, w io.W
 
 	programSet := make(map[string]bool)
 	if len(programNames) > 0 {
+		defined := make(map[string]bool, len(blocks))
+		for _, b := range blocks {
+			defined[b.name] = true
+		}
+		var missing []string
 		for _, n := range programNames {
+			if !defined[n] {
+				missing = append(missing, n)
+			}
 			programSet[n] = true
+		}
+		if len(missing) > 0 {
+			available := make([]string, len(blocks))
+			for i, b := range blocks {
+				available[i] = b.name
+			}
+			return nil, fmt.Errorf(
+				"requested program(s) not found in IR: %v (available: %v)",
+				missing, available)
 		}
 	} else {
 		for _, b := range blocks {
@@ -71,7 +88,7 @@ func extractPrograms(lines []string, programNames []string, verbose bool, w io.W
 		for i, b := range blocks {
 			names[i] = b.name
 		}
-		return nil, fmt.Errorf("transform: no program functions found among: %v", names)
+		return nil, fmt.Errorf("no program functions found among: %v", names)
 	}
 	if verbose {
 		for name := range programSet {
@@ -79,7 +96,7 @@ func extractPrograms(lines []string, programNames []string, verbose bool, w io.W
 		}
 	}
 
-	remove := make(map[int]bool)
+	remove := make([]bool, len(lines))
 
 	for _, b := range blocks {
 		if !programSet[b.name] {
