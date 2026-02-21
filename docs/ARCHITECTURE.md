@@ -32,7 +32,9 @@ internal/
   doctor/                  Toolchain diagnostic subcommand
 testdata/                  TinyGo IR fixtures for transform tests
 examples/
-  network-sidecar/         End-to-end example: Go eBPF probe + userspace loader
+  network-sidecar/         End-to-end example: tracepoint probe + ring buffer + userspace loader
+  xdp-filter/              XDP packet filter with hash map blocklist
+  kprobe-openat/           kprobe tracing openat syscalls with ring buffer
 ```
 
 ## Design decisions
@@ -92,6 +94,14 @@ Archives (`.a`) and object files with embedded bitcode (`.o`) require extraction
 
 The `--keep-temp` and `--tmpdir` flags preserve every intermediate file. When diagnosing verifier failures, being able to inspect the optimized IR and pre-link object is essential.
 
+### IR stage dump
+
+The `--dump-ir` flag writes a snapshot of the IR after each of the 11 transform stages into a `dump-ir/` subdirectory of the temp workspace. Files are numbered sequentially (`01-retarget.ll`, `02-strip-attributes.ll`, etc.), making it easy to diff consecutive stages and isolate which transform introduced a problem.
+
+### Enriched error context
+
+Transform-stage errors include the IR line number and a source snippet surrounding the failing line. For example, an unknown BPF helper error will show the exact IR call instruction and its neighbors, rather than just a function name.
+
 ## IR transformation pipeline
 
 The transformation runs 11 steps in sequence. Each step takes a slice of IR text lines and returns a modified slice.
@@ -119,7 +129,7 @@ graph LR
 | 5 | **Rewrite helpers** | Convert mangled `@main.bpfXxx(args, ptr undef)` calls to `inttoptr (i64 ID to ptr)(args)` |
 | 6 | **Assign sections** | Apply ELF section attributes to program functions and map globals; promote `internal` map globals to global linkage |
 | 7 | **Strip map prefix** | Rename Go package-qualified map globals (`@main.events` → `@events`) to match the C BPF naming convention |
-| 8 | **Rewrite map BTF** | Transform `bpfMapDef` globals and DWARF metadata to libbpf-compatible BTF encoding |
+| 8 | **Rewrite map BTF** | Transform `bpfMapDef` globals and DWARF metadata to libbpf-compatible BTF encoding; supports 5-field standard and 6-field (with pinning) layouts, zeroinitializer maps, and multiple maps per module |
 | 9 | **Sanitize BTF names** | Replace `.` with `_` in Go-style type names; strip names from `DW_TAG_pointer_type` nodes |
 | 10 | **Add license** | Inject `license` section with `"GPL"` if not present |
 | 11 | **Cleanup** | Remove orphaned declares, unreferenced globals, stale attribute groups, and leftover comments |

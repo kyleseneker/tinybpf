@@ -52,6 +52,15 @@ TinyGo 0.40.x emits LLVM 20 IR. System LLVM tools (`llvm-link`, `opt`, `llc`) mu
 | Linux | arm64 | Yes | Yes (validated) |
 | macOS | arm64 | Yes (through `llc`) | No (requires Linux) |
 
+## Debugging features
+
+| Feature | Flag | Description |
+|---------|------|-------------|
+| IR stage dump | `--dump-ir` | Writes a numbered `.ll` file after each of the 11 transform stages |
+| Verbose logging | `-v` / `--verbose` | Stage names, commands, and timing |
+| Intermediate files | `--keep-temp` | Preserves the temp directory with all artifacts |
+| Toolchain check | `tinybpf doctor` | Checks LLVM, TinyGo, and pahole availability and versions |
+
 ## Testing notes
 
 - End-to-end tests skip automatically when LLVM tools are not on `PATH`.

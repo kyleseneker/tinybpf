@@ -121,7 +121,11 @@ tinybpf link --input program.ll --output program.o \
   --section handle_connect=tracepoint/syscalls/sys_enter_connect
 ```
 
-See [`examples/network-sidecar/`](examples/network-sidecar/) for a complete working project with a userspace loader that reads events via `cilium/ebpf`.
+See the [`examples/`](examples/) directory for complete working projects:
+
+- [`network-sidecar/`](examples/network-sidecar/) — tracepoint probe with ring buffer and `cilium/ebpf` userspace loader
+- [`xdp-filter/`](examples/xdp-filter/) — XDP packet filter with hash map blocklist
+- [`kprobe-openat/`](examples/kprobe-openat/) — kprobe tracing `openat` syscalls with ring buffer events
 
 ### Scaffold a new project
 
@@ -161,6 +165,7 @@ The bare-flag form `tinybpf --input <file> [flags]` still works as an alias for 
 | `--btf` | `false` | Inject BTF via `pahole`. |
 | `--verbose`, `-v` | `false` | Print each pipeline stage. |
 | `--timeout` | `30s` | Per-stage timeout. |
+| `--dump-ir` | `false` | Write intermediate IR after each transform stage. |
 | `--keep-temp` | `false` | Preserve intermediate files for debugging. |
 | `--tmpdir` | | Directory for intermediate files. |
 
