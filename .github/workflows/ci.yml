@@ -183,7 +183,7 @@ jobs:
             dir=$(dirname "$file")
             for target in $(grep -oP '^func \KFuzz\w+' "$file"); do
               echo "--- fuzzing $target (10s) ---"
-              go test "./$dir" -run "^${target}\$" -fuzz "^${target}\$" -fuzztime 10s
+              go test "./$dir" -run "^${target}\$" -fuzz "^${target}\$" -fuzztime 10s -timeout 30s
             done
           done
 

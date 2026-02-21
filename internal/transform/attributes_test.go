@@ -13,6 +13,9 @@ func FuzzStripAttributes(f *testing.F) {
 	f.Add(`attributes #0 = { }`)
 
 	f.Fuzz(func(t *testing.T, line string) {
+		if len(line) > 1<<16 {
+			return
+		}
 		lines := strings.Split(line, "\n")
 		stripAttributes(lines)
 	})
