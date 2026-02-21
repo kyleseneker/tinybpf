@@ -28,11 +28,13 @@ const (
 // Error is a structured pipeline error carrying stage context, diagnostic
 // output, and a user-facing hint for remediation.
 type Error struct {
-	Stage   Stage
-	Command string
-	Stderr  string
-	Hint    string
-	Err     error
+	Stage     Stage
+	Command   string
+	Stderr    string
+	Hint      string
+	Err       error
+	IRLine    int
+	IRSnippet string
 }
 
 // Error formats the diagnostic into a multi-section string.
@@ -45,9 +47,16 @@ func (e *Error) Error() string {
 	if e.Err != nil {
 		fmt.Fprintf(&b, ": %v", e.Err)
 	}
+	if e.IRLine > 0 {
+		fmt.Fprintf(&b, " (IR line %d)", e.IRLine)
+	}
 	if e.Stderr != "" {
 		b.WriteString("\n--- stderr ---\n")
 		b.WriteString(trimLong(e.Stderr, 20))
+	}
+	if e.IRSnippet != "" {
+		b.WriteString("\n--- IR context ---\n")
+		b.WriteString(trimLong(e.IRSnippet, 10))
 	}
 	if e.Hint != "" {
 		b.WriteString("\n--- hint ---\n")
