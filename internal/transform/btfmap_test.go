@@ -267,6 +267,7 @@ func TestRewriteMapForBTFSixFields(t *testing.T) {
 }
 
 func TestRewriteMapForBTFWrongFieldCount(t *testing.T) {
+	//nolint:dupword
 	input := strings.Split(strings.TrimSpace(`
 %main.bpfMapDef = type { i32, i32, i32 }
 @main.events = global %main.bpfMapDef { i32 27, i32 0, i32 0 }, align 4
