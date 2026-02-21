@@ -1,4 +1,4 @@
-.PHONY: build test cover vet fmt lint check clean doctor setup vm sync e2e
+.PHONY: build test bench cover vet fmt lint check clean doctor setup vm sync e2e
 
 BIN := tinybpf
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -9,6 +9,9 @@ build:
 
 test:
 	go test ./...
+
+bench:
+	go test -bench=. -benchmem ./internal/transform/
 
 cover:
 	go test -coverprofile=coverage.out ./...

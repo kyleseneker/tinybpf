@@ -6,13 +6,8 @@ on:
   pull_request:
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        go-version: ["1.23.x", "1.24.x"]
-        llvm-version: ["20"]
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -20,22 +15,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go-version }}
-
-      - name: Install LLVM toolchain
-        run: |
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
-          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-${{ matrix.llvm-version }} main" | sudo tee /etc/apt/sources.list.d/llvm-${{ matrix.llvm-version }}.list
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq llvm-${{ matrix.llvm-version }}
-          echo "/usr/lib/llvm-${{ matrix.llvm-version }}/bin" >> "$GITHUB_PATH"
-
-      - name: Print versions
-        run: |
-          go version
-          llvm-link --version
-          opt --version
-          llc --version
+          go-version: "1.24.x"
 
       - name: Vet
         run: go vet ./...
@@ -45,30 +25,10 @@ jobs:
         with:
           version: v2.10
 
-      - name: Test
-        run: go test -race ./...
-
-      - name: Coverage
+      - name: Check go mod tidy
         run: |
-          go test -coverprofile=coverage.out ./...
-          total=$(go tool cover -func=coverage.out | grep ^total: | awk '{print $3}' | tr -d '%')
-          echo "Coverage: ${total}%"
-          threshold=90
-          if [ "$(echo "${total} < ${threshold}" | bc -l)" -eq 1 ]; then
-            echo "::error::Coverage ${total}% is below ${threshold}% threshold"
-            exit 1
-          fi
-
-      - name: Fuzz smoke
-        run: |
-          fuzz_targets=$(grep -r '^func Fuzz' internal/transform/ --include='*_test.go' -l | sort -u)
-          for file in $fuzz_targets; do
-            dir=$(dirname "$file")
-            for target in $(grep -oP '^func \KFuzz\w+' "$file"); do
-              echo "--- fuzzing $target (10s) ---"
-              go test "./$dir" -run "^${target}\$" -fuzz "^${target}\$" -fuzztime 10s
-            done
-          done
+          go mod tidy
+          git diff --exit-code go.mod go.sum
 
       - name: Govulncheck
         run: |
@@ -95,3 +55,129 @@ jobs:
             done < <(grep -oE '\]\([^)]+\)' "$md" | sed -E 's/^\]\(//;s/\)$//' | grep -v '^http' | grep -v '^#')
           done < <(find . -name '*.md' -not -path './.git/*')
           exit $broken
+
+      - name: Validate GoReleaser config
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go-version: ["1.23.x", "1.24.x"]
+        llvm-version: ["18", "19", "20"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Install LLVM toolchain
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-${{ matrix.llvm-version }} main" | sudo tee /etc/apt/sources.list.d/llvm-${{ matrix.llvm-version }}.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-${{ matrix.llvm-version }}
+          echo "/usr/lib/llvm-${{ matrix.llvm-version }}/bin" >> "$GITHUB_PATH"
+
+      - name: Print versions
+        run: |
+          go version
+          llvm-link --version
+          opt --version
+          llc --version
+
+      - name: Test
+        run: go test -race ./...
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -ldflags "-s -w" -trimpath -o tinybpf ./cmd/tinybpf
+
+      - name: Binary size
+        if: matrix.go-version == '1.24.x' && matrix.llvm-version == '20'
+        run: |
+          size=$(stat --format=%s tinybpf)
+          echo "Binary size: $(numfmt --to=iec $size)"
+          max=$((15 * 1024 * 1024))
+          if [ "$size" -gt "$max" ]; then
+            echo "::error::Binary size ${size} exceeds ${max} byte threshold"
+            exit 1
+          fi
+
+      - name: Coverage
+        if: matrix.go-version == '1.24.x' && matrix.llvm-version == '20'
+        run: |
+          go test -coverprofile=coverage.out ./...
+          total=$(go tool cover -func=coverage.out | grep ^total: | awk '{print $3}' | tr -d '%')
+          echo "Coverage: ${total}%"
+          threshold=90
+          if [ "$(echo "${total} < ${threshold}" | bc -l)" -eq 1 ]; then
+            echo "::error::Coverage ${total}% is below ${threshold}% threshold"
+            exit 1
+          fi
+
+      - name: Cache fuzz corpus
+        if: matrix.go-version == '1.24.x' && matrix.llvm-version == '20'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-${{ runner.os }}-${{ hashFiles('internal/transform/*_test.go') }}
+          restore-keys: fuzz-${{ runner.os }}-
+
+      - name: Fuzz smoke
+        if: matrix.go-version == '1.24.x' && matrix.llvm-version == '20'
+        run: |
+          fuzz_targets=$(grep -r '^func Fuzz' internal/transform/ --include='*_test.go' -l | sort -u)
+          for file in $fuzz_targets; do
+            dir=$(dirname "$file")
+            for target in $(grep -oP '^func \KFuzz\w+' "$file"); do
+              echo "--- fuzzing $target (10s) ---"
+              go test "./$dir" -run "^${target}\$" -fuzz "^${target}\$" -fuzztime 10s
+            done
+          done
+
+  bench:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.x"
+
+      - name: Benchmark PR
+        run: go test -bench=. -benchmem -count=6 -timeout=5m ./internal/transform/ | tee /tmp/bench-pr.txt
+
+      - name: Checkout base
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Benchmark base
+        run: go test -bench=. -benchmem -count=6 -timeout=5m ./internal/transform/ 2>&1 | tee /tmp/bench-base.txt || true
+
+      - name: Compare benchmarks
+        run: |
+          go install golang.org/x/perf/cmd/benchstat@latest
+          echo '## Benchmark comparison (base → PR)' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          if ! grep -q '^Benchmark' /tmp/bench-base.txt 2>/dev/null; then
+            echo 'No benchmarks in base branch. PR results:' >> "$GITHUB_STEP_SUMMARY"
+            echo '' >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            grep '^Benchmark' /tmp/bench-pr.txt >> "$GITHUB_STEP_SUMMARY" || true
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            benchstat /tmp/bench-base.txt /tmp/bench-pr.txt >> "$GITHUB_STEP_SUMMARY" 2>&1
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
