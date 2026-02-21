@@ -67,6 +67,41 @@ entry:
 	})
 }
 
+func TestAssignSectionsSixFieldMap(t *testing.T) {
+	input := strings.Split(strings.TrimSpace(`
+@main.pinned = internal global %main.bpfMapDef { i32 1, i32 4, i32 4, i32 1024, i32 0, i32 1 }, align 4
+
+define i32 @my_prog(ptr %ctx) #4 {
+entry:
+  ret i32 0
+}
+`), "\n")
+	got := assignSections(input, nil)
+	text := strings.Join(got, "\n")
+
+	if !strings.Contains(text, `section ".maps"`) {
+		t.Error("6-field map not assigned to .maps section")
+	}
+	if strings.Contains(text, " internal ") {
+		t.Error("internal linkage should be stripped from map globals")
+	}
+}
+
+func TestAssignSectionsPreserveExisting(t *testing.T) {
+	input := []string{
+		`define i32 @my_func(ptr %ctx) section "tracepoint/raw_syscalls/sys_enter" {`,
+		`entry:`, `  ret i32 0`, `}`,
+	}
+	got := assignSections(input, map[string]string{"my_func": "kprobe/something_else"})
+	text := strings.Join(got, "\n")
+	if !strings.Contains(text, `section "tracepoint/raw_syscalls/sys_enter"`) {
+		t.Error("existing section should be preserved")
+	}
+	if strings.Contains(text, "kprobe/something_else") {
+		t.Error("should not override existing section attribute")
+	}
+}
+
 func TestInsertSectionNoBrace(t *testing.T) {
 	got := insertSection(`declare i32 @my_func(ptr %ctx)`, "kprobe/test")
 	if !strings.Contains(got, `section "kprobe/test"`) {
