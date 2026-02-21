@@ -65,7 +65,7 @@ import "unsafe"
 
 // bpfMapDef describes a BPF map. tinybpf rewrites this to BTF-compatible encoding.
 // Set Type to the BPF map type constant and fill in the remaining fields for your use case.
-// Common types: 1 (HASH), 2 (ARRAY), 6 (PERCPU_HASH), 27 (RINGBUF).
+// Common types: 1 (HASH), 2 (ARRAY), 5 (PERCPU_HASH), 27 (RINGBUF).
 type bpfMapDef struct {
 	Type       uint32
 	KeySize    uint32
