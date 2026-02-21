@@ -5,9 +5,17 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  TINYGO_VERSION: "0.40.1"
+
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -64,23 +72,17 @@ jobs:
           args: check
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
+        go-version: ["1.23.x", "1.24.x"]
+        llvm-version: ["20", "21"]
         include:
-          - tinygo-version: "0.40.1"
+          - go-version: "1.24.x"
             llvm-version: "20"
-            go-version: "1.24.x"
             primary: true
-          - tinygo-version: "0.40.1"
-            llvm-version: "20"
-            go-version: "1.23.x"
-            primary: false
-          - tinygo-version: "0.40.1"
-            llvm-version: "21"
-            go-version: "1.24.x"
-            primary: false
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -92,8 +94,9 @@ jobs:
 
       - name: Install LLVM toolchain
         run: |
+          codename=$(lsb_release -cs)
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
-          echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-${{ matrix.llvm-version }} main" | sudo tee /etc/apt/sources.list.d/llvm-${{ matrix.llvm-version }}.list
+          echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-${{ matrix.llvm-version }} main" | sudo tee /etc/apt/sources.list.d/llvm-${{ matrix.llvm-version }}.list
           sudo apt-get update -qq
           sudo apt-get install -y -qq llvm-${{ matrix.llvm-version }}
           echo "/usr/lib/llvm-${{ matrix.llvm-version }}/bin" >> "$GITHUB_PATH"
@@ -101,25 +104,26 @@ jobs:
       - name: Install TinyGo
         if: matrix.go-version == '1.24.x'
         run: |
-          wget -qO /tmp/tinygo.deb https://github.com/tinygo-org/tinygo/releases/download/v${{ matrix.tinygo-version }}/tinygo_${{ matrix.tinygo-version }}_amd64.deb
+          wget -qO /tmp/tinygo.deb "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
           sudo dpkg -i /tmp/tinygo.deb
 
       - name: Generate fresh IR fixture
-        if: matrix.go-version == '1.24.x'
+        if: matrix.primary
         run: |
           cd examples/network-sidecar
           tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o ../../testdata/tinygo_probe.ll ./bpf
 
       - name: Print versions
         run: |
-          go version
-          if command -v tinygo >/dev/null 2>&1; then tinygo version; fi
-          llvm-link --version
-          opt --version
-          llc --version
+          echo "=== Toolchain ==="
+          echo "Go:     $(go version)"
+          if command -v tinygo >/dev/null 2>&1; then echo "TinyGo: $(tinygo version)"; fi
+          echo "LLVM:   $(llvm-link --version 2>&1 | head -1)"
+          echo "opt:    $(opt --version 2>&1 | head -1)"
+          echo "llc:    $(llc --version 2>&1 | head -1)"
 
       - name: Test
-        run: go test -race ./...
+        run: go test -race -timeout 5m ./...
 
       - name: Build
         run: CGO_ENABLED=0 go build -ldflags "-s -w" -trimpath -o tinybpf ./cmd/tinybpf
@@ -168,7 +172,8 @@ jobs:
           done
 
   bench:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     if: github.event_name == 'pull_request'
     steps:
       - name: Checkout PR

@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
 
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   TINYGO_VERSION: "0.40.1"
 
@@ -23,7 +27,7 @@ jobs:
 
       - name: Install TinyGo
         run: |
-          wget -qO /tmp/tinygo.deb https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb
+          wget -qO /tmp/tinygo.deb "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
           sudo dpkg -i /tmp/tinygo.deb
 
       - name: Print versions
