@@ -18,6 +18,7 @@ TinyGo 0.40.x emits LLVM 20 IR. System LLVM tools (`llvm-link`, `opt`, `llc`) mu
 | System LLVM | Compatible | Notes |
 |-------------|------------|-------|
 | 18 | No | Cannot parse LLVM 20 IR (`#dbg_value` syntax, `nuw` on GEP) |
+| 19 | No | Cannot parse LLVM 20 IR (`nuw` on GEP, unsupported attributes) |
 | 20 | Yes | Matches TinyGo 0.40.x |
 | 21 | Yes | Forward-compatible with LLVM 20 IR |
 

@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
 
+env:
+  TINYGO_VERSION: "0.40.1"
+
 jobs:
   e2e:
     runs-on: self-hosted
@@ -17,6 +20,16 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: "1.24.x"
+
+      - name: Install TinyGo
+        run: |
+          wget -qO /tmp/tinygo.deb https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb
+          sudo dpkg -i /tmp/tinygo.deb
+
+      - name: Print versions
+        run: |
+          go version
+          tinygo version
 
       - name: Build tinybpf
         run: go build -o tinybpf ./cmd/tinybpf
