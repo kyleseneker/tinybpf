@@ -105,6 +105,28 @@ func Run(ctx context.Context, cfg Config) error {
 				llvmMajor, minLLVMMajor))
 	}
 
+	paholePath, _ := lookPath("pahole")
+	if paholePath == "" {
+		fmt.Fprintf(cfg.Stdout, "  %-14s (not found)\n", "pahole:")
+		warnings = append(warnings,
+			"pahole is not installed; needed for --btf flag. Install dwarves package.")
+	} else {
+		fmt.Fprintf(cfg.Stdout, "  %-14s %s\n", "pahole:", paholePath)
+		res, runErr := llvm.Run(ctx, cfg.Timeout, paholePath, "--version")
+		if runErr != nil {
+			fmt.Fprintf(cfg.Stderr, "  [FAIL] pahole --version: %v\n", runErr)
+		} else {
+			line := firstNonEmptyLine(res.Stdout)
+			if line == "" {
+				line = firstNonEmptyLine(res.Stderr)
+			}
+			if line == "" {
+				line = "(no version output)"
+			}
+			fmt.Fprintf(cfg.Stdout, "  [OK]   pahole: %s\n", line)
+		}
+	}
+
 	if len(warnings) > 0 {
 		fmt.Fprintln(cfg.Stdout, "")
 		fmt.Fprintln(cfg.Stdout, "warnings:")

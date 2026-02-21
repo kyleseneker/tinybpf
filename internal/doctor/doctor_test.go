@@ -61,6 +61,24 @@ func fakeTinyGo(t *testing.T, script string) {
 	})
 }
 
+// fakeTools creates fake scripts for the named binaries and stubs lookPath to resolve them.
+func fakeTools(t *testing.T, tools map[string]string) {
+	t.Helper()
+	dir := t.TempDir()
+	paths := make(map[string]string, len(tools))
+	for name, script := range tools {
+		p := filepath.Join(dir, name)
+		os.WriteFile(p, []byte("#!/bin/sh\n"+script+"\n"), 0o755)
+		paths[name] = p
+	}
+	stubLookPath(t, func(name string) (string, error) {
+		if p, ok := paths[name]; ok {
+			return p, nil
+		}
+		return exec.LookPath(name)
+	})
+}
+
 func TestRun(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -200,12 +218,42 @@ func TestRun(t *testing.T) {
 			wantStdout: []string{"(no version output)"},
 		},
 		{
+			name: "pahole found",
+			tools: func(t *testing.T) llvm.ToolOverrides {
+				t.Helper()
+				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
+			},
+			setup: func(t *testing.T) {
+				t.Helper()
+				fakeTools(t, map[string]string{
+					"tinygo": "echo 'tinygo version 0.40.1'",
+					"pahole": "echo 'v1.27'",
+				})
+			},
+			wantStdout: []string{"pahole:", "[OK]   pahole:", "v1.27"},
+		},
+		{
+			name: "pahole not found warns",
+			tools: func(t *testing.T) llvm.ToolOverrides {
+				t.Helper()
+				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
+			},
+			setup:      func(t *testing.T) { t.Helper(); fakeTinyGo(t, "echo 'tinygo version 0.40.1'") },
+			wantStdout: []string{"pahole:", "(not found)", "dwarves"},
+		},
+		{
 			name: "all checks passed",
 			tools: func(t *testing.T) llvm.ToolOverrides {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup:       func(t *testing.T) { t.Helper(); fakeTinyGo(t, "echo 'tinygo version 0.40.1'") },
+			setup: func(t *testing.T) {
+				t.Helper()
+				fakeTools(t, map[string]string{
+					"tinygo": "echo 'tinygo version 0.40.1'",
+					"pahole": "echo 'v1.27'",
+				})
+			},
 			wantStdout:  []string{"all checks passed"},
 			notInStdout: []string{"warnings:"},
 		},
