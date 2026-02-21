@@ -44,6 +44,14 @@ func Validate(path string) error {
 			Hint: "verify input IR contains at least one BPF program function section"}
 	}
 
+	for _, s := range f.Sections {
+		if s.Name == ".maps" && (s.Flags&elf.SHF_EXECINSTR) != 0 {
+			return &diag.Error{Stage: diag.StageValidate,
+				Err:  fmt.Errorf(".maps section has executable flag"),
+				Hint: "map definitions should be data sections, not executable code"}
+		}
+	}
+
 	syms, err := f.Symbols()
 	if err == nil && len(syms) == 0 {
 		return &diag.Error{Stage: diag.StageValidate,
