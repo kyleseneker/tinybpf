@@ -60,5 +60,5 @@ release:
   github:
     owner: kyleseneker
     name: tinybpf
-  draft: true
+  draft: false
   prerelease: auto
