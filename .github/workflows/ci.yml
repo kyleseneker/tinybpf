@@ -119,13 +119,12 @@ jobs:
           echo "/usr/lib/llvm-${{ matrix.llvm-version }}/bin" >> "$GITHUB_PATH"
 
       - name: Install TinyGo
-        if: matrix.go-version == '1.24.x'
         run: |
           wget -qO /tmp/tinygo.deb "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
           sudo dpkg -i /tmp/tinygo.deb
 
       - name: Generate fresh IR fixture
-        if: matrix.go-version == '1.24.x' && matrix.llvm-version == '20'
+        if: matrix.primary
         run: |
           cd examples/network-sidecar
           tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o ../../testdata/tinygo_probe.ll ./bpf
