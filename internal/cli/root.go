@@ -143,6 +143,7 @@ func registerPipelineFlags(fs *flag.FlagSet, cfg *pipeline.Config, programs, sec
 	fs.DurationVar(&cfg.Timeout, "timeout", 30*time.Second, "Per-stage command timeout.")
 	fs.StringVar(&cfg.TempDir, "tmpdir", "", "Directory for intermediate artifacts (kept after run).")
 	fs.BoolVar(&cfg.EnableBTF, "btf", false, "Enable BTF injection via pahole.")
+	fs.BoolVar(&cfg.DumpIR, "dump-ir", false, "Write intermediate IR after each transform stage for debugging.")
 	fs.Var(programs, "program", "Program function name to keep. Repeat for multiple programs. Auto-detected if omitted.")
 	fs.Var(sections, "section", "Program-to-section mapping (e.g., handle_connect=tracepoint/syscalls/sys_enter_connect). Repeat for multiple.")
 	registerToolFlags(fs, &cfg.Tools)

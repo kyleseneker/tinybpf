@@ -38,6 +38,7 @@ type Config struct {
 	Jobs         int
 	ConfigPath   string
 	CustomPasses []string
+	DumpIR       bool
 }
 
 // Artifacts records the paths of intermediate and final build products.
@@ -48,6 +49,7 @@ type Artifacts struct {
 	OptimizedLL   string
 	CodegenObj    string
 	OutputObj     string
+	DumpIRDir     string
 }
 
 // Run executes the full linking pipeline: normalize → llvm-link →
@@ -88,11 +90,25 @@ func Run(ctx context.Context, cfg Config) (*Artifacts, error) {
 		return nil, err
 	}
 
+	dumpDir := ""
+	if cfg.DumpIR {
+		dumpDir = filepath.Join(workDir, "dump-ir")
+		if err := os.MkdirAll(dumpDir, 0o700); err != nil {
+			return nil, &diag.Error{Stage: diag.StageTransform, Err: err,
+				Hint: "failed to create dump-ir directory"}
+		}
+		artifacts.DumpIRDir = dumpDir
+		if cfg.Verbose {
+			fmt.Fprintf(cfg.Stdout, "[dump-ir] writing stage snapshots to %s\n", dumpDir)
+		}
+	}
+
 	transformOpts := transform.Options{
 		Programs: cfg.Programs,
 		Sections: cfg.Sections,
 		Verbose:  cfg.Verbose,
 		Stdout:   cfg.Stdout,
+		DumpDir:  dumpDir,
 	}
 	if err := transform.Run(ctx, artifacts.LinkedBC, artifacts.TransformedLL, transformOpts); err != nil {
 		return nil, &diag.Error{Stage: diag.StageTransform, Err: err,
