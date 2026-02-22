@@ -6,6 +6,7 @@ linters:
     - dupword
     - errorlint
     - gocritic
+    - gocyclo
     - gosec
     - intrange
     - misspell
@@ -18,6 +19,8 @@ linters:
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln
+    gocyclo:
+      min-complexity: 15
     gosec:
       excludes:
         - G204 # subprocess launched with variable — intentional for LLVM tool invocation
