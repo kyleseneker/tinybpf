@@ -144,7 +144,8 @@ func Run(ctx context.Context, inputLL, outputLL string, opts Options) error {
 // - extract programs
 // - replace alloc
 // - rewrite helpers
-// - assign sections
+// - assign data sections
+// - assign program sections
 // - strip map prefix
 // - rewrite map BTF
 // - sanitize BTF names
@@ -192,8 +193,11 @@ func TransformLines(ctx context.Context, lines []string, opts Options) ([]string
 	}
 	dumper.dump("rewrite-helpers", lines)
 
-	lines = assignSections(lines, opts.Sections)
-	dumper.dump("assign-sections", lines)
+	lines = assignDataSections(lines)
+	dumper.dump("assign-data-sections", lines)
+
+	lines = assignProgramSections(lines, opts.Sections)
+	dumper.dump("assign-program-sections", lines)
 
 	lines = stripMapPrefix(lines)
 	dumper.dump("strip-map-prefix", lines)

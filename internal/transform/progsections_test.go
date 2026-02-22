@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func FuzzAssignSections(f *testing.F) {
+func FuzzAssignProgramSections(f *testing.F) {
 	f.Add(`define i32 @handle_connect(ptr %ctx) #4 !dbg !0 {
 entry:
   ret i32 0
@@ -23,11 +23,11 @@ entry:
 			return
 		}
 		lines := strings.Split(ir, "\n")
-		assignSections(lines, nil)
+		assignProgramSections(lines, nil)
 	})
 }
 
-func TestAssignSections(t *testing.T) {
+func TestAssignProgramSections(t *testing.T) {
 	tests := []struct {
 		name        string
 		input       []string
@@ -87,7 +87,7 @@ entry:
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := assignSections(tt.input, tt.sections)
+			got := assignProgramSections(tt.input, tt.sections)
 			text := strings.Join(got, "\n")
 			for _, want := range tt.wantContain {
 				if !strings.Contains(text, want) {

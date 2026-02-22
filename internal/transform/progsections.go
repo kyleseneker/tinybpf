@@ -6,8 +6,9 @@ import (
 	"strings"
 )
 
-// assignSections adds ELF section attributes to program definitions and map globals that don't already have one.
-func assignSections(lines []string, sections map[string]string) []string {
+// assignProgramSections adds BPF program section attributes to function definitions
+// and ".maps" section attributes to map globals that don't already have one.
+func assignProgramSections(lines []string, sections map[string]string) []string {
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
