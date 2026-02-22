@@ -56,10 +56,11 @@ TinyGo 0.40.x emits LLVM 20 IR. System LLVM tools (`llvm-link`, `opt`, `llc`) mu
 
 | Feature | Flag | Description |
 |---------|------|-------------|
-| IR stage dump | `--dump-ir` | Writes a numbered `.ll` file after each of the 11 transform stages |
+| IR stage dump | `--dump-ir` | Writes a numbered `.ll` file after each of the 12 transform stages |
 | Verbose logging | `-v` / `--verbose` | Stage names, commands, and timing |
 | Intermediate files | `--keep-temp` | Preserves the temp directory with all artifacts |
 | Toolchain check | `tinybpf doctor` | Checks LLVM, TinyGo, and pahole availability and versions |
+| Program type check | `--program-type` | Validates `--section` values against a known BPF program type |
 
 ## Testing notes
 

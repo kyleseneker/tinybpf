@@ -100,9 +100,12 @@ tinybpf build --output program.o \
 
 ### Examples
 
-- [`network-sidecar/`](examples/network-sidecar/) — tracepoint + ring buffer + `cilium/ebpf` loader
+- [`tracepoint-connect/`](examples/tracepoint-connect/) — tracepoint + ring buffer + `cilium/ebpf` loader
 - [`xdp-filter/`](examples/xdp-filter/) — XDP packet filter with hash map blocklist
 - [`kprobe-openat/`](examples/kprobe-openat/) — kprobe tracing `openat` with ring buffer
+- [`tc-filter/`](examples/tc-filter/) — TC classifier that drops packets by port
+- [`cgroup-connect/`](examples/cgroup-connect/) — cgroup/connect4 connection blocker
+- [`fentry-open/`](examples/fentry-open/) — fentry tracing `openat2` with ring buffer
 
 ### Scaffold a new project
 
@@ -140,6 +143,7 @@ Run `tinybpf --help` or `tinybpf <command> --help`.
 | `--verbose`, `-v` | `false` | Print each pipeline stage |
 | `--timeout` | `30s` | Per-stage timeout |
 | `--dump-ir` | `false` | Write intermediate IR after each transform stage |
+| `--program-type` | | Validate sections match a BPF program type (e.g. `kprobe`, `xdp`) |
 | `--keep-temp` | `false` | Preserve intermediate files |
 | `--tmpdir` | | Directory for intermediate files |
 
@@ -173,7 +177,7 @@ Run `tinybpf --help` or `tinybpf <command> --help`.
 | Document | Description |
 |----------|-------------|
 | [Writing Go for eBPF](docs/TINYGO_COMPAT.md) | Language constraints, BPF concepts, helpers, patterns, and FAQ |
-| [Architecture](docs/ARCHITECTURE.md) | Pipeline design and the 11-step IR transformation |
+| [Architecture](docs/ARCHITECTURE.md) | Pipeline design and the 12-step IR transformation |
 | [Support Matrix](docs/SUPPORT_MATRIX.md) | Tested toolchain versions and platforms |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Setup issues, pipeline errors, and verifier debugging |
 | [Contributing](CONTRIBUTING.md) | Development setup, testing, and PR process |

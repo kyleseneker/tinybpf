@@ -22,7 +22,7 @@ echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /e
 sudo apt-get update && sudo apt-get install -y llvm-20
 
 # Point tinybpf to the correct tools:
-tinybpf --llvm-link llvm-link-20 --opt opt-20 --llc llc-20 ...
+tinybpf build --llvm-link llvm-link-20 --opt opt-20 --llc llc-20 ./bpf
 ```
 
 On macOS with Homebrew, `brew install llvm@20` and add the LLVM bin directory to your `PATH`.
@@ -123,7 +123,7 @@ The LLVM optimization pass failed.
 **Fix:** Try a less aggressive optimization profile:
 
 ```bash
-tinybpf --opt-profile conservative ...
+tinybpf build --opt-profile conservative ./bpf
 ```
 
 Or inspect the intermediate IR with `--keep-temp` and `--tmpdir ./debug`.
@@ -177,9 +177,9 @@ After `tinybpf` produces a `.o` file, the Linux kernel's BPF verifier must accep
 If the verifier rejects instructions, try a different BPF CPU version:
 
 ```bash
-tinybpf --cpu v2 ...   # more conservative instruction set
-tinybpf --cpu v3 ...   # default; ALU32, JMP32
-tinybpf --cpu v4 ...   # latest features (requires newer kernel)
+tinybpf build --cpu v2 ./bpf   # more conservative instruction set
+tinybpf build --cpu v3 ./bpf   # default; ALU32, JMP32
+tinybpf build --cpu v4 ./bpf   # latest features (requires newer kernel)
 ```
 
 ## Platform-specific
@@ -192,7 +192,8 @@ The `tinybpf` pipeline (through `llc`) works on macOS for development and testin
 make vm          # create and boot Ubuntu VM
 make sync        # sync repo into VM
 # inside VM:
-make e2e         # full validation
+sudo make setup  # install toolchain
+sudo make e2e    # full validation
 ```
 
 ### Ubuntu 24.04

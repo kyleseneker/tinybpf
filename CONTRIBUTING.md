@@ -47,8 +47,8 @@ ssh -p 2222 ubuntu@localhost
 make sync       # sync repo into the VM
 
 # inside the VM:
-make setup      # install toolchain
-make e2e        # run full validation
+sudo make setup  # install toolchain
+sudo make e2e    # run full validation
 ```
 
 The validation runs the complete lifecycle: TinyGo compile, tinybpf pipeline, ELF validation, kernel verifier load, tracepoint attach, and event capture.

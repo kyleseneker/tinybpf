@@ -126,7 +126,7 @@ func main() {}
 
 ## Supported BPF helpers
 
-IDs from `__BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`. Unrecognized helpers produce an error during transformation.
+IDs from `___BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`. The helper list is frozen at 211 entries; new kernel extensions use kfuncs instead. Unrecognized helpers produce an error during transformation.
 
 ### Map operations
 
@@ -138,7 +138,8 @@ IDs from `__BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`. Unrecognized helpers
 | `bpfMapPushElem` | `bpf_map_push_elem` | 87 |
 | `bpfMapPopElem` | `bpf_map_pop_elem` | 88 |
 | `bpfMapPeekElem` | `bpf_map_peek_elem` | 89 |
-| `bpfMapLookupAndDeleteElem` | `bpf_map_lookup_and_delete_elem` | 110 |
+| `bpfMapLookupPercpuElem` | `bpf_map_lookup_percpu_elem` | 195 |
+| `bpfForEachMapElem` | `bpf_for_each_map_elem` | 164 |
 
 ### Time
 
@@ -147,12 +148,15 @@ IDs from `__BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`. Unrecognized helpers
 | `bpfKtimeGetNs` | `bpf_ktime_get_ns` | 5 |
 | `bpfKtimeGetBootNs` | `bpf_ktime_get_boot_ns` | 125 |
 | `bpfKtimeGetCoarseNs` | `bpf_ktime_get_coarse_ns` | 160 |
+| `bpfKtimeGetTaiNs` | `bpf_ktime_get_tai_ns` | 208 |
+| `bpfJiffies64` | `bpf_jiffies64` | 118 |
 
 ### Print / trace
 
 | Go name | Kernel name | ID |
 |---------|-------------|---:|
 | `bpfTracePrintk` | `bpf_trace_printk` | 6 |
+| `bpfTraceVprintk` | `bpf_trace_vprintk` | 177 |
 | `bpfSnprintf` | `bpf_snprintf` | 165 |
 
 ### Random
@@ -161,7 +165,7 @@ IDs from `__BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`. Unrecognized helpers
 |---------|-------------|---:|
 | `bpfGetPrandomU32` | `bpf_get_prandom_u32` | 7 |
 
-### Process info
+### Process / task info
 
 | Go name | Kernel name | ID |
 |---------|-------------|---:|
@@ -171,6 +175,11 @@ IDs from `__BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`. Unrecognized helpers
 | `bpfGetCurrentTask` | `bpf_get_current_task` | 35 |
 | `bpfGetCurrentTaskBtf` | `bpf_get_current_task_btf` | 158 |
 | `bpfGetCurrentCgroupId` | `bpf_get_current_cgroup_id` | 80 |
+| `bpfGetCurrentAncestorCgroupId` | `bpf_get_current_ancestor_cgroup_id` | 123 |
+| `bpfGetNsCurrentPidTgid` | `bpf_get_ns_current_pid_tgid` | 120 |
+| `bpfCurrentTaskUnderCgroup` | `bpf_current_task_under_cgroup` | 37 |
+| `bpfTaskPtRegs` | `bpf_task_pt_regs` | 175 |
+| `bpfCopyFromUser` | `bpf_copy_from_user` | 148 |
 
 ### CPU info
 
@@ -196,11 +205,13 @@ IDs from `__BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`. Unrecognized helpers
 | `bpfRingbufDiscard` | `bpf_ringbuf_discard` | 133 |
 | `bpfRingbufQuery` | `bpf_ringbuf_query` | 134 |
 
-### Probe / memory read
+### Probe / memory access
 
 | Go name | Kernel name | ID |
 |---------|-------------|---:|
 | `bpfProbeRead` | `bpf_probe_read` | 4 |
+| `bpfProbeReadStr` | `bpf_probe_read_str` | 45 |
+| `bpfProbeWriteUser` | `bpf_probe_write_user` | 36 |
 | `bpfProbeReadUser` | `bpf_probe_read_user` | 112 |
 | `bpfProbeReadUserStr` | `bpf_probe_read_user_str` | 114 |
 | `bpfProbeReadKernel` | `bpf_probe_read_kernel` | 113 |
@@ -210,6 +221,7 @@ IDs from `__BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`. Unrecognized helpers
 
 | Go name | Kernel name | ID |
 |---------|-------------|---:|
+| `bpfGetStackid` | `bpf_get_stackid` | 27 |
 | `bpfGetStack` | `bpf_get_stack` | 67 |
 | `bpfGetFuncIp` | `bpf_get_func_ip` | 173 |
 | `bpfGetAttachCookie` | `bpf_get_attach_cookie` | 174 |
@@ -220,26 +232,39 @@ IDs from `__BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`. Unrecognized helpers
 |---------|-------------|---:|
 | `bpfSkbStoreBytes` | `bpf_skb_store_bytes` | 9 |
 | `bpfSkbLoadBytes` | `bpf_skb_load_bytes` | 26 |
+| `bpfSkbLoadBytesRelative` | `bpf_skb_load_bytes_relative` | 68 |
 | `bpfL3CsumReplace` | `bpf_l3_csum_replace` | 10 |
 | `bpfL4CsumReplace` | `bpf_l4_csum_replace` | 11 |
+| `bpfCsumDiff` | `bpf_csum_diff` | 28 |
+| `bpfCsumUpdate` | `bpf_csum_update` | 40 |
+| `bpfCsumLevel` | `bpf_csum_level` | 135 |
 | `bpfCloneRedirect` | `bpf_clone_redirect` | 13 |
+| `bpfRedirect` | `bpf_redirect` | 23 |
+| `bpfRedirectMap` | `bpf_redirect_map` | 51 |
+| `bpfSkRedirectMap` | `bpf_sk_redirect_map` | 52 |
+| `bpfRedirectNeigh` | `bpf_redirect_neigh` | 152 |
+| `bpfRedirectPeer` | `bpf_redirect_peer` | 155 |
 | `bpfSkbVlanPush` | `bpf_skb_vlan_push` | 18 |
 | `bpfSkbVlanPop` | `bpf_skb_vlan_pop` | 19 |
 | `bpfSkbGetTunnelKey` | `bpf_skb_get_tunnel_key` | 20 |
 | `bpfSkbSetTunnelKey` | `bpf_skb_set_tunnel_key` | 21 |
-| `bpfRedirect` | `bpf_redirect` | 23 |
-| `bpfCsumDiff` | `bpf_csum_diff` | 28 |
+| `bpfSkbGetTunnelOpt` | `bpf_skb_get_tunnel_opt` | 29 |
+| `bpfSkbSetTunnelOpt` | `bpf_skb_set_tunnel_opt` | 30 |
 | `bpfSkbChangeProto` | `bpf_skb_change_proto` | 31 |
 | `bpfSkbChangeType` | `bpf_skb_change_type` | 32 |
 | `bpfSkbUnderCgroup` | `bpf_skb_under_cgroup` | 33 |
 | `bpfSkbChangeTail` | `bpf_skb_change_tail` | 38 |
 | `bpfSkbPullData` | `bpf_skb_pull_data` | 39 |
+| `bpfSkbChangeHead` | `bpf_skb_change_head` | 43 |
+| `bpfSkbAdjustRoom` | `bpf_skb_adjust_room` | 50 |
+| `bpfSkbCgroupId` | `bpf_skb_cgroup_id` | 79 |
+| `bpfSkbAncestorCgroupId` | `bpf_skb_ancestor_cgroup_id` | 83 |
+| `bpfSkbOutput` | `bpf_skb_output` | 111 |
 | `bpfSetHash` | `bpf_set_hash` | 48 |
-| `bpfSetsockopt` | `bpf_setsockopt` | 49 |
-| `bpfGetsockopt` | `bpf_getsockopt` | 50 |
-| `bpfRedirectMap` | `bpf_redirect_map` | 51 |
 | `bpfFibLookup` | `bpf_fib_lookup` | 69 |
-| `bpfCsumLevel` | `bpf_csum_level` | 183 |
+| `bpfCheckMtu` | `bpf_check_mtu` | 163 |
+| `bpfGetNetnsCookie` | `bpf_get_netns_cookie` | 122 |
+| `bpfGetCgroupClassid` | `bpf_get_cgroup_classid` | 17 |
 
 ### XDP
 
@@ -248,29 +273,90 @@ IDs from `__BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`. Unrecognized helpers
 | `bpfXdpAdjustHead` | `bpf_xdp_adjust_head` | 44 |
 | `bpfXdpAdjustMeta` | `bpf_xdp_adjust_meta` | 54 |
 | `bpfXdpAdjustTail` | `bpf_xdp_adjust_tail` | 65 |
+| `bpfXdpOutput` | `bpf_xdp_output` | 121 |
 
 ### Socket
 
 | Go name | Kernel name | ID |
 |---------|-------------|---:|
 | `bpfGetSocketCookie` | `bpf_get_socket_cookie` | 46 |
+| `bpfGetSocketUid` | `bpf_get_socket_uid` | 47 |
+| `bpfSetsockopt` | `bpf_setsockopt` | 49 |
+| `bpfGetsockopt` | `bpf_getsockopt` | 57 |
+| `bpfBind` | `bpf_bind` | 64 |
 | `bpfSkLookupTcp` | `bpf_sk_lookup_tcp` | 84 |
 | `bpfSkLookupUdp` | `bpf_sk_lookup_udp` | 85 |
 | `bpfSkRelease` | `bpf_sk_release` | 86 |
+| `bpfSkFullsock` | `bpf_sk_fullsock` | 95 |
+| `bpfTcpSock` | `bpf_tcp_sock` | 96 |
 | `bpfSkcLookupTcp` | `bpf_skc_lookup_tcp` | 99 |
+| `bpfTcpCheckSyncookie` | `bpf_tcp_check_syncookie` | 100 |
+| `bpfSockHashUpdate` | `bpf_sock_hash_update` | 70 |
+
+### Sockmap / msg
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfMsgRedirectMap` | `bpf_msg_redirect_map` | 60 |
+| `bpfMsgApplyBytes` | `bpf_msg_apply_bytes` | 61 |
+| `bpfMsgPullData` | `bpf_msg_pull_data` | 63 |
+
+### Spin lock
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfSpinLock` | `bpf_spin_lock` | 93 |
+| `bpfSpinUnlock` | `bpf_spin_unlock` | 94 |
+
+### Storage
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfGetLocalStorage` | `bpf_get_local_storage` | 81 |
+| `bpfSkStorageGet` | `bpf_sk_storage_get` | 107 |
+| `bpfSkStorageDelete` | `bpf_sk_storage_delete` | 108 |
+| `bpfTaskStorageGet` | `bpf_task_storage_get` | 156 |
+| `bpfTaskStorageDelete` | `bpf_task_storage_delete` | 157 |
+| `bpfCgrpStorageGet` | `bpf_cgrp_storage_get` | 210 |
+| `bpfCgrpStorageDelete` | `bpf_cgrp_storage_delete` | 211 |
+
+### Timer
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfTimerInit` | `bpf_timer_init` | 169 |
+| `bpfTimerSetCallback` | `bpf_timer_set_callback` | 170 |
+| `bpfTimerStart` | `bpf_timer_start` | 171 |
+| `bpfTimerCancel` | `bpf_timer_cancel` | 172 |
+
+### Dynamic pointers
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfDynptrFromMem` | `bpf_dynptr_from_mem` | 197 |
+| `bpfDynptrRead` | `bpf_dynptr_read` | 201 |
+| `bpfDynptrWrite` | `bpf_dynptr_write` | 202 |
+| `bpfDynptrData` | `bpf_dynptr_data` | 203 |
+
+### Signals
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfSendSignal` | `bpf_send_signal` | 109 |
+| `bpfSendSignalThread` | `bpf_send_signal_thread` | 117 |
+
+### Loops / string
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfLoop` | `bpf_loop` | 181 |
+| `bpfStrncmp` | `bpf_strncmp` | 182 |
 
 ### Tail call
 
 | Go name | Kernel name | ID |
 |---------|-------------|---:|
 | `bpfTailCall` | `bpf_tail_call` | 12 |
-
-### Task storage (kernel 5.11+)
-
-| Go name | Kernel name | ID |
-|---------|-------------|---:|
-| `bpfTaskStorageGet` | `bpf_task_storage_get` | 169 |
-| `bpfTaskStorageDelete` | `bpf_task_storage_delete` | 170 |
 
 ## Common patterns
 
@@ -379,7 +465,7 @@ C with `libbpf`/`clang` has the broadest ecosystem. `tinybpf` trades that maturi
 Not directly — BPF helpers are kernel-only symbols. Test logic in pure Go with `go test`, then integration-test the compiled `.o` with a loader on a real kernel or VM.
 
 **What does `tinybpf` actually do to the IR?**
-It runs an 11-step transformation: retarget to BPF, strip runtime, rewrite helpers, replace allocations, inject metadata. See [Architecture](ARCHITECTURE.md) for the full breakdown.
+It runs a 12-step transformation: retarget to BPF, strip runtime, rewrite helpers, assign data and program sections, replace allocations, inject metadata. See [Architecture](ARCHITECTURE.md) for the full breakdown.
 
 ## Further reading
 

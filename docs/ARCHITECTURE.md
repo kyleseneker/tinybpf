@@ -8,7 +8,7 @@
 graph TD
     A[".ll / .bc / .o / .a"] --> B["Normalize<br>expand archives, extract bitcode"]
     B --> C["llvm-link<br>merge into single IR module"]
-    C --> D["IR Transform<br>11-step rewrite: retarget, strip runtime,<br>rewrite helpers, replace alloc, inject metadata"]
+    C --> D["IR Transform<br>12-step rewrite: retarget, strip runtime,<br>rewrite helpers, assign data/program sections, inject metadata"]
     D --> E["opt<br>apply optimization pass pipeline"]
     E --> F["llc -march=bpf<br>BPF code generation"]
     F --> G{"BTF enabled?"}
@@ -25,16 +25,19 @@ cmd/tinybpf/        CLI entrypoint
 internal/
   cli/                     Flag parsing and subcommand dispatch
   pipeline/                Orchestration, input normalization, BTF injection
-  transform/               TinyGo IR -> BPF IR rewriting (11 transform steps)
+  transform/               TinyGo IR -> BPF IR rewriting (12 transform steps)
   llvm/                    Tool discovery, optimization profiles, process execution, config loading
   elfcheck/                Post-link ELF validation
   diag/                    Structured error types with stage context and hints
   doctor/                  Toolchain diagnostic subcommand
 testdata/                  TinyGo IR fixtures for transform tests
 examples/
-  network-sidecar/         End-to-end example: tracepoint probe + ring buffer + userspace loader
+  tracepoint-connect/      Tracepoint probe + ring buffer + userspace loader
   xdp-filter/              XDP packet filter with hash map blocklist
   kprobe-openat/           kprobe tracing openat syscalls with ring buffer
+  tc-filter/               TC classifier that drops packets by port
+  cgroup-connect/          cgroup/connect4 connection blocker
+  fentry-open/             fentry tracing openat2 with ring buffer
 ```
 
 ## Design decisions
@@ -96,7 +99,7 @@ The `--keep-temp` and `--tmpdir` flags preserve every intermediate file. When di
 
 ### IR stage dump
 
-The `--dump-ir` flag writes a snapshot of the IR after each of the 11 transform stages into a `dump-ir/` subdirectory of the temp workspace. Files are numbered sequentially (`01-retarget.ll`, `02-strip-attributes.ll`, etc.), making it easy to diff consecutive stages and isolate which transform introduced a problem.
+The `--dump-ir` flag writes a snapshot of the IR after each of the 12 transform stages into a `dump-ir/` subdirectory of the temp workspace. Files are numbered sequentially (`01-retarget.ll`, `02-strip-attributes.ll`, etc.), making it easy to diff consecutive stages and isolate which transform introduced a problem.
 
 ### Enriched error context
 
@@ -104,13 +107,14 @@ Transform-stage errors include the IR line number and a source snippet surroundi
 
 ## IR transformation pipeline
 
-TinyGo emits valid LLVM IR, but it targets the host architecture and carries Go runtime artifacts that the BPF verifier would reject. The 11-step transformation bridges this gap:
+TinyGo emits valid LLVM IR, but it targets the host architecture and carries Go runtime artifacts that the BPF verifier would reject. The 12-step transformation bridges this gap:
 
 - **Steps 1–2** (retarget, strip attrs) make the IR architecture-neutral so `llc -march=bpf` can codegen it. Host-specific data layouts, triples, and CPU feature attributes would cause LLVM errors or wrong-architecture code.
 - **Steps 3–4** (extract programs, replace alloc) strip the TinyGo runtime and eliminate heap allocation. The BPF VM has no heap and no scheduler — any runtime code left in the module would fail verification.
-- **Step 5** (rewrite helpers) translates Go-style BPF helper declarations into the integer-ID calling convention the kernel expects. Without this, the verifier sees unknown function calls and rejects the program.
-- **Steps 6–9** (sections, map prefix, map BTF, sanitize BTF) inject the ELF metadata that BPF loaders (`cilium/ebpf`, `libbpf`) require: section names for program type dispatch, BTF-compatible map encoding, and C-style symbol names.
-- **Steps 10–11** (license, cleanup) add the GPL license section (required by the kernel for programs using GPL-only helpers) and remove dead IR to keep the output minimal.
+- **Step 5** (rewrite helpers) translates Go-style BPF helper declarations into the integer-ID calling convention the kernel expects (125 helpers supported). Without this, the verifier sees unknown function calls and rejects the program.
+- **Step 6** (assign data sections) places user-defined global variables into `.data`, `.rodata`, or `.bss` sections based on mutability and initialization, enabling BPF global variable support.
+- **Steps 7–10** (program sections, map prefix, map BTF, sanitize BTF) inject the ELF metadata that BPF loaders (`cilium/ebpf`, `libbpf`) require: section names for program type dispatch, BTF-compatible map encoding, and C-style symbol names.
+- **Steps 11–12** (license, cleanup) add the GPL license section (required by the kernel for programs using GPL-only helpers) and remove dead IR to keep the output minimal.
 
 Each step takes a slice of IR text lines and returns a modified slice.
 
@@ -120,12 +124,13 @@ graph LR
     B --> C["extract programs"]
     C --> D["replace alloc"]
     D --> E["rewrite helpers"]
-    E --> F["assign sections"]
-    F --> G["strip map prefix"]
-    G --> H["rewrite map BTF"]
-    H --> I["sanitize BTF"]
-    I --> J["add license"]
-    J --> K["cleanup"]
+    E --> F["assign data sections"]
+    F --> G["assign program sections"]
+    G --> H["strip map prefix"]
+    H --> I["rewrite map BTF"]
+    I --> J["sanitize BTF"]
+    J --> K["add license"]
+    K --> L["cleanup"]
 ```
 
 | Step | Operation | Purpose |
@@ -135,9 +140,10 @@ graph LR
 | 3 | **Extract programs** | Keep only user program functions and their dependencies; discard TinyGo runtime (debug metadata preserved for BTF) |
 | 4 | **Replace alloc** | Convert `@runtime.alloc` calls to entry-block `alloca` + `llvm.memset` |
 | 5 | **Rewrite helpers** | Convert mangled `@main.bpfXxx(args, ptr undef)` calls to `inttoptr (i64 ID to ptr)(args)` |
-| 6 | **Assign sections** | Apply ELF section attributes to program functions and map globals; promote `internal` map globals to global linkage |
-| 7 | **Strip map prefix** | Rename Go package-qualified map globals (`@main.events` → `@events`) to match the C BPF naming convention |
-| 8 | **Rewrite map BTF** | Transform `bpfMapDef` globals and DWARF metadata to libbpf-compatible BTF encoding; supports 5-field standard and 6-field (with pinning) layouts, zeroinitializer maps, and multiple maps per module |
-| 9 | **Sanitize BTF names** | Replace `.` with `_` in Go-style type names; strip names from `DW_TAG_pointer_type` nodes |
-| 10 | **Add license** | Inject `license` section with `"GPL"` if not present |
-| 11 | **Cleanup** | Remove orphaned declares, unreferenced globals, stale attribute groups, and leftover comments |
+| 6 | **Assign data sections** | Place user-defined globals into `.data`, `.rodata`, or `.bss` based on mutability and initialization |
+| 7 | **Assign program sections** | Apply BPF program section attributes to functions and `.maps` to map globals; promote `internal` linkage to global |
+| 8 | **Strip map prefix** | Rename Go package-qualified map globals (`@main.events` → `@events`) to match the C BPF naming convention |
+| 9 | **Rewrite map BTF** | Transform `bpfMapDef` globals and DWARF metadata to libbpf-compatible BTF encoding; supports 5-field standard and 6-field (with pinning) layouts, zeroinitializer maps, and multiple maps per module |
+| 10 | **Sanitize BTF names** | Replace `.` with `_` in Go-style type names; strip names from `DW_TAG_pointer_type` nodes |
+| 11 | **Add license** | Inject `license` section with `"GPL"` if not present |
+| 12 | **Cleanup** | Remove orphaned declares, unreferenced globals, stale attribute groups, and leftover comments |
