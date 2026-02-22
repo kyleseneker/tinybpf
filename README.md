@@ -1,5 +1,10 @@
 <p align="center">
-  <strong>tinybpf</strong><br>
+  <img src="icon.png" alt="tinybpf" width="200">
+</p>
+
+<h1 align="center">tinybpf</h1>
+
+<p align="center">
   Write eBPF programs in Go. Compile with TinyGo. Run in the Linux kernel.
 </p>
 
@@ -13,11 +18,7 @@
 
 ## Overview
 
-[eBPF](https://ebpf.io/) allows sandboxed programs to run inside the Linux kernel without modifying kernel source or loading kernel modules. Today, eBPF programs must be written in C or [Rust](https://aya-rs.dev/) and compiled to BPF bytecode that passes the kernel verifier.
-
-The Go ecosystem provides mature userspace eBPF tooling ([`cilium/ebpf`](https://github.com/cilium/ebpf) for program loading and [`bpf2go`](https://pkg.go.dev/github.com/cilium/ebpf/cmd/bpf2go) for generating Go bindings) but the kernel-side program itself has always required C.
-
-`tinybpf` removes that requirement. Write the BPF program in Go, compile it with [TinyGo](https://tinygo.org/), and `tinybpf` produces a valid eBPF ELF object that the kernel accepts.
+[eBPF](https://ebpf.io/) lets sandboxed programs run inside the Linux kernel. Today those programs must be written in C or Rust. `tinybpf` lets you write them in Go instead.
 
 ```mermaid
 graph LR
@@ -27,28 +28,22 @@ graph LR
     D --> E["bpf.o"]
 ```
 
-The output is compatible with [`cilium/ebpf`](https://github.com/cilium/ebpf), [`libbpf`](https://github.com/libbpf/libbpf), and [`bpftool`](https://github.com/libbpf/bpftool).
+The output is a standard BPF ELF object compatible with [`cilium/ebpf`](https://github.com/cilium/ebpf), [`libbpf`](https://github.com/libbpf/libbpf), and [`bpftool`](https://github.com/libbpf/bpftool).
 
-## How it works
+### Why TinyGo?
 
-`tinybpf` sits between TinyGo's LLVM IR output and the final BPF ELF object. It performs a multi-step IR transformation that retargets the IR from the host architecture to BPF, strips the TinyGo runtime, rewrites helper calls to kernel-compatible form, and injects the metadata that loaders like `cilium/ebpf` and `libbpf` expect.
+Standard Go compiles to native machine code via its own backend — there is no LLVM IR to retarget to BPF, and its runtime (GC, goroutines, channels) cannot run in the kernel. TinyGo compiles through LLVM and supports bare-metal mode (`-gc=none -scheduler=none -panic=trap`) with no runtime, producing IR that `tinybpf` transforms into verifier-friendly BPF bytecode.
 
-See [Architecture](docs/ARCHITECTURE.md) for the full pipeline design.
+### How it works
+
+`tinybpf` sits between TinyGo's LLVM IR output and the final BPF ELF. It retargets the IR to BPF, strips the TinyGo runtime, rewrites helper calls to kernel form, and injects the metadata that loaders expect. See [Architecture](docs/ARCHITECTURE.md) for the full pipeline.
 
 ## Quick start
 
-### Installation
+### Install
 
 ```bash
 go install github.com/kyleseneker/tinybpf/cmd/tinybpf@latest
-```
-
-Or build from source:
-
-```bash
-git clone https://github.com/kyleseneker/tinybpf.git
-cd tinybpf
-make build
 ```
 
 ### Prerequisites
@@ -61,25 +56,16 @@ make build
 | `llvm-ar`, `llvm-objcopy` | 20+ | For `.a` / `.o` inputs |
 | `pahole` | | For BTF injection |
 
-Install everything with one command:
-
 ```bash
-make setup
+make setup    # install everything
+make doctor   # verify toolchain
 ```
-
-Run `make doctor` to verify your toolchain.
 
 ### Example
 
 A tracepoint probe that captures outbound TCP connections, written entirely in Go:
 
 ```go
-// tpConnectArgs mirrors the tracepoint context for syscalls/sys_enter_connect.
-type tpConnectArgs struct {
-    _         [24]byte
-    Uservaddr uint64
-}
-
 //go:extern bpf_get_current_pid_tgid
 func bpfGetCurrentPidTgid() uint64
 
@@ -104,7 +90,7 @@ func handle_connect(ctx unsafe.Pointer) int32 {
 }
 ```
 
-Compile and link in one step:
+One-step build:
 
 ```bash
 tinybpf build --output program.o \
@@ -112,7 +98,7 @@ tinybpf build --output program.o \
   ./bpf
 ```
 
-Or, if you prefer the two-step workflow:
+Two-step build:
 
 ```bash
 tinygo build -o program.ll -gc=none -scheduler=none -panic=trap -opt=1 ./bpf
@@ -121,11 +107,11 @@ tinybpf link --input program.ll --output program.o \
   --section handle_connect=tracepoint/syscalls/sys_enter_connect
 ```
 
-See the [`examples/`](examples/) directory for complete working projects:
+### Examples
 
-- [`network-sidecar/`](examples/network-sidecar/) — tracepoint probe with ring buffer and `cilium/ebpf` userspace loader
+- [`network-sidecar/`](examples/network-sidecar/) — tracepoint + ring buffer + `cilium/ebpf` loader
 - [`xdp-filter/`](examples/xdp-filter/) — XDP packet filter with hash map blocklist
-- [`kprobe-openat/`](examples/kprobe-openat/) — kprobe tracing `openat` syscalls with ring buffer events
+- [`kprobe-openat/`](examples/kprobe-openat/) — kprobe tracing `openat` with ring buffer
 
 ### Scaffold a new project
 
@@ -133,76 +119,75 @@ See the [`examples/`](examples/) directory for complete working projects:
 tinybpf init xdp_filter
 ```
 
-This generates `bpf/xdp_filter.go` with build tags and an empty entry point, `bpf/xdp_filter_stub.go` for IDE compatibility, and a `Makefile` with TinyGo and tinybpf build commands. Fill in the ELF section type and program logic to match your use case.
+Generates a BPF source file, stub file for IDE compatibility, and a Makefile.
 
 ## CLI reference
 
-Run `tinybpf --help` for a quick overview, or `tinybpf <command> --help` for details on a specific command.
+Run `tinybpf --help` or `tinybpf <command> --help`.
 
 ### Subcommands
 
 | Subcommand | Description |
 |------------|-------------|
-| `build [flags] <package>` | Compile Go source to BPF ELF in one step (runs TinyGo + link pipeline) |
+| `build [flags] <package>` | Compile Go source to BPF ELF in one step |
 | `link --input <file> [flags]` | Link TinyGo LLVM IR into a BPF ELF object |
-| `init <name>` | Scaffold a new BPF project in the current directory |
-| `doctor` | Check toolchain installation and version compatibility |
-| `version` | Print version information |
-| `help` | Show usage overview (also `--help`, `-h`) |
+| `init <name>` | Scaffold a new BPF project |
+| `doctor` | Check toolchain installation |
+| `version` | Print version |
 
-The bare-flag form `tinybpf --input <file> [flags]` still works as an alias for `link`.
+The bare-flag form `tinybpf --input <file> [flags]` is an alias for `link`.
 
 ### Shared flags (build and link)
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--output`, `-o` | `bpf.o` | Output ELF path. |
-| `--program` | *(auto-detect)* | Program function to keep. Repeatable. |
-| `--section` | | Program-to-section mapping (`name=section`). Repeatable. |
-| `--cpu` | `v3` | BPF CPU version for `llc -mcpu`. |
-| `--opt-profile` | `default` | `conservative`, `default`, `aggressive`, or `verifier-safe`. |
-| `--pass-pipeline` | | Explicit `opt` pass pipeline (overrides profile). |
-| `--btf` | `false` | Inject BTF via `pahole`. |
-| `--verbose`, `-v` | `false` | Print each pipeline stage. |
-| `--timeout` | `30s` | Per-stage timeout. |
-| `--dump-ir` | `false` | Write intermediate IR after each transform stage. |
-| `--keep-temp` | `false` | Preserve intermediate files for debugging. |
-| `--tmpdir` | | Directory for intermediate files. |
+| `--output`, `-o` | `bpf.o` | Output ELF path |
+| `--program` | *(auto-detect)* | Program function to keep (repeatable) |
+| `--section` | | Program-to-section mapping `name=section` (repeatable) |
+| `--cpu` | `v3` | BPF CPU version for `llc -mcpu` |
+| `--opt-profile` | `default` | `conservative`, `default`, `aggressive`, or `verifier-safe` |
+| `--pass-pipeline` | | Explicit `opt` pass pipeline (overrides profile) |
+| `--btf` | `false` | Inject BTF via `pahole` |
+| `--verbose`, `-v` | `false` | Print each pipeline stage |
+| `--timeout` | `30s` | Per-stage timeout |
+| `--dump-ir` | `false` | Write intermediate IR after each transform stage |
+| `--keep-temp` | `false` | Preserve intermediate files |
+| `--tmpdir` | | Directory for intermediate files |
 
 ### build-only flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--tinygo` | *(PATH)* | Path to tinygo binary. |
+| `--tinygo` | *(PATH)* | Path to tinygo binary |
 
 ### link-only flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--input` | *(required)* | Input file (`.ll`, `.bc`, `.o`, `.a`). Repeatable. |
-| `--config` | | Path to `linker-config.json` for custom passes. |
-| `--jobs`, `-j` | `1` | Parallel input normalization workers. |
+| `--input` | *(required)* | Input file `.ll`, `.bc`, `.o`, `.a` (repeatable) |
+| `--config` | | Path to `linker-config.json` for custom passes |
+| `--jobs`, `-j` | `1` | Parallel input normalization workers |
 
-### Tool path overrides (build and link)
+### Tool path overrides
 
 | Flag | Description |
 |------|-------------|
-| `--llvm-link` | Override path to `llvm-link`. |
-| `--opt` | Override path to `opt`. |
-| `--llc` | Override path to `llc`. |
-| `--llvm-ar` | Override path to `llvm-ar`. |
-| `--llvm-objcopy` | Override path to `llvm-objcopy`. |
-| `--pahole` | Override path to `pahole`. |
+| `--llvm-link` | Override `llvm-link` |
+| `--opt` | Override `opt` |
+| `--llc` | Override `llc` |
+| `--llvm-ar` | Override `llvm-ar` |
+| `--llvm-objcopy` | Override `llvm-objcopy` |
+| `--pahole` | Override `pahole` |
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Writing Go for eBPF](docs/TINYGO_COMPAT.md) | Language constraints, program structure, and supported BPF helpers |
+| [Writing Go for eBPF](docs/TINYGO_COMPAT.md) | Language constraints, BPF concepts, helpers, patterns, and FAQ |
 | [Architecture](docs/ARCHITECTURE.md) | Pipeline design and the 11-step IR transformation |
 | [Support Matrix](docs/SUPPORT_MATRIX.md) | Tested toolchain versions and platforms |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Setup issues, pipeline errors, and verifier debugging |
-| [Contributing](CONTRIBUTING.md) | Development setup, guidelines, and PR process |
+| [Contributing](CONTRIBUTING.md) | Development setup, testing, and PR process |
 
 ## Related projects
 

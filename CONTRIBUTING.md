@@ -21,16 +21,8 @@ make doctor
 
 ### Manual setup
 
-If you prefer to install dependencies yourself:
+See the [prerequisites table](README.md#prerequisites) in the README. You'll also need `golangci-lint` for `make lint`.
 
-| Dependency | Version | Required | Notes |
-|------------|---------|----------|-------|
-| Go | 1.24+ | Yes | |
-| TinyGo | 0.40+ | Yes | |
-| LLVM (`llvm-link`, `opt`, `llc`) | 20+ | Yes | Must be >= TinyGo's bundled LLVM |
-| `llvm-ar`, `llvm-objcopy` | 20+ | For `.a` / `.o` inputs | |
-| `pahole` | | For BTF injection | |
-| `golangci-lint` | | For `make lint` | |
 ## Running tests
 
 ```bash

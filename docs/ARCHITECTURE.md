@@ -2,7 +2,7 @@
 
 ## Pipeline overview
 
-`tinybpf` executes a fixed sequence of stages to transform TinyGo-emitted LLVM IR into a valid eBPF ELF object. Each stage either invokes a standard LLVM binary or performs in-process IR rewriting. Every stage fails fast with a structured diagnostic on error.
+`tinybpf` transforms TinyGo-emitted LLVM IR into a valid eBPF ELF object through a fixed sequence of stages. Each stage either invokes a standard LLVM binary or performs in-process IR rewriting, failing fast with a structured diagnostic on error.
 
 ```mermaid
 graph TD
@@ -104,7 +104,15 @@ Transform-stage errors include the IR line number and a source snippet surroundi
 
 ## IR transformation pipeline
 
-The transformation runs 11 steps in sequence. Each step takes a slice of IR text lines and returns a modified slice.
+TinyGo emits valid LLVM IR, but it targets the host architecture and carries Go runtime artifacts that the BPF verifier would reject. The 11-step transformation bridges this gap:
+
+- **Steps 1–2** (retarget, strip attrs) make the IR architecture-neutral so `llc -march=bpf` can codegen it. Host-specific data layouts, triples, and CPU feature attributes would cause LLVM errors or wrong-architecture code.
+- **Steps 3–4** (extract programs, replace alloc) strip the TinyGo runtime and eliminate heap allocation. The BPF VM has no heap and no scheduler — any runtime code left in the module would fail verification.
+- **Step 5** (rewrite helpers) translates Go-style BPF helper declarations into the integer-ID calling convention the kernel expects. Without this, the verifier sees unknown function calls and rejects the program.
+- **Steps 6–9** (sections, map prefix, map BTF, sanitize BTF) inject the ELF metadata that BPF loaders (`cilium/ebpf`, `libbpf`) require: section names for program type dispatch, BTF-compatible map encoding, and C-style symbol names.
+- **Steps 10–11** (license, cleanup) add the GPL license section (required by the kernel for programs using GPL-only helpers) and remove dead IR to keep the output minimal.
+
+Each step takes a slice of IR text lines and returns a modified slice.
 
 ```mermaid
 graph LR
