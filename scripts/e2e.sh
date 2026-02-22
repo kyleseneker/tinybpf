@@ -38,7 +38,7 @@ export GOCACHE="${GOCACHE:-/tmp/go-validate-cache}"
 export HOME="${HOME:-/root}"
 mkdir -p "${GOPATH}" "${GOCACHE}"
 LOG_DIR="${BUILD_DIR}/logs"
-PIN_PATH="/sys/fs/bpf/go_bpf_linker_validate"
+PIN_PATH="/sys/fs/bpf/tinybpf_validate"
 PASSED=0
 FAILED=0
 SKIPPED=0
@@ -74,10 +74,10 @@ fi
 
 # --- Step 2: TinyGo compile ---
 echo ""
-echo "[2/7] Compiling probe with TinyGo..."
-IR_FILE="${BUILD_DIR}/probe.ll"
+echo "[2/7] Compiling tracepoint-connect with TinyGo..."
+IR_FILE="${BUILD_DIR}/connect.ll"
 (
-  cd "${REPO_ROOT}/examples/network-sidecar" && \
+  cd "${REPO_ROOT}/examples/tracepoint-connect" && \
   tinygo build \
     -gc=none \
     -scheduler=none \
@@ -96,8 +96,8 @@ fi
 # --- Step 3: tinybpf full pipeline ---
 echo ""
 echo "[3/7] Running tinybpf pipeline..."
-OBJ="${BUILD_DIR}/probe.bpf.o"
-"${BIN}" \
+OBJ="${BUILD_DIR}/connect.bpf.o"
+"${BIN}" link \
   --input "${IR_FILE}" \
   --output "${OBJ}" \
   --section handle_connect=tracepoint/syscalls/sys_enter_connect \
@@ -185,7 +185,7 @@ else
   rm -f "${PIN_PATH}_verbose" 2>/dev/null || true
 fi
 
-# --- Step 6: Attach kprobe and capture events ---
+# --- Step 6: Attach tracepoint and capture events ---
 echo ""
 if [[ "${SKIP_ATTACH}" == "true" ]]; then
   echo "[6/7] Skipping tracepoint attach (--skip-attach)"
@@ -196,14 +196,14 @@ elif [[ $LOAD_RC -ne 0 ]] 2>/dev/null; then
   skip "tracepoint attach (load failed)"
   skip "event capture (load failed)"
 else
-  echo "[6/7] Running sidecar with tracepoint attach..."
-  SIDECAR_LOG="${LOG_DIR}/sidecar.log"
+  echo "[6/7] Running tracer with tracepoint attach..."
+  TRACER_LOG="${LOG_DIR}/tracer.log"
 
   (
-    cd "${REPO_ROOT}/examples/network-sidecar" && \
-    timeout 15 go run ./cmd/sidecar --object "${OBJ}"
-  ) > "${SIDECAR_LOG}" 2>&1 &
-  SIDECAR_PID=$!
+    cd "${REPO_ROOT}/examples/tracepoint-connect" && \
+    timeout 15 go run ./cmd/tracer --object "${OBJ}"
+  ) > "${TRACER_LOG}" 2>&1 &
+  TRACER_PID=$!
 
   sleep 3
 
@@ -212,20 +212,20 @@ else
   curl -4 -m 5 -sS http://one.one.one.one > /dev/null 2>&1 || true
 
   sleep 3
-  kill "${SIDECAR_PID}" 2>/dev/null || true
-  wait "${SIDECAR_PID}" 2>/dev/null || true
+  kill "${TRACER_PID}" 2>/dev/null || true
+  wait "${TRACER_PID}" 2>/dev/null || true
 
-  echo "  sidecar log:"
-  head -20 "${SIDECAR_LOG}" | while read -r line; do echo "    ${line}"; done
+  echo "  tracer log:"
+  head -20 "${TRACER_LOG}" | while read -r line; do echo "    ${line}"; done
 
-  if grep -q "dst=" "${SIDECAR_LOG}"; then
+  if grep -q "dst=" "${TRACER_LOG}"; then
     pass "connection events captured from ring buffer"
-    EVENT_COUNT=$(grep -c "dst=" "${SIDECAR_LOG}" || echo 0)
+    EVENT_COUNT=$(grep -c "dst=" "${TRACER_LOG}" || echo 0)
     echo "  events: ${EVENT_COUNT}"
   else
     fail "no connection events observed"
     echo "  full log:"
-    cat "${SIDECAR_LOG}" | while read -r line; do echo "    ${line}"; done
+    cat "${TRACER_LOG}" | while read -r line; do echo "    ${line}"; done
   fi
 fi
 

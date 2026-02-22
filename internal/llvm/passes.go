@@ -30,7 +30,7 @@ const VerifierSafePipeline = "function(" +
 
 // profiles maps named optimization profiles to LLVM pass pipeline strings.
 //
-// Profiled against network-sidecar kprobe IR:
+// Profiled against tracepoint-connect probe IR:
 //
 //	conservative=37 insns, default=36, aggressive=36, verifier-safe=36
 var profiles = map[string]string{

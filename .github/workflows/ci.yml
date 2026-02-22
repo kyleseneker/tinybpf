@@ -126,7 +126,7 @@ jobs:
       - name: Generate fresh IR fixture
         if: matrix.primary
         run: |
-          cd examples/network-sidecar
+          cd examples/tracepoint-connect
           tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o ../../testdata/tinygo_probe.ll ./bpf
 
       - name: Print versions

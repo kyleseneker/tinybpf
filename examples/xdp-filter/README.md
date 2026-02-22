@@ -54,9 +54,7 @@ Produces `build/filter.bpf.o`. The build is configurable via environment variabl
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TINYGO_BIN` | `tinygo` | Path to TinyGo binary |
 | `TINYBPF_BIN` | *(built from source)* | Path to `tinybpf` binary |
-| `TINYGO_OUTPUT_FORMAT` | `ll` | TinyGo output format (`ll` for text IR) |
 | `BPF_CPU` | `v3` | BPF CPU version for `llc -mcpu` |
 
 ## Run

@@ -1,3 +1,5 @@
+// Compiled by TinyGo; see filter_stub.go for the standard-Go IDE placeholder.
+
 //go:build tinygo
 
 package main
