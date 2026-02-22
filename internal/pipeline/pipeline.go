@@ -39,6 +39,7 @@ type Config struct {
 	ConfigPath   string
 	CustomPasses []string
 	DumpIR       bool
+	ProgramType  string
 }
 
 // Artifacts records the paths of intermediate and final build products.
@@ -198,6 +199,11 @@ func validateConfig(cfg *Config) error {
 		if err := ensureInputSupported(input); err != nil {
 			return err
 		}
+	}
+
+	if err := ValidateProgramType(cfg.ProgramType, cfg.Sections); err != nil {
+		return &diag.Error{Stage: diag.StageInput, Err: err,
+			Hint: "check --program-type and --section flags are consistent"}
 	}
 
 	if cfg.CPU == "" {
