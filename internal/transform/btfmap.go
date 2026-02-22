@@ -39,22 +39,42 @@ var reMapGlobal = regexp.MustCompile(
 var reMapGlobalZero = regexp.MustCompile(
 	`^@([\w.]+)\s*=\s*(global|internal global)\s+%[\w.]*bpfMapDef\s+zeroinitializer`)
 
+type mapDef struct {
+	lineIdx int
+	name    string
+	values  []int
+}
+
 // rewriteMapForBTF rewrites bpfMapDef map globals and their debug metadata to use the libbpf-compatible BTF encoding.
 // Supports both 5-field (standard) and 6-field (with pinning) bpfMapDef layouts.
 func rewriteMapForBTF(lines []string) []string {
-	type mapDef struct {
-		lineIdx int
-		name    string
-		values  []int
-	}
-	var maps []mapDef
-
 	fieldCount := detectMapFieldCount(lines)
+	maps := collectMapDefs(lines, fieldCount)
+	if len(maps) == 0 {
+		return lines
+	}
 
+	mapFields := mapFields5
+	if fieldCount == 6 {
+		mapFields = mapFields6
+	}
+
+	maxMeta := findMaxMetadataID(lines)
+	for _, md := range maps {
+		var nextID int
+		lines, nextID = processMapDef(lines, md, mapFields, fieldCount, maxMeta)
+		maxMeta = nextID
+	}
+
+	return lines
+}
+
+// collectMapDefs scans lines for bpfMapDef globals (both initialized and zeroinitializer forms).
+func collectMapDefs(lines []string, fieldCount int) []mapDef {
+	var maps []mapDef
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		m := reMapGlobal.FindStringSubmatch(trimmed)
-		if m != nil {
+		if m := reMapGlobal.FindStringSubmatch(trimmed); m != nil {
 			vals := parseI32Initializer(m[3])
 			if len(vals) != fieldCount {
 				continue
@@ -62,136 +82,149 @@ func rewriteMapForBTF(lines []string) []string {
 			maps = append(maps, mapDef{lineIdx: i, name: m[1], values: vals})
 			continue
 		}
-		mz := reMapGlobalZero.FindStringSubmatch(trimmed)
-		if mz != nil {
+		if mz := reMapGlobalZero.FindStringSubmatch(trimmed); mz != nil {
 			maps = append(maps, mapDef{lineIdx: i, name: mz[1], values: make([]int, fieldCount)})
 		}
 	}
-	if len(maps) == 0 {
-		return lines
+	return maps
+}
+
+// processMapDef rewrites a single map definition's global declaration,
+// type definition, and debug metadata for BTF compatibility. Returns
+// the updated lines and the next available metadata ID.
+func processMapDef(lines []string, md mapDef, mapFields []mapFieldInfo, fieldCount, maxMeta int) ([]string, int) {
+	nextID := maxMeta + 1
+
+	intTypeID := nextID
+	nextID++
+	newMeta := []string{
+		fmt.Sprintf("!%d = !DIBasicType(name: \"int\", size: 32, encoding: DW_ATE_signed)", intTypeID),
 	}
 
-	maxMeta := findMaxMetadataID(lines)
-
-	for _, md := range maps {
-		nextID := maxMeta + 1
-
-		intTypeID := nextID
+	fieldPtrIDs := make([]int, fieldCount)
+	for fi := range mapFields {
+		subrangeID := nextID
 		nextID++
-		var newMeta []string
+		arrayID := nextID
+		nextID++
+		ptrID := nextID
+		nextID++
+		fieldPtrIDs[fi] = ptrID
+
+		val := md.values[fi]
 		newMeta = append(newMeta,
-			fmt.Sprintf("!%d = !DIBasicType(name: \"int\", size: 32, encoding: DW_ATE_signed)", intTypeID))
+			fmt.Sprintf("!%d = !DISubrange(count: %d)", subrangeID, val),
+			fmt.Sprintf("!%d = !DICompositeType(tag: DW_TAG_array_type, baseType: !%d, elements: !{!%d})",
+				arrayID, intTypeID, subrangeID),
+			fmt.Sprintf("!%d = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !%d, size: 64)",
+				ptrID, arrayID),
+		)
+	}
 
-		mapFields := mapFields5
-		if fieldCount == 6 {
-			mapFields = mapFields6
+	rewriteMemberNodes(lines, mapFields, fieldPtrIDs)
+	rewriteStructSize(lines, fieldCount)
+	rewriteMapGlobal(lines, md, fieldCount)
+	rewriteMapTypeDef(lines, fieldCount)
+
+	lines = appendMetadata(lines, newMeta)
+	return lines, nextID
+}
+
+// rewriteMemberNodes updates DIDerivedType member nodes to use libbpf
+// field names, pointer-sized base types, and 64-bit offsets.
+func rewriteMemberNodes(lines []string, mapFields []mapFieldInfo, fieldPtrIDs []int) {
+	for i, line := range lines {
+		if !strings.Contains(line, "DIDerivedType") || !strings.Contains(line, "DW_TAG_member") {
+			continue
 		}
-
-		fieldPtrIDs := make([]int, fieldCount)
-		for fi := range mapFields {
-			subrangeID := nextID
-			nextID++
-			arrayID := nextID
-			nextID++
-			ptrID := nextID
-			nextID++
-			fieldPtrIDs[fi] = ptrID
-
-			val := md.values[fi]
-			newMeta = append(newMeta,
-				fmt.Sprintf("!%d = !DISubrange(count: %d)", subrangeID, val),
-				fmt.Sprintf("!%d = !DICompositeType(tag: DW_TAG_array_type, baseType: !%d, elements: !{!%d})",
-					arrayID, intTypeID, subrangeID),
-				fmt.Sprintf("!%d = !DIDerivedType(tag: DW_TAG_pointer_type, baseType: !%d, size: 64)",
-					ptrID, arrayID),
-			)
-		}
-
-		// Rewrite DIDerivedType member nodes to libbpf field names and pointer sizes
-		for i, line := range lines {
-			if !strings.Contains(line, "DIDerivedType") || !strings.Contains(line, "DW_TAG_member") {
+		for fi, mf := range mapFields {
+			goKey := fmt.Sprintf(`name: "%s"`, mf.goName)
+			if !strings.Contains(line, goKey) {
 				continue
 			}
-			for fi, mf := range mapFields {
-				goKey := fmt.Sprintf(`name: "%s"`, mf.goName)
-				if !strings.Contains(line, goKey) {
-					continue
-				}
-				newLine := strings.Replace(line, goKey, fmt.Sprintf(`name: "%s"`, mf.cName), 1)
-				newLine = reBaseType.ReplaceAllString(newLine,
-					fmt.Sprintf("baseType: !%d", fieldPtrIDs[fi]))
-				newLine = reMemberSize.ReplaceAllString(newLine, "size: 64")
-				newLine = reMemberOffset.ReplaceAllString(newLine,
-					fmt.Sprintf("offset: %d", fi*64))
-				lines[i] = newLine
+			newLine := strings.Replace(line, goKey, fmt.Sprintf(`name: "%s"`, mf.cName), 1)
+			newLine = reBaseType.ReplaceAllString(newLine,
+				fmt.Sprintf("baseType: !%d", fieldPtrIDs[fi]))
+			newLine = reMemberSize.ReplaceAllString(newLine, "size: 64")
+			newLine = reMemberOffset.ReplaceAllString(newLine,
+				fmt.Sprintf("offset: %d", fi*64))
+			lines[i] = newLine
+			break
+		}
+	}
+}
+
+// rewriteStructSize updates the DICompositeType struct size from the
+// original i32-based layout to the pointer-based layout.
+func rewriteStructSize(lines []string, fieldCount int) {
+	origStructSize := fmt.Sprintf("%d", fieldCount*32)
+	newStructSize := fmt.Sprintf("%d", fieldCount*64)
+	reOldStructSize := regexp.MustCompile(`size:\s*` + origStructSize)
+
+	typedefTarget := ""
+	for _, line := range lines {
+		if strings.Contains(line, "DW_TAG_typedef") && strings.Contains(line, "bpfMapDef") {
+			if m := reBaseType.FindString(line); m != "" {
+				typedefTarget = strings.TrimPrefix(m, "baseType: ")
 				break
 			}
 		}
-
-		origStructSize := fmt.Sprintf("%d", fieldCount*32)
-		newStructSize := fmt.Sprintf("%d", fieldCount*64)
-		reOldStructSize := regexp.MustCompile(`size:\s*` + origStructSize)
-
-		typedefTarget := ""
-		for _, line := range lines {
-			if strings.Contains(line, "DW_TAG_typedef") && strings.Contains(line, "bpfMapDef") {
-				if m := reBaseType.FindString(line); m != "" {
-					typedefTarget = strings.TrimPrefix(m, "baseType: ")
-					break
-				}
-			}
+	}
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		isTarget := typedefTarget != "" && strings.HasPrefix(trimmed, typedefTarget+" ")
+		if isTarget || (strings.Contains(line, "DICompositeType") &&
+			strings.Contains(line, "DW_TAG_structure_type") &&
+			strings.Contains(line, "bpfMapDef")) {
+			lines[i] = reOldStructSize.ReplaceAllString(line, "size: "+newStructSize)
 		}
-		for i, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			isTarget := false
-			if typedefTarget != "" && strings.HasPrefix(trimmed, typedefTarget+" ") {
-				isTarget = true
-			}
-			if isTarget || (strings.Contains(line, "DICompositeType") &&
-				strings.Contains(line, "DW_TAG_structure_type") &&
-				strings.Contains(line, "bpfMapDef")) {
-				lines[i] = reOldStructSize.ReplaceAllString(line, "size: "+newStructSize)
-			}
-		}
+	}
+}
 
-		ptrFields := strings.TrimSuffix(strings.Repeat("ptr, ", fieldCount), ", ")
-		origI32Fields := strings.TrimSuffix(strings.Repeat("i32, ", fieldCount), ", ")
+// rewriteMapGlobal replaces the original map global declaration with a
+// pointer-field zeroinitializer form.
+func rewriteMapGlobal(lines []string, md mapDef, fieldCount int) {
+	ptrFields := strings.TrimSuffix(strings.Repeat("ptr, ", fieldCount), ", ")
+	replacement := fmt.Sprintf("@%s = global { %s } zeroinitializer", md.name, ptrFields)
 
-		origLine := lines[md.lineIdx]
-		trimmedOrig := strings.TrimSpace(origLine)
-		replacement := fmt.Sprintf("@%s = global { %s } zeroinitializer", md.name, ptrFields)
-		newGlobal := reMapGlobal.ReplaceAllStringFunc(trimmedOrig, func(string) string {
+	origLine := lines[md.lineIdx]
+	trimmedOrig := strings.TrimSpace(origLine)
+	newGlobal := reMapGlobal.ReplaceAllStringFunc(trimmedOrig, func(string) string {
+		return replacement
+	})
+	if newGlobal == trimmedOrig {
+		newGlobal = reMapGlobalZero.ReplaceAllStringFunc(trimmedOrig, func(string) string {
 			return replacement
 		})
-		if newGlobal == trimmedOrig {
-			newGlobal = reMapGlobalZero.ReplaceAllStringFunc(trimmedOrig, func(string) string {
-				return replacement
-			})
-		}
-		newGlobal = strings.Replace(newGlobal, "align 4", "align 8", 1)
-		lines[md.lineIdx] = newGlobal
-
-		for i, line := range lines {
-			if strings.Contains(line, "bpfMapDef") && strings.Contains(line, "= type {") {
-				lines[i] = strings.Replace(line, "{ "+origI32Fields+" }", "{ "+ptrFields+" }", 1)
-			}
-		}
-
-		insertIdx := len(lines)
-		for insertIdx > 0 && strings.TrimSpace(lines[insertIdx-1]) == "" {
-			insertIdx--
-		}
-		result := make([]string, 0, len(lines)+len(newMeta)+1)
-		result = append(result, lines[:insertIdx]...)
-		result = append(result, "")
-		result = append(result, newMeta...)
-		result = append(result, lines[insertIdx:]...)
-		lines = result
-
-		maxMeta = nextID
 	}
+	newGlobal = strings.Replace(newGlobal, "align 4", "align 8", 1)
+	lines[md.lineIdx] = newGlobal
+}
 
-	return lines
+// rewriteMapTypeDef replaces the bpfMapDef type definition fields from
+// i32 to ptr.
+func rewriteMapTypeDef(lines []string, fieldCount int) {
+	ptrFields := strings.TrimSuffix(strings.Repeat("ptr, ", fieldCount), ", ")
+	origI32Fields := strings.TrimSuffix(strings.Repeat("i32, ", fieldCount), ", ")
+	for i, line := range lines {
+		if strings.Contains(line, "bpfMapDef") && strings.Contains(line, "= type {") {
+			lines[i] = strings.Replace(line, "{ "+origI32Fields+" }", "{ "+ptrFields+" }", 1)
+		}
+	}
+}
+
+// appendMetadata inserts new metadata lines before any trailing blanks.
+func appendMetadata(lines []string, newMeta []string) []string {
+	insertIdx := len(lines)
+	for insertIdx > 0 && strings.TrimSpace(lines[insertIdx-1]) == "" {
+		insertIdx--
+	}
+	result := make([]string, 0, len(lines)+len(newMeta)+1)
+	result = append(result, lines[:insertIdx]...)
+	result = append(result, "")
+	result = append(result, newMeta...)
+	result = append(result, lines[insertIdx:]...)
+	return result
 }
 
 var (

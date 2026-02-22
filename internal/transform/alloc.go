@@ -11,22 +11,24 @@ var reAllocCall = regexp.MustCompile(
 	`(\s*)(%\w+)\s*=\s*call\s+.*@runtime\.alloc\(i64\s+(\d+)`,
 )
 
-// replaceAlloc converts runtime.alloc heap calls into entry-block stack allocas paired with memset zero-fills at the original call site.
-func replaceAlloc(lines []string) ([]string, error) {
-	type allocInfo struct {
-		lineIdx int
-		varName string
-		size    int
-		indent  string
-	}
-	type funcInfo struct {
-		startIdx int
-		entryIdx int
-		allocs   []allocInfo
-	}
+type allocInfo struct {
+	lineIdx int
+	varName string
+	size    int
+	indent  string
+}
 
-	var funcs []funcInfo
-	var cur *funcInfo
+type allocFuncInfo struct {
+	startIdx int
+	entryIdx int
+	allocs   []allocInfo
+}
+
+// scanAllocSites scans lines for define blocks containing runtime.alloc
+// calls and returns per-function allocation metadata.
+func scanAllocSites(lines []string) ([]allocFuncInfo, error) {
+	var funcs []allocFuncInfo
+	var cur *allocFuncInfo
 	inDef := false
 	depth := 0
 
@@ -36,7 +38,7 @@ func replaceAlloc(lines []string) ([]string, error) {
 			if isDefineLine(trimmed) {
 				inDef = true
 				depth = strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
-				funcs = append(funcs, funcInfo{startIdx: i, entryIdx: -1})
+				funcs = append(funcs, allocFuncInfo{startIdx: i, entryIdx: -1})
 				cur = &funcs[len(funcs)-1]
 				if depth <= 0 {
 					inDef = false
@@ -66,8 +68,16 @@ func replaceAlloc(lines []string) ([]string, error) {
 			cur = nil
 		}
 	}
+	return funcs, nil
+}
 
-	// Process in reverse so alloca insertions don't shift earlier indices
+// replaceAlloc converts runtime.alloc heap calls into entry-block stack allocas paired with memset zero-fills at the original call site.
+func replaceAlloc(lines []string) ([]string, error) {
+	funcs, err := scanAllocSites(lines)
+	if err != nil {
+		return nil, err
+	}
+
 	needMemset := false
 	for fi := len(funcs) - 1; fi >= 0; fi-- {
 		f := funcs[fi]
@@ -100,24 +110,30 @@ func replaceAlloc(lines []string) ([]string, error) {
 	}
 
 	if needMemset && !containsMemsetDecl(lines) {
-		insertIdx := len(lines)
-		for i, line := range lines {
-			if strings.HasPrefix(strings.TrimSpace(line), "define ") {
-				insertIdx = i
-				break
-			}
-		}
-		decl := "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)"
-		newLines := make([]string, 0, len(lines)+2)
-		newLines = append(newLines, lines[:insertIdx]...)
-		newLines = append(newLines, decl, "")
-		newLines = append(newLines, lines[insertIdx:]...)
-		lines = newLines
+		lines = insertMemsetDecl(lines)
 	}
 
 	return lines, nil
 }
 
+// insertMemsetDecl inserts a memset declaration before the first define block.
+func insertMemsetDecl(lines []string) []string {
+	insertIdx := len(lines)
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "define ") {
+			insertIdx = i
+			break
+		}
+	}
+	decl := "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)"
+	newLines := make([]string, 0, len(lines)+2)
+	newLines = append(newLines, lines[:insertIdx]...)
+	newLines = append(newLines, decl, "")
+	newLines = append(newLines, lines[insertIdx:]...)
+	return newLines
+}
+
+// containsMemsetDecl checks if the IR contains a memset declaration.
 func containsMemsetDecl(lines []string) bool {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)

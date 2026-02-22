@@ -19,13 +19,15 @@ func isRuntimeFunc(name string) bool {
 	return false
 }
 
-// extractPrograms removes non-program define blocks and runtime globals.
-func extractPrograms(lines []string, programNames []string, verbose bool, w io.Writer) ([]string, error) {
-	type defineBlock struct {
-		name      string
-		startLine int
-		endLine   int
-	}
+type defineBlock struct {
+	name      string
+	startLine int
+	endLine   int
+}
+
+// parseDefineBlocks scans lines for top-level define blocks and returns
+// their name and line ranges.
+func parseDefineBlocks(lines []string) []defineBlock {
 	var blocks []defineBlock
 	inDef := false
 	depth := 0
@@ -53,7 +55,12 @@ func extractPrograms(lines []string, programNames []string, verbose bool, w io.W
 			inDef = false
 		}
 	}
+	return blocks
+}
 
+// buildProgramSet determines which define blocks to keep based on an
+// explicit program list or auto-detection (filtering out runtime functions).
+func buildProgramSet(blocks []defineBlock, programNames []string, verbose bool, w io.Writer) (map[string]bool, error) {
 	programSet := make(map[string]bool)
 	if len(programNames) > 0 {
 		defined := make(map[string]bool, len(blocks))
@@ -95,9 +102,19 @@ func extractPrograms(lines []string, programNames []string, verbose bool, w io.W
 			fmt.Fprintf(w, "[transform] keeping program: %s\n", name)
 		}
 	}
+	return programSet, nil
+}
+
+// extractPrograms removes non-program define blocks and runtime globals.
+func extractPrograms(lines []string, programNames []string, verbose bool, w io.Writer) ([]string, error) {
+	blocks := parseDefineBlocks(lines)
+
+	programSet, err := buildProgramSet(blocks, programNames, verbose, w)
+	if err != nil {
+		return nil, err
+	}
 
 	remove := make([]bool, len(lines))
-
 	for _, b := range blocks {
 		if !programSet[b.name] {
 			for j := b.startLine; j <= b.endLine; j++ {

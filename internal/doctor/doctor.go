@@ -57,18 +57,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		fmt.Fprintf(cfg.Stdout, "  %-14s %s\n", label, t.Path)
 
-		res, runErr := llvm.Run(ctx, cfg.Timeout, t.Path, "--version")
-		if runErr != nil {
-			fmt.Fprintf(cfg.Stderr, "  [FAIL] %s --version: %v\n", t.Name, runErr)
-			continue
-		}
-		line := firstNonEmptyLine(res.Stdout)
-		if line == "" {
-			line = firstNonEmptyLine(res.Stderr)
-		}
-		if line == "" {
-			line = "(no version output)"
-		}
+		line := getToolVersion(ctx, cfg, t.Path, t.Name, "--version")
 		fmt.Fprintf(cfg.Stdout, "  [OK]   %s: %s\n", t.Name, line)
 
 		if major, ok := parseLLVMMajor(line); ok && llvmMajor == 0 {
@@ -76,26 +65,9 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 
-	tinygoPath, _ := lookPath("tinygo")
-	if tinygoPath == "" {
-		fmt.Fprintf(cfg.Stdout, "  %-14s (not found)\n", "tinygo:")
-		warnings = append(warnings,
-			"TinyGo is not installed; install from https://tinygo.org/getting-started/install/")
-	} else {
-		fmt.Fprintf(cfg.Stdout, "  %-14s %s\n", "tinygo:", tinygoPath)
-		res, runErr := llvm.Run(ctx, cfg.Timeout, tinygoPath, "version")
-		if runErr != nil {
-			fmt.Fprintf(cfg.Stderr, "  [FAIL] tinygo version: %v\n", runErr)
-		} else {
-			line := firstNonEmptyLine(res.Stdout)
-			if line == "" {
-				line = firstNonEmptyLine(res.Stderr)
-			}
-			if line == "" {
-				line = "(no version output)"
-			}
-			fmt.Fprintf(cfg.Stdout, "  [OK]   tinygo: %s\n", line)
-		}
+	if w := checkExternalTool(ctx, cfg, "tinygo", "version",
+		"TinyGo is not installed; install from https://tinygo.org/getting-started/install/"); w != "" {
+		warnings = append(warnings, w)
 	}
 
 	if llvmMajor > 0 && llvmMajor < minLLVMMajor {
@@ -105,44 +77,63 @@ func Run(ctx context.Context, cfg Config) error {
 				llvmMajor, minLLVMMajor))
 	}
 
-	paholePath, _ := lookPath("pahole")
-	if paholePath == "" {
-		fmt.Fprintf(cfg.Stdout, "  %-14s (not found)\n", "pahole:")
-		warnings = append(warnings,
-			"pahole is not installed; needed for --btf flag. Install dwarves package.")
-	} else {
-		fmt.Fprintf(cfg.Stdout, "  %-14s %s\n", "pahole:", paholePath)
-		res, runErr := llvm.Run(ctx, cfg.Timeout, paholePath, "--version")
-		if runErr != nil {
-			fmt.Fprintf(cfg.Stderr, "  [FAIL] pahole --version: %v\n", runErr)
-		} else {
-			line := firstNonEmptyLine(res.Stdout)
-			if line == "" {
-				line = firstNonEmptyLine(res.Stderr)
-			}
-			if line == "" {
-				line = "(no version output)"
-			}
-			fmt.Fprintf(cfg.Stdout, "  [OK]   pahole: %s\n", line)
-		}
+	if w := checkExternalTool(ctx, cfg, "pahole", "--version",
+		"pahole is not installed; needed for --btf flag. Install dwarves package."); w != "" {
+		warnings = append(warnings, w)
 	}
 
-	if len(warnings) > 0 {
-		fmt.Fprintln(cfg.Stdout, "")
-		fmt.Fprintln(cfg.Stdout, "warnings:")
-		for _, w := range warnings {
-			fmt.Fprintf(cfg.Stdout, "  - %s\n", w)
-		}
-	}
-
-	fmt.Fprintln(cfg.Stdout, "")
-	if len(warnings) == 0 {
-		fmt.Fprintln(cfg.Stdout, "all checks passed")
-	} else {
-		fmt.Fprintf(cfg.Stdout, "%d warning(s); see above\n", len(warnings))
-	}
-
+	printSummary(cfg.Stdout, warnings)
 	return nil
+}
+
+// checkExternalTool looks up a binary on PATH, prints its path and version,
+// and returns a warning string if the binary is not found (empty otherwise).
+func checkExternalTool(ctx context.Context, cfg Config, name, versionFlag, notFoundMsg string) string {
+	label := name + ":"
+	path, _ := lookPath(name)
+	if path == "" {
+		fmt.Fprintf(cfg.Stdout, "  %-14s (not found)\n", label)
+		return notFoundMsg
+	}
+	fmt.Fprintf(cfg.Stdout, "  %-14s %s\n", label, path)
+	line := getToolVersion(ctx, cfg, path, name, versionFlag)
+	fmt.Fprintf(cfg.Stdout, "  [OK]   %s: %s\n", name, line)
+	return ""
+}
+
+// getToolVersion runs a binary with the given version flag and returns
+// the first non-empty line of output.
+func getToolVersion(ctx context.Context, cfg Config, path, name, flag string) string {
+	res, runErr := llvm.Run(ctx, cfg.Timeout, path, flag)
+	if runErr != nil {
+		fmt.Fprintf(cfg.Stderr, "  [FAIL] %s --version: %v\n", name, runErr)
+		return "(version check failed)"
+	}
+	line := firstNonEmptyLine(res.Stdout)
+	if line == "" {
+		line = firstNonEmptyLine(res.Stderr)
+	}
+	if line == "" {
+		line = "(no version output)"
+	}
+	return line
+}
+
+// printSummary outputs the warnings list and final status.
+func printSummary(w io.Writer, warnings []string) {
+	if len(warnings) > 0 {
+		fmt.Fprintln(w, "")
+		fmt.Fprintln(w, "warnings:")
+		for _, msg := range warnings {
+			fmt.Fprintf(w, "  - %s\n", msg)
+		}
+	}
+	fmt.Fprintln(w, "")
+	if len(warnings) == 0 {
+		fmt.Fprintln(w, "all checks passed")
+	} else {
+		fmt.Fprintf(w, "%d warning(s); see above\n", len(warnings))
+	}
 }
 
 // parseLLVMMajor extracts the LLVM major version from a version string

@@ -90,18 +90,11 @@ func Run(ctx context.Context, cfg Config) (*Artifacts, error) {
 		return nil, err
 	}
 
-	dumpDir := ""
-	if cfg.DumpIR {
-		dumpDir = filepath.Join(workDir, "dump-ir")
-		if err := os.MkdirAll(dumpDir, 0o700); err != nil {
-			return nil, &diag.Error{Stage: diag.StageTransform, Err: err,
-				Hint: "failed to create dump-ir directory"}
-		}
-		artifacts.DumpIRDir = dumpDir
-		if cfg.Verbose {
-			fmt.Fprintf(cfg.Stdout, "[dump-ir] writing stage snapshots to %s\n", dumpDir)
-		}
+	dumpDir, err := setupDumpIR(cfg, workDir)
+	if err != nil {
+		return nil, err
 	}
+	artifacts.DumpIRDir = dumpDir
 
 	transformOpts := transform.Options{
 		Programs: cfg.Programs,
@@ -120,37 +113,12 @@ func Run(ctx context.Context, cfg Config) (*Artifacts, error) {
 			Hint: "failed to sanitize paths in intermediate IR"}
 	}
 
-	optArgs := llvm.BuildOptArgs(artifacts.TransformedLL, artifacts.OptimizedLL, cfg.PassPipeline, cfg.OptProfile)
-	if len(cfg.CustomPasses) > 0 {
-		validated, vErr := llvm.AppendCustomPasses(optArgs, cfg.CustomPasses)
-		if vErr != nil {
-			return nil, &diag.Error{Stage: diag.StageOpt, Err: vErr,
-				Hint: "custom pass validation failed; check linker-config.json"}
-		}
-		optArgs = validated
-	}
-	if err := runStage(ctx, cfg, diag.StageOpt, tools.Opt, optArgs,
-		"try a less aggressive --pass-pipeline or inspect linked IR"); err != nil {
+	if err := runOptStage(ctx, cfg, tools, artifacts); err != nil {
 		return nil, err
 	}
 
-	llcArgs := buildLLCArgs(cfg.CPU, artifacts.OptimizedLL, artifacts.CodegenObj)
-	if err := runStage(ctx, cfg, diag.StageCodegen, tools.LLC, llcArgs,
-		"ensure llc supports BPF target and input IR is valid"); err != nil {
+	if err := runCodegenAndFinalize(ctx, cfg, tools, artifacts); err != nil {
 		return nil, err
-	}
-	if err := os.MkdirAll(filepath.Dir(cfg.Output), 0o755); err != nil {
-		return nil, &diag.Error{Stage: diag.StageFinalize, Err: err, Hint: "failed to create output directory"}
-	}
-	if err := copyFile(artifacts.CodegenObj, cfg.Output); err != nil {
-		return nil, &diag.Error{Stage: diag.StageFinalize, Err: err,
-			Hint: "failed to produce final output object"}
-	}
-
-	if cfg.EnableBTF {
-		if err := injectBTF(ctx, cfg, tools); err != nil {
-			return nil, err
-		}
 	}
 
 	if err := elfcheck.Validate(cfg.Output); err != nil {
@@ -158,6 +126,61 @@ func Run(ctx context.Context, cfg Config) (*Artifacts, error) {
 	}
 
 	return artifacts, nil
+}
+
+// runOptStage runs the opt pass with optional custom passes.
+func runOptStage(ctx context.Context, cfg Config, tools llvm.Tools, a *Artifacts) error {
+	optArgs := llvm.BuildOptArgs(a.TransformedLL, a.OptimizedLL, cfg.PassPipeline, cfg.OptProfile)
+	if len(cfg.CustomPasses) > 0 {
+		validated, vErr := llvm.AppendCustomPasses(optArgs, cfg.CustomPasses)
+		if vErr != nil {
+			return &diag.Error{Stage: diag.StageOpt, Err: vErr,
+				Hint: "custom pass validation failed; check linker-config.json"}
+		}
+		optArgs = validated
+	}
+	return runStage(ctx, cfg, diag.StageOpt, tools.Opt, optArgs,
+		"try a less aggressive --pass-pipeline or inspect linked IR")
+}
+
+// runCodegenAndFinalize runs llc code generation, copies the output, and
+// optionally injects BTF.
+func runCodegenAndFinalize(ctx context.Context, cfg Config, tools llvm.Tools, a *Artifacts) error {
+	llcArgs := buildLLCArgs(cfg.CPU, a.OptimizedLL, a.CodegenObj)
+	if err := runStage(ctx, cfg, diag.StageCodegen, tools.LLC, llcArgs,
+		"ensure llc supports BPF target and input IR is valid"); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(cfg.Output), 0o755); err != nil {
+		return &diag.Error{Stage: diag.StageFinalize, Err: err, Hint: "failed to create output directory"}
+	}
+	if err := copyFile(a.CodegenObj, cfg.Output); err != nil {
+		return &diag.Error{Stage: diag.StageFinalize, Err: err,
+			Hint: "failed to produce final output object"}
+	}
+	if cfg.EnableBTF {
+		if err := injectBTF(ctx, cfg, tools); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// setupDumpIR creates the dump-ir directory when --dump-ir is enabled
+// and returns the path (empty string when disabled).
+func setupDumpIR(cfg Config, workDir string) (string, error) {
+	if !cfg.DumpIR {
+		return "", nil
+	}
+	dir := filepath.Join(workDir, "dump-ir")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", &diag.Error{Stage: diag.StageTransform, Err: err,
+			Hint: "failed to create dump-ir directory"}
+	}
+	if cfg.Verbose {
+		fmt.Fprintf(cfg.Stdout, "[dump-ir] writing stage snapshots to %s\n", dir)
+	}
+	return dir, nil
 }
 
 // validateConfig applies defaults and checks required fields.
