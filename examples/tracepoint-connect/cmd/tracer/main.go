@@ -8,13 +8,13 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/kyleseneker/tinybpf/examples/network-sidecar/internal/loader"
-	"github.com/kyleseneker/tinybpf/examples/network-sidecar/internal/reader"
+	"github.com/kyleseneker/tinybpf/examples/tracepoint-connect/internal/loader"
+	"github.com/kyleseneker/tinybpf/examples/tracepoint-connect/internal/reader"
 )
 
 func main() {
 	var objectPath string
-	flag.StringVar(&objectPath, "object", "build/probe.bpf.o", "Path to BPF object built by tinybpf.")
+	flag.StringVar(&objectPath, "object", "build/connect.bpf.o", "Path to BPF object built by tinybpf.")
 	flag.Parse()
 
 	loaded, err := loader.LoadAndAttach(objectPath)

@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 EXAMPLE_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 
 if [[ "$(uname -s)" != "Linux" ]]; then
-  echo "network-sidecar requires Linux" >&2
+  echo "tracepoint-connect requires Linux" >&2
   exit 1
 fi
 
@@ -17,4 +17,4 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 cd "${EXAMPLE_DIR}"
-go run ./cmd/sidecar --object ./build/probe.bpf.o
+go run ./cmd/tracer --object ./build/connect.bpf.o

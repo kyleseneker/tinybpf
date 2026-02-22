@@ -1,4 +1,4 @@
-module github.com/kyleseneker/tinybpf/examples/network-sidecar
+module github.com/kyleseneker/tinybpf/examples/tracepoint-connect
 
 go 1.24.0
 

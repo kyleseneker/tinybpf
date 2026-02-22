@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 EXAMPLE_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-LOG_FILE="${EXAMPLE_DIR}/build/sidecar.log"
+LOG_FILE="${EXAMPLE_DIR}/build/tracer.log"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "smoke test needs root privileges" >&2
@@ -12,15 +12,15 @@ fi
 
 "${SCRIPT_DIR}/build.sh"
 
-echo "starting sidecar..."
+echo "starting tracer..."
 (
   cd "${EXAMPLE_DIR}" && \
-  go run ./cmd/sidecar --object ./build/probe.bpf.o
+  go run ./cmd/tracer --object ./build/connect.bpf.o
 ) >"${LOG_FILE}" 2>&1 &
-SIDECAR_PID=$!
+TRACER_PID=$!
 
 cleanup() {
-  kill "${SIDECAR_PID}" >/dev/null 2>&1 || true
+  kill "${TRACER_PID}" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -34,6 +34,6 @@ if rg -q "dst=" "${LOG_FILE}"; then
 fi
 
 echo "smoke failed, no connection events observed" >&2
-echo "--- sidecar log ---" >&2
+echo "--- tracer log ---" >&2
 sed -n '1,120p' "${LOG_FILE}" >&2
 exit 1

@@ -1,8 +1,8 @@
-# network-sidecar
+# tracepoint-connect
 
-An eBPF network observability sidecar written entirely in Go, built with `tinybpf`.
+An eBPF tracepoint probe that traces outbound TCP connections, written entirely in Go, built with `tinybpf`.
 
-This example demonstrates the full lifecycle: writing an eBPF probe in Go, compiling it through TinyGo and `tinybpf`, loading it into the kernel with [`cilium/ebpf`](https://github.com/cilium/ebpf), and reading live events from userspace.
+This example demonstrates the full lifecycle: writing an eBPF tracepoint program in Go, compiling it through TinyGo and `tinybpf`, loading it into the kernel with [`cilium/ebpf`](https://github.com/cilium/ebpf), and reading live events from userspace.
 
 ## Overview
 
@@ -15,7 +15,7 @@ graph LR
         B --> C["Ring buffer"]
     end
     subgraph Userspace
-        C --> D["Sidecar<br>reads + logs events"]
+        C --> D["Tracer<br>reads + logs events"]
     end
 ```
 
@@ -23,9 +23,9 @@ graph LR
 
 ```
 bpf/
-  probe.go                 eBPF probe source (compiled with TinyGo)
-  probe_stub.go            Build tag placeholder for standard Go tooling
-cmd/sidecar/
+  connect.go               eBPF probe source (compiled with TinyGo)
+  connect_stub.go          Build tag placeholder for standard Go tooling
+cmd/tracer/
   main.go                  Userspace entry point
 internal/
   loader/                  ELF loading and tracepoint attachment (cilium/ebpf)
@@ -51,13 +51,11 @@ scripts/
 ./scripts/build.sh
 ```
 
-Produces `build/probe.bpf.o`. The build is configurable via environment variables:
+Produces `build/connect.bpf.o`. The build is configurable via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `TINYGO_BIN` | `tinygo` | Path to TinyGo binary |
 | `TINYBPF_BIN` | *(built from source)* | Path to `tinybpf` binary |
-| `TINYGO_OUTPUT_FORMAT` | `ll` | TinyGo output format (`ll` for text IR) |
 | `BPF_CPU` | `v3` | BPF CPU version for `llc -mcpu` |
 
 ## Run
@@ -84,7 +82,7 @@ Expected output:
 sudo ./scripts/smoke.sh
 ```
 
-Builds the ELF object, runs the sidecar, generates traffic, and asserts that at least one connection event is logged.
+Builds the ELF object, runs the tracer, generates traffic, and asserts that at least one connection event is logged.
 
 ## Troubleshooting
 
@@ -92,5 +90,5 @@ Builds the ELF object, runs the sidecar, generates traffic, and asserts that at 
 |---------|------------|
 | No program found / attach failure | Verify TinyGo output contains the `tracepoint/syscalls/sys_enter_connect` section. Check tracepoint availability: `ls /sys/kernel/debug/tracing/events/syscalls/sys_enter_connect/` |
 | Permission denied | Run as root or grant `CAP_BPF` and `CAP_PERFMON` capabilities |
-| No events logged | Ensure traffic is IPv4 TCP. Check sidecar stderr for ring buffer or decode errors |
+| No events logged | Ensure traffic is IPv4 TCP. Check tracer stderr for ring buffer or decode errors |
 | Toolchain errors | Run `tinybpf doctor` to diagnose |

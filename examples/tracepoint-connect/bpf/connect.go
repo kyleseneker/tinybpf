@@ -1,4 +1,4 @@
-// Compiled by TinyGo; see probe_stub.go for the standard-Go IDE placeholder.
+// Compiled by TinyGo; see connect_stub.go for the standard-Go IDE placeholder.
 
 //go:build tinygo
 

@@ -11,7 +11,7 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
-	"github.com/kyleseneker/tinybpf/examples/network-sidecar/internal/event"
+	"github.com/kyleseneker/tinybpf/examples/tracepoint-connect/internal/event"
 )
 
 // Run reads from the ring buffer until ctx is cancelled, decoding each

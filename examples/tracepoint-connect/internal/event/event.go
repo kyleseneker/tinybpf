@@ -12,7 +12,7 @@ import (
 const Size = 16
 
 // ConnectEvent is the fixed-size record emitted by the eBPF program.
-// Layout must stay in sync with bpf/probe.go.
+// Layout must stay in sync with bpf/connect.go.
 type ConnectEvent struct {
 	PID       uint32
 	DstAddrBE uint32
