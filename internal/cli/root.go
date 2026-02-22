@@ -59,7 +59,9 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "version", "--version", "-version":
 		return runVersion(stdout)
 	default:
-		return runLink(ctx, args, stdout, stderr)
+		fmt.Fprintf(stderr, "unknown command: %s\n", args[0])
+		printUsage(stderr)
+		return 2
 	}
 }
 
@@ -69,17 +71,13 @@ func printUsage(w io.Writer) {
 
 Usage:
   tinybpf build [flags] <package>   Compile Go source to BPF ELF (one step)
-  tinybpf link --input <file> [flags]
-                                    Link TinyGo LLVM IR into a BPF ELF object
+  tinybpf link --input <file> [flags]   Link pre-compiled LLVM IR into a BPF ELF
   tinybpf init <name>               Scaffold a new BPF project
   tinybpf doctor [flags]            Check toolchain installation
   tinybpf version                   Print version information
   tinybpf help                      Show this message
 
 Run 'tinybpf <command> --help' for details on a specific command.
-
-The bare-flag form 'tinybpf --input <file> [flags]' still works as an
-alias for 'tinybpf link'.
 `, Version)
 }
 

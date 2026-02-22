@@ -48,7 +48,7 @@ func TestRunLink(t *testing.T) {
 			setup: func(t *testing.T) []string {
 				t.Helper()
 				return []string{
-					"--input", "/dev/null",
+					"link", "--input", "/dev/null",
 					"--output", filepath.Join(t.TempDir(), "out.o"),
 					"--llvm-link", "/does/not/exist/llvm-link",
 					"--config", "/does/not/exist/linker-config.json",
@@ -65,7 +65,7 @@ func TestRunLink(t *testing.T) {
 				cfgPath := filepath.Join(tmp, "linker-config.json")
 				os.WriteFile(cfgPath, []byte(`{"custom_passes": ["-inline;rm"]}`), 0o644)
 				return []string{
-					"--input", "/dev/null",
+					"link", "--input", "/dev/null",
 					"--output", filepath.Join(tmp, "out.o"),
 					"--llvm-link", "/does/not/exist/llvm-link",
 					"--config", cfgPath,
@@ -81,7 +81,7 @@ func TestRunLink(t *testing.T) {
 				cfgPath := filepath.Join(tmp, "linker-config.json")
 				os.WriteFile(cfgPath, []byte(`{"custom_passes": ["inline", "dse"]}`), 0o644)
 				return []string{
-					"--input", "/dev/null",
+					"link", "--input", "/dev/null",
 					"--output", filepath.Join(tmp, "out.o"),
 					"--llvm-link", "/does/not/exist/llvm-link",
 					"--config", cfgPath,
@@ -98,7 +98,7 @@ func TestRunLink(t *testing.T) {
 				input := filepath.Join(tmp, "input.ll")
 				os.WriteFile(input, []byte(testIR("handle_connect")), 0o644)
 				return append([]string{
-					"--input", input,
+					"link", "--input", input,
 					"--output", filepath.Join(tmp, "out.o"),
 					"--verbose",
 				}, fakeLLVMArgs(toolDir)...)
@@ -222,7 +222,7 @@ func TestRunLinkProfile(t *testing.T) {
 				t.Helper()
 				tmp := t.TempDir()
 				return []string{
-					"--input", "/dev/null",
+					"link", "--input", "/dev/null",
 					"--output", filepath.Join(tmp, "out.o"),
 					"--llvm-link", "/does/not/exist/llvm-link",
 					"--profile", filepath.Join(tmp, "prof"),
@@ -239,7 +239,7 @@ func TestRunLinkProfile(t *testing.T) {
 				t.Cleanup(func() { pprof.StopCPUProfile(); f.Close() })
 				pprof.StartCPUProfile(f)
 				return []string{
-					"--input", "/dev/null",
+					"link", "--input", "/dev/null",
 					"--output", filepath.Join(tmp, "out.o"),
 					"--llvm-link", "/does/not/exist/llvm-link",
 					"--profile", filepath.Join(tmp, "prof"),

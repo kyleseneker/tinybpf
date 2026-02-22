@@ -90,9 +90,9 @@ func TestRunExitCodes(t *testing.T) {
 		{"init unknown flag", []string{"init", "--unknown-flag"}, 2},
 		{"init missing name", []string{"init"}, 2},
 		{
-			"pipeline error (missing tool)",
-			[]string{"--input", "/dev/null", "--output", "/tmp/test-output.o", "--llvm-link", "/does/not/exist/llvm-link"},
-			1,
+			"unknown subcommand",
+			[]string{"notacommand"},
+			2,
 		},
 	}
 	for _, tt := range tests {
@@ -120,7 +120,7 @@ func TestRunHelp(t *testing.T) {
 		{"init -h", []string{"init", "-h"}, 0},
 		{"build --help", []string{"build", "--help"}, 0},
 		{"link --help", []string{"link", "--help"}, 0},
-		{"legacy link --help", []string{"--input", "/dev/null", "--help"}, 0},
+		{"unknown command shows usage", []string{"--input", "/dev/null"}, 2},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

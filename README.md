@@ -90,21 +90,12 @@ func handle_connect(ctx unsafe.Pointer) int32 {
 }
 ```
 
-One-step build:
+Build:
 
 ```bash
 tinybpf build --output program.o \
   --section handle_connect=tracepoint/syscalls/sys_enter_connect \
   ./bpf
-```
-
-Two-step build:
-
-```bash
-tinygo build -o program.ll -gc=none -scheduler=none -panic=trap -opt=1 ./bpf
-
-tinybpf link --input program.ll --output program.o \
-  --section handle_connect=tracepoint/syscalls/sys_enter_connect
 ```
 
 ### Examples
@@ -130,12 +121,10 @@ Run `tinybpf --help` or `tinybpf <command> --help`.
 | Subcommand | Description |
 |------------|-------------|
 | `build [flags] <package>` | Compile Go source to BPF ELF in one step |
-| `link --input <file> [flags]` | Link TinyGo LLVM IR into a BPF ELF object |
+| `link --input <file> [flags]` | Link pre-compiled LLVM IR into a BPF ELF |
 | `init <name>` | Scaffold a new BPF project |
 | `doctor` | Check toolchain installation |
 | `version` | Print version |
-
-The bare-flag form `tinybpf --input <file> [flags]` is an alias for `link`.
 
 ### Shared flags (build and link)
 
