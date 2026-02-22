@@ -81,7 +81,7 @@ type bpfMapDef struct {
 func bpfGetCurrentPidTgid() uint64
 
 // ` + programName + ` is the BPF program entry point.
-// Assign it to an ELF section with: tinybpf --section ` + programName + `=<type>/<attach_point>
+// Assign it to an ELF section with: tinybpf build --section ` + programName + `=<type>/<attach_point>
 //
 //export ` + programName + `
 func ` + programName + `(ctx unsafe.Pointer) int32 {
@@ -104,7 +104,6 @@ func makefile(programName string) string {
 
 # Output paths
 BUILD_DIR := build
-IR_FILE   := $(BUILD_DIR)/` + programName + `.ll
 BPF_OBJ   := $(BUILD_DIR)/` + programName + `.bpf.o
 
 # Customize: set the ELF section for your program.
@@ -116,11 +115,8 @@ SECTION := ` + programName + `
 
 build: $(BPF_OBJ)
 
-$(IR_FILE): bpf/` + programName + `.go | $(BUILD_DIR)
-	tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o $@ ./bpf
-
-$(BPF_OBJ): $(IR_FILE)
-	tinybpf --input $< --output $@ --section ` + programName + `=$(SECTION) --verbose
+$(BPF_OBJ): bpf/` + programName + `.go | $(BUILD_DIR)
+	tinybpf build --output $@ --section ` + programName + `=$(SECTION) --verbose ./bpf
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
