@@ -44,8 +44,7 @@ entry:
 	})
 }
 
-func TestExtractPrograms(t *testing.T) {
-	base := strings.Split(strings.TrimSpace(`
+var extractBaseIR = `
 source_filename = "main"
 
 @runtime.main_argv = internal global ptr null
@@ -75,29 +74,36 @@ declare void @runtime.alloc(i64, ptr, ptr)
 !2 = !DILocation(line: 1)
 !3 = !DILocation(line: 2)
 !4 = !DILocation(line: 3)
-`), "\n")
+`
 
-	t.Run("auto-detect removes runtime funcs", func(t *testing.T) {
-		got, err := extractPrograms(base, nil, false, io.Discard)
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := strings.Join(got, "\n")
-		for _, removed := range []string{"__dynamic_loader", "tinygo_signal_handler", "runtime.main_argv"} {
-			if strings.Contains(text, removed) {
-				t.Errorf("%s not removed", removed)
-			}
-		}
-		if !strings.Contains(text, "handle_connect") {
-			t.Error("program handle_connect was removed")
-		}
-		if !strings.Contains(text, "!dbg") {
-			t.Error("inline debug references should be preserved")
-		}
-	})
-
-	t.Run("explicit program list", func(t *testing.T) {
-		input := strings.Split(strings.TrimSpace(`
+func TestExtractPrograms(t *testing.T) {
+	tests := []struct {
+		name        string
+		ir          string
+		programs    []string
+		verbose     bool
+		wantContain []string
+		notContain  []string
+		wantErr     string
+		check       func(t *testing.T, text string, buf string)
+	}{
+		{
+			name:     "auto-detect removes runtime funcs",
+			ir:       extractBaseIR,
+			programs: nil,
+			wantContain: []string{
+				"handle_connect",
+				"!dbg",
+			},
+			notContain: []string{
+				"__dynamic_loader",
+				"tinygo_signal_handler",
+				"runtime.main_argv",
+			},
+		},
+		{
+			name: "explicit program list",
+			ir: `
 define i32 @foo() {
 entry:
   ret i32 0
@@ -107,62 +113,78 @@ define i32 @bar() {
 entry:
   ret i32 1
 }
-`), "\n")
-		got, err := extractPrograms(input, []string{"bar"}, false, io.Discard)
-		if err != nil {
-			t.Fatal(err)
-		}
-		text := strings.Join(got, "\n")
-		if strings.Contains(text, "@foo") {
-			t.Error("@foo should have been removed")
-		}
-		if !strings.Contains(text, "@bar") {
-			t.Error("@bar should have been kept")
-		}
-	})
-
-	t.Run("no programs found", func(t *testing.T) {
-		input := strings.Split("define void @runtime.runMain() {\nentry:\n  ret void\n}\n", "\n")
-		_, err := extractPrograms(input, nil, false, io.Discard)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-	})
-
-	t.Run("explicit name not found", func(t *testing.T) {
-		input := strings.Split(strings.TrimSpace(`
+`,
+			programs:    []string{"bar"},
+			wantContain: []string{"@bar"},
+			notContain:  []string{"@foo"},
+		},
+		{
+			name:     "no programs found",
+			ir:       "define void @runtime.runMain() {\nentry:\n  ret void\n}\n",
+			programs: nil,
+			wantErr:  "no program functions found",
+		},
+		{
+			name: "explicit name not found",
+			ir: `
 define i32 @foo() {
 entry:
   ret i32 0
 }
-`), "\n")
-		_, err := extractPrograms(input, []string{"nonexistent"}, false, io.Discard)
-		if err == nil {
-			t.Fatal("expected error for missing program name")
-		}
-		if !strings.Contains(err.Error(), "not found in IR:") {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if !strings.Contains(err.Error(), "nonexistent") {
-			t.Fatalf("error should name the missing program: %v", err)
-		}
-		if !strings.Contains(err.Error(), "foo") {
-			t.Fatalf("error should list available functions: %v", err)
-		}
-	})
+`,
+			programs: []string{"nonexistent"},
+			wantErr:  "not found in IR:",
+		},
+		{
+			name:        "verbose",
+			ir:          "define i32 @my_program(ptr %ctx) {\nentry:\n  ret i32 0\n}\n",
+			verbose:     true,
+			wantContain: []string{"my_program"},
+			check: func(t *testing.T, _ string, buf string) {
+				t.Helper()
+				if !strings.Contains(buf, "keeping program") {
+					t.Error("expected verbose output")
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := strings.Split(strings.TrimSpace(tt.ir), "\n")
+			var buf strings.Builder
+			w := io.Discard
+			if tt.verbose {
+				w = &buf
+			}
+			got, err := extractPrograms(input, tt.programs, tt.verbose, w)
 
-	t.Run("verbose", func(t *testing.T) {
-		input := strings.Split("define i32 @my_program(ptr %ctx) {\nentry:\n  ret i32 0\n}\n", "\n")
-		var buf strings.Builder
-		got, err := extractPrograms(input, nil, true, &buf)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(strings.Join(got, "\n"), "my_program") {
-			t.Error("expected program to be kept")
-		}
-		if !strings.Contains(buf.String(), "keeping program") {
-			t.Error("expected verbose output")
-		}
-	})
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error %q missing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			text := strings.Join(got, "\n")
+			for _, want := range tt.wantContain {
+				if !strings.Contains(text, want) {
+					t.Errorf("output missing %q", want)
+				}
+			}
+			for _, bad := range tt.notContain {
+				if strings.Contains(text, bad) {
+					t.Errorf("output should not contain %q", bad)
+				}
+			}
+			if tt.check != nil {
+				tt.check(t, text, buf.String())
+			}
+		})
+	}
 }

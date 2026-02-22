@@ -125,31 +125,44 @@ func TestRun(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			for _, f := range tt.wantFiles {
-				if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
-					t.Errorf("expected file %s to exist", f)
-				}
-			}
-
-			for _, want := range tt.wantStdout {
-				if !strings.Contains(stdout.String(), want) {
-					t.Errorf("stdout missing %q, got:\n%s", want, stdout.String())
-				}
-			}
-
-			for suffix, wants := range tt.wantContain {
-				data, err := os.ReadFile(filepath.Join(dir, suffix))
-				if err != nil {
-					t.Errorf("reading %s: %v", suffix, err)
-					continue
-				}
-				for _, want := range wants {
-					if !strings.Contains(string(data), want) {
-						t.Errorf("%s missing %q", suffix, want)
-					}
-				}
-			}
+			assertFilesExist(t, dir, tt.wantFiles)
+			assertStdoutContains(t, stdout.String(), tt.wantStdout)
+			assertFileContents(t, dir, tt.wantContain)
 		})
+	}
+}
+
+func assertFilesExist(t *testing.T, dir string, paths []string) {
+	t.Helper()
+	for _, f := range paths {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Errorf("expected file %s to exist", f)
+		}
+	}
+}
+
+func assertStdoutContains(t *testing.T, stdout string, wants []string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("stdout missing %q, got:\n%s", want, stdout)
+		}
+	}
+}
+
+func assertFileContents(t *testing.T, dir string, wantContain map[string][]string) {
+	t.Helper()
+	for suffix, wants := range wantContain {
+		data, err := os.ReadFile(filepath.Join(dir, suffix))
+		if err != nil {
+			t.Errorf("reading %s: %v", suffix, err)
+			continue
+		}
+		for _, want := range wants {
+			if !strings.Contains(string(data), want) {
+				t.Errorf("%s missing %q", suffix, want)
+			}
+		}
 	}
 }
 

@@ -11,8 +11,10 @@ func TestLoadConfig(t *testing.T) {
 	tests := []struct {
 		name    string
 		json    string
+		noFile  bool
 		wantN   int
 		wantErr string
+		check   func(t *testing.T, cfg *LinkerConfig)
 	}{
 		{
 			name:  "valid passes",
@@ -28,6 +30,12 @@ func TestLoadConfig(t *testing.T) {
 			name:  "trims whitespace",
 			json:  `{"custom_passes": ["  -dse  "]}`,
 			wantN: 1,
+			check: func(t *testing.T, cfg *LinkerConfig) {
+				t.Helper()
+				if cfg.CustomPasses[0] != "-dse" {
+					t.Fatalf("expected trimmed pass, got %q", cfg.CustomPasses[0])
+				}
+			},
 		},
 		{
 			name:  "angle-bracket params",
@@ -59,11 +67,21 @@ func TestLoadConfig(t *testing.T) {
 			json:    `not json`,
 			wantErr: "parsing config",
 		},
+		{
+			name:    "missing file",
+			noFile:  true,
+			wantErr: "reading config",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "linker-config.json")
-			os.WriteFile(path, []byte(tt.json), 0o644)
+			var path string
+			if tt.noFile {
+				path = "/does/not/exist/linker-config.json"
+			} else {
+				path = filepath.Join(t.TempDir(), "linker-config.json")
+				os.WriteFile(path, []byte(tt.json), 0o644)
+			}
 
 			cfg, err := LoadConfig(path)
 			if tt.wantErr != "" {
@@ -81,29 +99,9 @@ func TestLoadConfig(t *testing.T) {
 			if len(cfg.CustomPasses) != tt.wantN {
 				t.Fatalf("expected %d passes, got %d: %v", tt.wantN, len(cfg.CustomPasses), cfg.CustomPasses)
 			}
+			if tt.check != nil {
+				tt.check(t, cfg)
+			}
 		})
-	}
-}
-
-func TestLoadConfigTrimmedValues(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "linker-config.json")
-	os.WriteFile(path, []byte(`{"custom_passes": ["  -dse  "]}`), 0o644)
-
-	cfg, err := LoadConfig(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.CustomPasses[0] != "-dse" {
-		t.Fatalf("expected trimmed pass, got %q", cfg.CustomPasses[0])
-	}
-}
-
-func TestLoadConfigMissingFile(t *testing.T) {
-	_, err := LoadConfig("/does/not/exist/linker-config.json")
-	if err == nil {
-		t.Fatal("expected error for missing file")
-	}
-	if !strings.Contains(err.Error(), "reading config") {
-		t.Fatalf("expected reading error, got: %v", err)
 	}
 }

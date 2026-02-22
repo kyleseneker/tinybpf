@@ -16,7 +16,16 @@ const (
 	symOne                  // .symtab with one real symbol
 )
 
-func buildELF(class byte, machine uint16, addCode bool, sym symMode) []byte {
+type elfBuilder struct {
+	hdr            []byte
+	strtab         []byte
+	sectionData    []byte
+	sectionHeaders []byte
+	shnum          uint16
+	offset         uint64
+}
+
+func newELFBuilder(class byte, machine uint16) *elfBuilder {
 	hdr := make([]byte, 64)
 	copy(hdr[0:4], []byte{0x7f, 'E', 'L', 'F'})
 	hdr[4] = class
@@ -27,267 +36,165 @@ func buildELF(class byte, machine uint16, addCode bool, sym symMode) []byte {
 	binary.LittleEndian.PutUint32(hdr[20:24], 1)
 	binary.LittleEndian.PutUint16(hdr[52:54], 64)
 	binary.LittleEndian.PutUint16(hdr[58:60], 64)
+	return &elfBuilder{hdr: hdr, strtab: []byte{0}, offset: 64}
+}
 
-	strtab := []byte{0}
-	codeNameOff := 0
-	symtabNameOff := 0
-	symstrtabNameOff := 0
+func (b *elfBuilder) addStrtabEntry(name string) int {
+	off := len(b.strtab)
+	b.strtab = append(b.strtab, name...)
+	b.strtab = append(b.strtab, 0)
+	return off
+}
 
-	if addCode {
-		codeNameOff = len(strtab)
-		strtab = append(strtab, ".text\x00"...)
+func (b *elfBuilder) padStrtab() {
+	for len(b.strtab)%8 != 0 {
+		b.strtab = append(b.strtab, 0)
 	}
-	if sym != symNone {
-		symtabNameOff = len(strtab)
-		strtab = append(strtab, ".symtab\x00"...)
-		symstrtabNameOff = len(strtab)
-		strtab = append(strtab, ".strtab\x00"...)
-	}
-	shstrtabNameOff := len(strtab)
-	strtab = append(strtab, ".shstrtab\x00"...)
-	for len(strtab)%8 != 0 {
-		strtab = append(strtab, 0)
-	}
+}
 
-	offset := uint64(64)
-	var sectionData []byte
+func (b *elfBuilder) appendData(data []byte) uint64 {
+	off := b.offset + uint64(len(b.sectionData))
+	b.sectionData = append(b.sectionData, data...)
+	return off
+}
 
-	var codeData []byte
-	if addCode {
-		codeData = []byte{0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-		sectionData = append(sectionData, codeData...)
-		for len(sectionData)%8 != 0 {
-			sectionData = append(sectionData, 0)
-		}
+func (b *elfBuilder) padData() {
+	for len(b.sectionData)%8 != 0 {
+		b.sectionData = append(b.sectionData, 0)
 	}
+}
 
-	symStrtabOff := uint64(0)
-	var symStrtabData []byte
-	if sym != symNone {
-		symStrtabData = []byte{0}
-		if sym == symOne {
-			symStrtabData = append(symStrtabData, "test_sym\x00"...)
-		}
-		for len(symStrtabData)%8 != 0 {
-			symStrtabData = append(symStrtabData, 0)
-		}
-		symStrtabOff = offset + uint64(len(sectionData))
-		sectionData = append(sectionData, symStrtabData...)
-	}
+func (b *elfBuilder) appendSH(nameOff int, shType uint32, flags uint64, shOffset, size uint64, link, info uint32, entsize uint64) {
+	sh := make([]byte, 64)
+	binary.LittleEndian.PutUint32(sh[0:4], uint32(nameOff))
+	binary.LittleEndian.PutUint32(sh[4:8], shType)
+	binary.LittleEndian.PutUint64(sh[8:16], flags)
+	binary.LittleEndian.PutUint64(sh[24:32], shOffset)
+	binary.LittleEndian.PutUint64(sh[32:40], size)
+	binary.LittleEndian.PutUint32(sh[40:44], link)
+	binary.LittleEndian.PutUint32(sh[44:48], info)
+	binary.LittleEndian.PutUint64(sh[48:56], 8)
+	binary.LittleEndian.PutUint64(sh[56:64], entsize)
+	b.sectionHeaders = append(b.sectionHeaders, sh...)
+	b.shnum++
+}
 
-	symtabOff := uint64(0)
-	symtabSize := uint64(0)
-	if sym != symNone {
-		symtabOff = offset + uint64(len(sectionData))
-		nullSym := make([]byte, 24)
-		sectionData = append(sectionData, nullSym...)
-		symtabSize = 24
-		if sym == symOne {
-			realSym := make([]byte, 24)
-			binary.LittleEndian.PutUint32(realSym[0:4], 1)
-			realSym[4] = 0x12
-			sectionData = append(sectionData, realSym...)
-			symtabSize = 48
-		}
+func (b *elfBuilder) addSymtab(sym symMode, symtabNameOff, symstrtabNameOff int) {
+	if sym == symNone {
+		return
 	}
 
-	shstrtabOff := offset + uint64(len(sectionData))
-	sectionData = append(sectionData, strtab...)
+	symStrtabData := []byte{0}
+	if sym == symOne {
+		symStrtabData = append(symStrtabData, "test_sym\x00"...)
+	}
+	for len(symStrtabData)%8 != 0 {
+		symStrtabData = append(symStrtabData, 0)
+	}
+	symStrtabOff := b.appendData(symStrtabData)
 
-	shnum := uint16(0)
-	var sectionHeaders []byte
-	appendSH := func(nameOff int, shType uint32, flags uint64, shOffset, size uint64, link, info uint32, entsize uint64) {
-		sh := make([]byte, 64)
-		binary.LittleEndian.PutUint32(sh[0:4], uint32(nameOff))
-		binary.LittleEndian.PutUint32(sh[4:8], shType)
-		binary.LittleEndian.PutUint64(sh[8:16], flags)
-		binary.LittleEndian.PutUint64(sh[24:32], shOffset)
-		binary.LittleEndian.PutUint64(sh[32:40], size)
-		binary.LittleEndian.PutUint32(sh[40:44], link)
-		binary.LittleEndian.PutUint32(sh[44:48], info)
-		binary.LittleEndian.PutUint64(sh[48:56], 8)
-		binary.LittleEndian.PutUint64(sh[56:64], entsize)
-		sectionHeaders = append(sectionHeaders, sh...)
-		shnum++
+	symtabOff := b.offset + uint64(len(b.sectionData))
+	nullSym := make([]byte, 24)
+	b.sectionData = append(b.sectionData, nullSym...)
+	symtabSize := uint64(24)
+	if sym == symOne {
+		realSym := make([]byte, 24)
+		binary.LittleEndian.PutUint32(realSym[0:4], 1)
+		realSym[4] = 0x12
+		b.sectionData = append(b.sectionData, realSym...)
+		symtabSize = 48
 	}
 
-	appendSH(0, 0, 0, 0, 0, 0, 0, 0)
+	symStrtabSHIdx := b.shnum
+	b.appendSH(symstrtabNameOff, 3, 0, symStrtabOff, uint64(len(symStrtabData)), 0, 0, 0)
 
-	if addCode {
-		appendSH(codeNameOff, 1, 6, offset, uint64(len(codeData)), 0, 0, 0)
+	info := uint32(1)
+	if sym == symEmpty {
+		info = 0
 	}
+	b.appendSH(symtabNameOff, 2, 0, symtabOff, symtabSize, uint32(symStrtabSHIdx), info, 24)
+}
 
-	symStrtabSHIdx := uint16(0)
-	if sym != symNone {
-		symStrtabSHIdx = shnum
-		appendSH(symstrtabNameOff, 3, 0, symStrtabOff, uint64(len(symStrtabData)), 0, 0, 0)
-	}
+func (b *elfBuilder) finalize(shstrtabNameOff int) []byte {
+	shstrtabOff := b.appendData(b.strtab)
+	shstrtabIdx := b.shnum
+	b.appendSH(shstrtabNameOff, 3, 0, shstrtabOff, uint64(len(b.strtab)), 0, 0, 0)
 
-	if sym != symNone {
-		info := uint32(1)
-		if sym == symEmpty {
-			info = 0
-		}
-		appendSH(symtabNameOff, 2, 0, symtabOff, symtabSize, uint32(symStrtabSHIdx), info, 24)
-	}
-
-	shstrtabIdx := shnum
-	appendSH(shstrtabNameOff, 3, 0, shstrtabOff, uint64(len(strtab)), 0, 0, 0)
-
-	shoff := offset + uint64(len(sectionData))
-	binary.LittleEndian.PutUint64(hdr[40:48], shoff)
-	binary.LittleEndian.PutUint16(hdr[60:62], shnum)
-	binary.LittleEndian.PutUint16(hdr[62:64], shstrtabIdx)
+	shoff := b.offset + uint64(len(b.sectionData))
+	binary.LittleEndian.PutUint64(b.hdr[40:48], shoff)
+	binary.LittleEndian.PutUint16(b.hdr[60:62], b.shnum)
+	binary.LittleEndian.PutUint16(b.hdr[62:64], shstrtabIdx)
 
 	var out []byte
-	out = append(out, hdr...)
-	out = append(out, sectionData...)
-	out = append(out, sectionHeaders...)
+	out = append(out, b.hdr...)
+	out = append(out, b.sectionData...)
+	out = append(out, b.sectionHeaders...)
 	return out
 }
 
-// buildELFWithMaps is like buildELF but adds a ".maps" section with the given flags.
-func buildELFWithMaps(class byte, machine uint16, addCode bool, sym symMode, mapsExec bool) []byte {
-	hdr := make([]byte, 64)
-	copy(hdr[0:4], []byte{0x7f, 'E', 'L', 'F'})
-	hdr[4] = class
-	hdr[5] = 1
-	hdr[6] = 1
-	binary.LittleEndian.PutUint16(hdr[16:18], 1)
-	binary.LittleEndian.PutUint16(hdr[18:20], machine)
-	binary.LittleEndian.PutUint32(hdr[20:24], 1)
-	binary.LittleEndian.PutUint16(hdr[52:54], 64)
-	binary.LittleEndian.PutUint16(hdr[58:60], 64)
+func buildELF(class byte, machine uint16, addCode bool, sym symMode) []byte {
+	b := newELFBuilder(class, machine)
 
-	strtab := []byte{0}
 	codeNameOff := 0
-	mapsNameOff := 0
-	symtabNameOff := 0
-	symstrtabNameOff := 0
-
 	if addCode {
-		codeNameOff = len(strtab)
-		strtab = append(strtab, ".text\x00"...)
+		codeNameOff = b.addStrtabEntry(".text")
 	}
-	mapsNameOff = len(strtab)
-	strtab = append(strtab, ".maps\x00"...)
+	symtabNameOff, symstrtabNameOff := 0, 0
 	if sym != symNone {
-		symtabNameOff = len(strtab)
-		strtab = append(strtab, ".symtab\x00"...)
-		symstrtabNameOff = len(strtab)
-		strtab = append(strtab, ".strtab\x00"...)
+		symtabNameOff = b.addStrtabEntry(".symtab")
+		symstrtabNameOff = b.addStrtabEntry(".strtab")
 	}
-	shstrtabNameOff := len(strtab)
-	strtab = append(strtab, ".shstrtab\x00"...)
-	for len(strtab)%8 != 0 {
-		strtab = append(strtab, 0)
-	}
+	shstrtabNameOff := b.addStrtabEntry(".shstrtab")
+	b.padStrtab()
 
-	offset := uint64(64)
-	var sectionData []byte
+	b.appendSH(0, 0, 0, 0, 0, 0, 0, 0) // null section
 
-	var codeData []byte
 	if addCode {
-		codeData = []byte{0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-		sectionData = append(sectionData, codeData...)
-		for len(sectionData)%8 != 0 {
-			sectionData = append(sectionData, 0)
-		}
+		codeData := []byte{0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+		codeOff := b.appendData(codeData)
+		b.padData()
+		b.appendSH(codeNameOff, 1, 6, codeOff, uint64(len(codeData)), 0, 0, 0)
+	}
+
+	b.addSymtab(sym, symtabNameOff, symstrtabNameOff)
+	return b.finalize(shstrtabNameOff)
+}
+
+func buildELFWithMaps(class byte, machine uint16, addCode bool, sym symMode, mapsExec bool) []byte {
+	b := newELFBuilder(class, machine)
+
+	codeNameOff := 0
+	if addCode {
+		codeNameOff = b.addStrtabEntry(".text")
+	}
+	mapsNameOff := b.addStrtabEntry(".maps")
+	symtabNameOff, symstrtabNameOff := 0, 0
+	if sym != symNone {
+		symtabNameOff = b.addStrtabEntry(".symtab")
+		symstrtabNameOff = b.addStrtabEntry(".strtab")
+	}
+	shstrtabNameOff := b.addStrtabEntry(".shstrtab")
+	b.padStrtab()
+
+	b.appendSH(0, 0, 0, 0, 0, 0, 0, 0) // null section
+
+	if addCode {
+		codeData := []byte{0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+		codeOff := b.appendData(codeData)
+		b.padData()
+		b.appendSH(codeNameOff, 1, 6, codeOff, uint64(len(codeData)), 0, 0, 0)
 	}
 
 	mapsData := make([]byte, 40)
-	mapsDataOff := offset + uint64(len(sectionData))
-	sectionData = append(sectionData, mapsData...)
-
-	symStrtabOff := uint64(0)
-	var symStrtabData []byte
-	if sym != symNone {
-		symStrtabData = []byte{0}
-		if sym == symOne {
-			symStrtabData = append(symStrtabData, "test_sym\x00"...)
-		}
-		for len(symStrtabData)%8 != 0 {
-			symStrtabData = append(symStrtabData, 0)
-		}
-		symStrtabOff = offset + uint64(len(sectionData))
-		sectionData = append(sectionData, symStrtabData...)
-	}
-
-	symtabOff := uint64(0)
-	symtabSize := uint64(0)
-	if sym != symNone {
-		symtabOff = offset + uint64(len(sectionData))
-		nullSym := make([]byte, 24)
-		sectionData = append(sectionData, nullSym...)
-		symtabSize = 24
-		if sym == symOne {
-			realSym := make([]byte, 24)
-			binary.LittleEndian.PutUint32(realSym[0:4], 1)
-			realSym[4] = 0x12
-			sectionData = append(sectionData, realSym...)
-			symtabSize = 48
-		}
-	}
-
-	shstrtabOff := offset + uint64(len(sectionData))
-	sectionData = append(sectionData, strtab...)
-
-	shnum := uint16(0)
-	var sectionHeaders []byte
-	appendSH := func(nameOff int, shType uint32, flags uint64, shOffset, size uint64, link, info uint32, entsize uint64) {
-		sh := make([]byte, 64)
-		binary.LittleEndian.PutUint32(sh[0:4], uint32(nameOff))
-		binary.LittleEndian.PutUint32(sh[4:8], shType)
-		binary.LittleEndian.PutUint64(sh[8:16], flags)
-		binary.LittleEndian.PutUint64(sh[24:32], shOffset)
-		binary.LittleEndian.PutUint64(sh[32:40], size)
-		binary.LittleEndian.PutUint32(sh[40:44], link)
-		binary.LittleEndian.PutUint32(sh[44:48], info)
-		binary.LittleEndian.PutUint64(sh[48:56], 8)
-		binary.LittleEndian.PutUint64(sh[56:64], entsize)
-		sectionHeaders = append(sectionHeaders, sh...)
-		shnum++
-	}
-
-	appendSH(0, 0, 0, 0, 0, 0, 0, 0)
-
-	if addCode {
-		appendSH(codeNameOff, 1, 6, offset, uint64(len(codeData)), 0, 0, 0)
-	}
-
-	mapsFlags := uint64(3) // SHF_WRITE | SHF_ALLOC
+	mapsDataOff := b.appendData(mapsData)
+	mapsFlags := uint64(3)
 	if mapsExec {
-		mapsFlags |= 4 // SHF_EXECINSTR
+		mapsFlags |= 4
 	}
-	appendSH(mapsNameOff, 1, mapsFlags, mapsDataOff, uint64(len(mapsData)), 0, 0, 0)
+	b.appendSH(mapsNameOff, 1, mapsFlags, mapsDataOff, uint64(len(mapsData)), 0, 0, 0)
 
-	symStrtabSHIdx := uint16(0)
-	if sym != symNone {
-		symStrtabSHIdx = shnum
-		appendSH(symstrtabNameOff, 3, 0, symStrtabOff, uint64(len(symStrtabData)), 0, 0, 0)
-	}
-
-	if sym != symNone {
-		info := uint32(1)
-		if sym == symEmpty {
-			info = 0
-		}
-		appendSH(symtabNameOff, 2, 0, symtabOff, symtabSize, uint32(symStrtabSHIdx), info, 24)
-	}
-
-	shstrtabIdx := shnum
-	appendSH(shstrtabNameOff, 3, 0, shstrtabOff, uint64(len(strtab)), 0, 0, 0)
-
-	shoff := offset + uint64(len(sectionData))
-	binary.LittleEndian.PutUint64(hdr[40:48], shoff)
-	binary.LittleEndian.PutUint16(hdr[60:62], shnum)
-	binary.LittleEndian.PutUint16(hdr[62:64], shstrtabIdx)
-
-	var out []byte
-	out = append(out, hdr...)
-	out = append(out, sectionData...)
-	out = append(out, sectionHeaders...)
-	return out
+	b.addSymtab(sym, symtabNameOff, symstrtabNameOff)
+	return b.finalize(shstrtabNameOff)
 }
 
 func writeELF(t *testing.T, name string, data []byte) string {

@@ -29,21 +29,45 @@ func TestStripAttributes(t *testing.T) {
 	}
 	got := stripAttributes(lines)
 
-	t.Run("removes host attrs from #0", func(t *testing.T) {
-		for _, bad := range []string{"target-cpu", "target-features", "allockind", "allocsize", "alloc-family"} {
-			if strings.Contains(got[0], bad) {
-				t.Errorf("still contains %s", bad)
+	tests := []struct {
+		name        string
+		lineIdx     int
+		wantContain []string
+		notContain  []string
+		wantExact   string
+	}{
+		{
+			name:       "removes host attrs from #0",
+			lineIdx:    0,
+			notContain: []string{"target-cpu", "target-features", "allockind", "allocsize", "alloc-family"},
+		},
+		{
+			name:        "preserves nounwind in #4",
+			lineIdx:     1,
+			wantContain: []string{"nounwind"},
+		},
+		{
+			name:      "leaves #7 unchanged",
+			lineIdx:   2,
+			wantExact: `attributes #7 = { nounwind }`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			line := got[tt.lineIdx]
+			for _, want := range tt.wantContain {
+				if !strings.Contains(line, want) {
+					t.Errorf("line missing %q: %s", want, line)
+				}
 			}
-		}
-	})
-	t.Run("preserves nounwind in #4", func(t *testing.T) {
-		if !strings.Contains(got[1], "nounwind") {
-			t.Error("lost nounwind")
-		}
-	})
-	t.Run("leaves #7 unchanged", func(t *testing.T) {
-		if got[2] != `attributes #7 = { nounwind }` {
-			t.Errorf("changed: %q", got[2])
-		}
-	})
+			for _, bad := range tt.notContain {
+				if strings.Contains(line, bad) {
+					t.Errorf("line still contains %q: %s", bad, line)
+				}
+			}
+			if tt.wantExact != "" && line != tt.wantExact {
+				t.Errorf("got %q, want %q", line, tt.wantExact)
+			}
+		})
+	}
 }

@@ -5,75 +5,126 @@ import (
 	"testing"
 )
 
-func TestBuildOptArgsDefaultsPipeline(t *testing.T) {
-	args := BuildOptArgs("in.bc", "out.ll", "", "")
-	want := []string{"-passes=" + DefaultPassPipeline, "-S", "in.bc", "-o", "out.ll"}
-	if len(args) != len(want) {
-		t.Fatalf("arg count: got=%d want=%d", len(args), len(want))
-	}
-	for i := range want {
-		if args[i] != want[i] {
-			t.Fatalf("args[%d]: got=%q want=%q", i, args[i], want[i])
-		}
-	}
-}
-
-func TestBuildOptArgsUsesProfile(t *testing.T) {
+func TestBuildOptArgs(t *testing.T) {
 	tests := []struct {
-		profile string
-		wantSub string
+		name      string
+		pipeline  string
+		profile   string
+		wantFirst string
+		wantSub   string
+		wantLen   int
 	}{
-		{"conservative", "default<O1>"},
-		{"default", "default<Os>"},
-		{"aggressive", "default<O2>"},
-		{"verifier-safe", "function(sroa,"},
+		{
+			name:      "defaults pipeline",
+			wantFirst: "-passes=" + DefaultPassPipeline,
+			wantLen:   5,
+		},
+		{
+			name:    "conservative profile",
+			profile: "conservative",
+			wantSub: "default<O1>",
+		},
+		{
+			name:    "default profile",
+			profile: "default",
+			wantSub: "default<Os>",
+		},
+		{
+			name:    "aggressive profile",
+			profile: "aggressive",
+			wantSub: "default<O2>",
+		},
+		{
+			name:    "verifier-safe profile",
+			profile: "verifier-safe",
+			wantSub: "function(sroa,",
+		},
+		{
+			name:      "explicit pipeline overrides profile",
+			pipeline:  "function(dce)",
+			profile:   "aggressive",
+			wantFirst: "-passes=function(dce)",
+		},
 	}
 	for _, tt := range tests {
-		t.Run(tt.profile, func(t *testing.T) {
-			args := BuildOptArgs("in.bc", "out.ll", "", tt.profile)
-			if !strings.Contains(args[0], tt.wantSub) {
-				t.Fatalf("got %q, want substring %q", args[0], tt.wantSub)
+		t.Run(tt.name, func(t *testing.T) {
+			args := BuildOptArgs("in.bc", "out.ll", tt.pipeline, tt.profile)
+			if tt.wantFirst != "" && args[0] != tt.wantFirst {
+				t.Fatalf("args[0] = %q, want %q", args[0], tt.wantFirst)
+			}
+			if tt.wantSub != "" && !strings.Contains(args[0], tt.wantSub) {
+				t.Fatalf("args[0] = %q, want substring %q", args[0], tt.wantSub)
+			}
+			if tt.wantLen > 0 && len(args) != tt.wantLen {
+				t.Fatalf("arg count: got=%d want=%d", len(args), tt.wantLen)
 			}
 		})
 	}
 }
 
-func TestBuildOptArgsExplicitPipelineOverridesProfile(t *testing.T) {
-	args := BuildOptArgs("in.bc", "out.ll", "function(dce)", "aggressive")
-	if args[0] != "-passes=function(dce)" {
-		t.Fatalf("explicit pipeline not used: got %q", args[0])
+func TestOptProfiles(t *testing.T) {
+	tests := []struct {
+		name  string
+		check func(t *testing.T)
+	}{
+		{
+			name: "default pipeline is Os",
+			check: func(t *testing.T) {
+				t.Helper()
+				if DefaultPassPipeline != "default<Os>" {
+					t.Fatalf("DefaultPassPipeline should be Os for BPF, got %q", DefaultPassPipeline)
+				}
+			},
+		},
+		{
+			name: "all profiles resolvable",
+			check: func(t *testing.T) {
+				t.Helper()
+				for name, pipeline := range profiles {
+					if pipeline == "" {
+						t.Errorf("profile %q has empty pipeline", name)
+					}
+				}
+			},
+		},
 	}
-}
-
-func TestDefaultPipelineIsOs(t *testing.T) {
-	if DefaultPassPipeline != "default<Os>" {
-		t.Fatalf("DefaultPassPipeline should be Os for BPF, got %q", DefaultPassPipeline)
-	}
-}
-
-func TestAllProfilesResolvable(t *testing.T) {
-	for name, pipeline := range profiles {
-		if pipeline == "" {
-			t.Errorf("profile %q has empty pipeline", name)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.check(t)
+		})
 	}
 }
 
 func TestVerifierSafePipeline(t *testing.T) {
-	t.Run("excludes harmful passes", func(t *testing.T) {
-		for _, pass := range []string{"loop-unroll", "loop-vectorize", "slp-vectorize", "loop-idiom"} {
-			if strings.Contains(VerifierSafePipeline, pass) {
-				t.Errorf("should not contain %q", pass)
+	tests := []struct {
+		name    string
+		pass    string
+		present bool
+	}{
+		{"excludes loop-unroll", "loop-unroll", false},
+		{"excludes loop-vectorize", "loop-vectorize", false},
+		{"excludes slp-vectorize", "slp-vectorize", false},
+		{"excludes loop-idiom", "loop-idiom", false},
+		{"includes sroa", "sroa", true},
+		{"includes instcombine", "instcombine", true},
+		{"includes simplifycfg", "simplifycfg", true},
+		{"includes gvn", "gvn", true},
+		{"includes dse", "dse", true},
+		{"includes adce", "adce", true},
+		{"includes sccp", "sccp", true},
+		{"includes mem2reg", "mem2reg", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if strings.Contains(VerifierSafePipeline, tt.pass) != tt.present {
+				if tt.present {
+					t.Errorf("should contain %q", tt.pass)
+				} else {
+					t.Errorf("should not contain %q", tt.pass)
+				}
 			}
-		}
-	})
-	t.Run("includes beneficial passes", func(t *testing.T) {
-		for _, pass := range []string{"sroa", "instcombine", "simplifycfg", "gvn", "dse", "adce", "sccp", "mem2reg"} {
-			if !strings.Contains(VerifierSafePipeline, pass) {
-				t.Errorf("should contain %q", pass)
-			}
-		}
-	})
+		})
+	}
 }
 
 func TestValidatePassFlag(t *testing.T) {

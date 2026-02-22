@@ -36,7 +36,15 @@ define void @foo() {
 }
 
 func TestCleanup(t *testing.T) {
-	input := strings.Split(strings.TrimSpace(`
+	tests := []struct {
+		name        string
+		ir          string
+		wantContain []string
+		notContain  []string
+	}{
+		{
+			name: "removes unused declares and attrs",
+			ir: `
 ; Function Attrs: nounwind
 declare void @unused_func()
 
@@ -50,23 +58,26 @@ entry:
 
 attributes #0 = { nounwind }
 attributes #4 = { nounwind }
-`), "\n")
-
-	got := cleanup(input)
-	text := strings.Join(got, "\n")
-
-	for _, check := range []struct {
-		contains bool
-		substr   string
-		desc     string
-	}{
-		{false, "@unused_func", "unused declare not removed"},
-		{false, "attributes #0", "unused attribute group not removed"},
-		{true, "@llvm.memset", "referenced declare removed"},
-		{true, "attributes #4", "referenced attribute group removed"},
-	} {
-		if strings.Contains(text, check.substr) != check.contains {
-			t.Error(check.desc)
-		}
+`,
+			wantContain: []string{"@llvm.memset", "attributes #4"},
+			notContain:  []string{"@unused_func", "attributes #0"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := strings.Split(strings.TrimSpace(tt.ir), "\n")
+			got := cleanup(input)
+			text := strings.Join(got, "\n")
+			for _, want := range tt.wantContain {
+				if !strings.Contains(text, want) {
+					t.Errorf("output missing %q", want)
+				}
+			}
+			for _, bad := range tt.notContain {
+				if strings.Contains(text, bad) {
+					t.Errorf("output should not contain %q", bad)
+				}
+			}
+		})
 	}
 }

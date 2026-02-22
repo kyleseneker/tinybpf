@@ -137,58 +137,101 @@ func TestRunHelp(t *testing.T) {
 
 func TestRunVersion(t *testing.T) {
 	tests := []struct {
-		name string
-		args []string
+		name        string
+		args        []string
+		setup       func(t *testing.T)
+		wantContain string
 	}{
-		{"version subcommand", []string{"version"}},
-		{"--version flag", []string{"--version"}},
+		{
+			name:        "version subcommand",
+			args:        []string{"version"},
+			wantContain: "tinybpf",
+		},
+		{
+			name:        "--version flag",
+			args:        []string{"--version"},
+			wantContain: "tinybpf",
+		},
+		{
+			name: "shows injected version variable",
+			args: []string{"version"},
+			setup: func(t *testing.T) {
+				t.Helper()
+				old := Version
+				Version = "v0.1.0-test"
+				t.Cleanup(func() { Version = old })
+			},
+			wantContain: "v0.1.0-test",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.setup != nil {
+				tt.setup(t)
+			}
 			stdout, _, code := runCLI(t, tt.args...)
 			if code != 0 {
 				t.Fatalf("exit code: got %d, want 0", code)
 			}
-			if !strings.Contains(stdout, "tinybpf") {
-				t.Fatalf("expected version output, got: %q", stdout)
+			if !strings.Contains(stdout, tt.wantContain) {
+				t.Fatalf("expected %q in output, got: %q", tt.wantContain, stdout)
 			}
 		})
 	}
 }
 
-func TestRunVersionShowsVariable(t *testing.T) {
-	old := Version
-	Version = "v0.1.0-test"
-	defer func() { Version = old }()
-
-	stdout, _, code := runCLI(t, "version")
-	if code != 0 {
-		t.Fatalf("exit code: got %d, want 0", code)
-	}
-	if !strings.Contains(stdout, "v0.1.0-test") {
-		t.Fatalf("expected injected version, got: %q", stdout)
-	}
-}
-
 func TestMultiStringFlag(t *testing.T) {
-	t.Run("basic usage", func(t *testing.T) {
-		var m multiStringFlag
-		m.Set("one")
-		m.Set("two")
-		if len(m) != 2 || m[0] != "one" || m[1] != "two" {
-			t.Fatalf("unexpected: %v", m)
-		}
-		if s := m.String(); s != "one,two" {
-			t.Fatalf("unexpected String(): %q", s)
-		}
-	})
-
-	t.Run("rejects empty", func(t *testing.T) {
-		var m multiStringFlag
-		for _, v := range []string{"", "   "} {
-			if err := m.Set(v); err == nil {
-				t.Fatalf("expected error for %q", v)
+	tests := []struct {
+		name    string
+		inputs  []string
+		wantErr bool
+		check   func(t *testing.T, m multiStringFlag)
+	}{
+		{
+			name:   "basic usage",
+			inputs: []string{"one", "two"},
+			check: func(t *testing.T, m multiStringFlag) {
+				t.Helper()
+				if len(m) != 2 || m[0] != "one" || m[1] != "two" {
+					t.Fatalf("unexpected: %v", m)
+				}
+				if s := m.String(); s != "one,two" {
+					t.Fatalf("unexpected String(): %q", s)
+				}
+			},
+		},
+		{
+			name:    "rejects empty",
+			inputs:  []string{""},
+			wantErr: true,
+		},
+		{
+			name:    "rejects whitespace",
+			inputs:  []string{"   "},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var m multiStringFlag
+			var lastErr error
+			for _, v := range tt.inputs {
+				if err := m.Set(v); err != nil {
+					lastErr = err
+				}
 			}
-		}
-	})
+			if tt.wantErr {
+				if lastErr == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if lastErr != nil {
+				t.Fatal(lastErr)
+			}
+			if tt.check != nil {
+				tt.check(t, m)
+			}
+		})
+	}
 }

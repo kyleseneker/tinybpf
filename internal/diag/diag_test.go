@@ -12,6 +12,7 @@ func TestErrorFormat(t *testing.T) {
 		err     *Error
 		want    []string
 		notWant []string
+		check   func(t *testing.T, err *Error)
 	}{
 		{
 			name: "full",
@@ -41,6 +42,16 @@ func TestErrorFormat(t *testing.T) {
 				"--- hint ---",
 			},
 		},
+		{
+			name: "unwrap exposes inner error",
+			err:  &Error{Stage: StageOpt, Err: errors.New("root cause")},
+			check: func(t *testing.T, err *Error) {
+				t.Helper()
+				if !errors.Is(err, err.Err) {
+					t.Fatal("Unwrap should expose inner error")
+				}
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -55,15 +66,10 @@ func TestErrorFormat(t *testing.T) {
 					t.Errorf("should not include %q when empty", nw)
 				}
 			}
+			if tt.check != nil {
+				tt.check(t, tt.err)
+			}
 		})
-	}
-}
-
-func TestErrorUnwrap(t *testing.T) {
-	inner := errors.New("root cause")
-	err := &Error{Stage: StageOpt, Err: inner}
-	if !errors.Is(err, inner) {
-		t.Fatal("Unwrap should expose inner error")
 	}
 }
 

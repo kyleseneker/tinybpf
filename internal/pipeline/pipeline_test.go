@@ -208,257 +208,307 @@ func TestRunStageFailures(t *testing.T) {
 	}
 }
 
-func TestRunTransformError(t *testing.T) {
-	env := newPipelineEnv(t)
-
-	os.WriteFile(env.Input, []byte("@x = global i32 0\n"), 0o644)
-
-	_, err := Run(context.Background(), env.cfg())
-	if err == nil {
-		t.Fatal("expected transform error")
-	}
-	if !diag.IsStage(err, diag.StageTransform) {
-		t.Fatalf("expected transform stage error, got: %v", err)
-	}
-}
-
-func TestRunElfcheckError(t *testing.T) {
-	env := newPipelineEnv(t)
-	makeFakeTool(t, env.ToolDir, "llc", `
+func TestRunErrors(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T, env *pipelineEnv, cfg *Config)
+		wantStage diag.Stage
+	}{
+		{
+			name: "transform error",
+			setup: func(t *testing.T, env *pipelineEnv, cfg *Config) {
+				t.Helper()
+				os.WriteFile(env.Input, []byte("@x = global i32 0\n"), 0o644)
+			},
+			wantStage: diag.StageTransform,
+		},
+		{
+			name: "elfcheck error",
+			setup: func(t *testing.T, env *pipelineEnv, cfg *Config) {
+				t.Helper()
+				makeFakeTool(t, env.ToolDir, "llc", `
 out=""
 for arg in "$@"; do case "$arg" in -o) n=1;; *) [ "${n:-}" = 1 ] && { out="$arg"; n=0; };; esac; done
 echo "not-an-elf" > "$out"; exit 0`)
-
-	_, err := Run(context.Background(), env.cfg())
-	if err == nil {
-		t.Fatal("expected elfcheck error")
+			},
+		},
+		{
+			name: "make workdir error",
+			setup: func(t *testing.T, _ *pipelineEnv, cfg *Config) {
+				t.Helper()
+				cfg.TempDir = "/dev/null/impossible"
+			},
+			wantStage: diag.StageInput,
+		},
+		{
+			name: "normalize error",
+			setup: func(t *testing.T, env *pipelineEnv, cfg *Config) {
+				t.Helper()
+				objInput := filepath.Join(env.Dir, "input.o")
+				os.WriteFile(objInput, []byte("obj-data"), 0o644)
+				cfg.Inputs = []string{objInput}
+			},
+		},
+		{
+			name: "output mkdirall error",
+			setup: func(t *testing.T, _ *pipelineEnv, cfg *Config) {
+				t.Helper()
+				cfg.Output = "/dev/null/impossible/out.o"
+			},
+			wantStage: diag.StageFinalize,
+		},
+		{
+			name: "BTF failure",
+			setup: func(t *testing.T, env *pipelineEnv, cfg *Config) {
+				t.Helper()
+				makeFakeTool(t, env.ToolDir, "pahole", "echo btf-fail >&2; exit 1")
+				cfg.EnableBTF = true
+				cfg.Tools.Pahole = filepath.Join(env.ToolDir, "pahole")
+			},
+			wantStage: diag.StageBTF,
+		},
+		{
+			name: "invalid custom passes",
+			setup: func(t *testing.T, _ *pipelineEnv, cfg *Config) {
+				t.Helper()
+				cfg.CustomPasses = []string{"-inline;rm -rf /"}
+			},
+			wantStage: diag.StageOpt,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newPipelineEnv(t)
+			cfg := env.cfg()
+			if tt.setup != nil {
+				tt.setup(t, env, &cfg)
+			}
+			_, err := Run(context.Background(), cfg)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if tt.wantStage != "" && !diag.IsStage(err, tt.wantStage) {
+				t.Fatalf("expected stage %v, got: %v", tt.wantStage, err)
+			}
+		})
 	}
 }
 
-func TestRunMakeWorkDirError(t *testing.T) {
-	env := newPipelineEnv(t)
-	cfg := env.cfg()
-	cfg.TempDir = "/dev/null/impossible"
-
-	_, err := Run(context.Background(), cfg)
-	if err == nil {
-		t.Fatal("expected error")
+func TestRunSuccess(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, env *pipelineEnv, cfg *Config)
+		check func(t *testing.T, artifacts *Artifacts, stdout string)
+	}{
+		{
+			name: "full pipeline fake tools",
+			setup: func(t *testing.T, _ *pipelineEnv, cfg *Config) {
+				t.Helper()
+				cfg.Sections = map[string]string{"handle_connect": "kprobe/sys_connect"}
+				cfg.Verbose = true
+			},
+			check: func(t *testing.T, a *Artifacts, stdout string) {
+				t.Helper()
+				if !strings.Contains(stdout, "[llvm-link]") {
+					t.Errorf("expected verbose stage output, got: %q", stdout)
+				}
+			},
+		},
+		{
+			name: "pipeline with BTF",
+			setup: func(t *testing.T, env *pipelineEnv, cfg *Config) {
+				t.Helper()
+				makeFakeTool(t, env.ToolDir, "pahole", "exit 0")
+				cfg.EnableBTF = true
+				cfg.Tools.Pahole = filepath.Join(env.ToolDir, "pahole")
+			},
+		},
+		{
+			name: "pipeline with custom passes",
+			setup: func(t *testing.T, _ *pipelineEnv, cfg *Config) {
+				t.Helper()
+				cfg.CustomPasses = []string{"-inline", "-dse"}
+			},
+		},
 	}
-	if !diag.IsStage(err, diag.StageInput) {
-		t.Fatalf("expected input stage error, got: %v", err)
-	}
-}
-
-func TestRunNormalizeError(t *testing.T) {
-	env := newPipelineEnv(t)
-	cfg := env.cfg()
-	objInput := filepath.Join(env.Dir, "input.o")
-	os.WriteFile(objInput, []byte("obj-data"), 0o644)
-	cfg.Inputs = []string{objInput}
-
-	_, err := Run(context.Background(), cfg)
-	if err == nil {
-		t.Fatal("expected normalization error for .o without objcopy")
-	}
-}
-
-func TestRunOutputMkdirAllError(t *testing.T) {
-	env := newPipelineEnv(t)
-	cfg := env.cfg()
-	cfg.Output = "/dev/null/impossible/out.o"
-
-	_, err := Run(context.Background(), cfg)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !diag.IsStage(err, diag.StageFinalize) {
-		t.Fatalf("expected finalize stage error, got: %v", err)
-	}
-}
-
-func TestRunFullPipelineFakeTools(t *testing.T) {
-	env := newPipelineEnv(t)
-	cfg := env.cfg()
-	cfg.Sections = map[string]string{"handle_connect": "kprobe/sys_connect"}
-	cfg.Verbose = true
-
-	stdout := cfg.Stdout.(*bytes.Buffer)
-	artifacts, err := Run(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("pipeline failed: %v", err)
-	}
-	if artifacts == nil {
-		t.Fatal("expected artifacts")
-	}
-	if _, err := os.Stat(env.Output); err != nil {
-		t.Fatalf("output not created: %v", err)
-	}
-	if !strings.Contains(stdout.String(), "[llvm-link]") {
-		t.Errorf("expected verbose stage output, got: %q", stdout.String())
-	}
-}
-
-func TestRunPipelineWithBTF(t *testing.T) {
-	env := newPipelineEnv(t)
-	makeFakeTool(t, env.ToolDir, "pahole", "exit 0")
-	cfg := env.cfg()
-	cfg.EnableBTF = true
-	cfg.Tools.Pahole = filepath.Join(env.ToolDir, "pahole")
-
-	_, err := Run(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("pipeline with BTF failed: %v", err)
-	}
-}
-
-func TestRunPipelineWithBTFFailure(t *testing.T) {
-	env := newPipelineEnv(t)
-	makeFakeTool(t, env.ToolDir, "pahole", "echo btf-fail >&2; exit 1")
-	cfg := env.cfg()
-	cfg.EnableBTF = true
-	cfg.Tools.Pahole = filepath.Join(env.ToolDir, "pahole")
-
-	_, err := Run(context.Background(), cfg)
-	if err == nil {
-		t.Fatal("expected BTF failure")
-	}
-	if !diag.IsStage(err, diag.StageBTF) {
-		t.Fatalf("expected BTF stage error, got: %v", err)
-	}
-}
-
-func TestRunPipelineWithCustomPasses(t *testing.T) {
-	env := newPipelineEnv(t)
-	cfg := env.cfg()
-	cfg.CustomPasses = []string{"-inline", "-dse"}
-
-	_, err := Run(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("pipeline with custom passes failed: %v", err)
-	}
-}
-
-func TestRunPipelineWithInvalidCustomPasses(t *testing.T) {
-	env := newPipelineEnv(t)
-	cfg := env.cfg()
-	cfg.CustomPasses = []string{"-inline;rm -rf /"}
-
-	_, err := Run(context.Background(), cfg)
-	if err == nil {
-		t.Fatal("expected error for invalid custom passes")
-	}
-	if !diag.IsStage(err, diag.StageOpt) {
-		t.Fatalf("expected opt stage error, got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := newPipelineEnv(t)
+			cfg := env.cfg()
+			if tt.setup != nil {
+				tt.setup(t, env, &cfg)
+			}
+			stdout := cfg.Stdout.(*bytes.Buffer)
+			artifacts, err := Run(context.Background(), cfg)
+			if err != nil {
+				t.Fatalf("pipeline failed: %v", err)
+			}
+			if artifacts == nil {
+				t.Fatal("expected artifacts")
+			}
+			if _, err := os.Stat(env.Output); err != nil {
+				t.Fatalf("output not created: %v", err)
+			}
+			if tt.check != nil {
+				tt.check(t, artifacts, stdout.String())
+			}
+		})
 	}
 }
 
 func TestMakeWorkDir(t *testing.T) {
-	t.Run("explicit dir", func(t *testing.T) {
-		base := filepath.Join(t.TempDir(), "explicit")
-		dir, cleanup, err := makeWorkDir(base, false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cleanup()
-		if dir != base {
-			t.Fatalf("expected %s, got %s", base, dir)
-		}
-	})
-
-	t.Run("explicit dir permissions", func(t *testing.T) {
-		base := filepath.Join(t.TempDir(), "workdir")
-		dir, cleanup, err := makeWorkDir(base, false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer cleanup()
-		info, _ := os.Stat(dir)
-		if perm := info.Mode().Perm(); perm != 0o700 {
-			t.Fatalf("expected 0700, got %o", perm)
-		}
-	})
-
-	t.Run("temp dir cleanup", func(t *testing.T) {
-		dir, cleanup, err := makeWorkDir("", false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cleanup()
-		if _, err := os.Stat(dir); err == nil {
-			t.Fatal("temp dir should be removed after cleanup")
-		}
-	})
-
-	t.Run("temp dir keepTemp", func(t *testing.T) {
-		dir, cleanup, err := makeWorkDir("", true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer os.RemoveAll(dir)
-		cleanup()
-		if _, err := os.Stat(dir); err != nil {
-			t.Fatal("temp dir should be kept with keepTemp")
-		}
-	})
-
-	t.Run("bad path", func(t *testing.T) {
-		_, _, err := makeWorkDir("/dev/null/impossible", false)
-		if err == nil {
-			t.Fatal("expected error")
-		}
-	})
-
-	t.Run("bad TMPDIR", func(t *testing.T) {
-		t.Setenv("TMPDIR", "/does/not/exist/tmpdir")
-		_, _, err := makeWorkDir("", false)
-		if err == nil {
-			t.Fatal("expected error for bad TMPDIR")
-		}
-	})
-
-	t.Run("inside file", func(t *testing.T) {
-		tmp := t.TempDir()
-		file := filepath.Join(tmp, "not-a-dir")
-		os.WriteFile(file, []byte("x"), 0o644)
-		_, _, err := makeWorkDir(filepath.Join(file, "sub"), false)
-		if err == nil {
-			t.Fatal("expected error creating dir inside a file")
-		}
-	})
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T) (dir string, keepTemp bool)
+		wantErr bool
+		check   func(t *testing.T, dir string, cleanup func())
+	}{
+		{
+			name:  "explicit dir",
+			setup: func(t *testing.T) (string, bool) { t.Helper(); return filepath.Join(t.TempDir(), "explicit"), false },
+			check: func(t *testing.T, dir string, cleanup func()) {
+				t.Helper()
+				defer cleanup()
+				if !strings.HasSuffix(dir, "explicit") {
+					t.Fatal("expected explicit dir name")
+				}
+			},
+		},
+		{
+			name:  "explicit dir permissions",
+			setup: func(t *testing.T) (string, bool) { t.Helper(); return filepath.Join(t.TempDir(), "workdir"), false },
+			check: func(t *testing.T, dir string, cleanup func()) {
+				t.Helper()
+				defer cleanup()
+				info, _ := os.Stat(dir)
+				if perm := info.Mode().Perm(); perm != 0o700 {
+					t.Fatalf("expected 0700, got %o", perm)
+				}
+			},
+		},
+		{
+			name:  "temp dir cleanup",
+			setup: func(t *testing.T) (string, bool) { t.Helper(); return "", false },
+			check: func(t *testing.T, dir string, cleanup func()) {
+				t.Helper()
+				cleanup()
+				if _, err := os.Stat(dir); err == nil {
+					t.Fatal("temp dir should be removed after cleanup")
+				}
+			},
+		},
+		{
+			name:  "temp dir keepTemp",
+			setup: func(t *testing.T) (string, bool) { t.Helper(); return "", true },
+			check: func(t *testing.T, dir string, cleanup func()) {
+				t.Helper()
+				defer os.RemoveAll(dir)
+				cleanup()
+				if _, err := os.Stat(dir); err != nil {
+					t.Fatal("temp dir should be kept with keepTemp")
+				}
+			},
+		},
+		{
+			name:    "bad path",
+			setup:   func(t *testing.T) (string, bool) { t.Helper(); return "/dev/null/impossible", false },
+			wantErr: true,
+		},
+		{
+			name: "bad TMPDIR",
+			setup: func(t *testing.T) (string, bool) {
+				t.Helper()
+				t.Setenv("TMPDIR", "/does/not/exist/tmpdir")
+				return "", false
+			},
+			wantErr: true,
+		},
+		{
+			name: "inside file",
+			setup: func(t *testing.T) (string, bool) {
+				t.Helper()
+				tmp := t.TempDir()
+				file := filepath.Join(tmp, "not-a-dir")
+				os.WriteFile(file, []byte("x"), 0o644)
+				return filepath.Join(file, "sub"), false
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dirArg, keepTemp := tt.setup(t)
+			dir, cleanup, err := makeWorkDir(dirArg, keepTemp)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.check != nil {
+				tt.check(t, dir, cleanup)
+			}
+		})
+	}
 }
 
 func TestRunStage(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		bin := makeFakeTool(t, t.TempDir(), "ok-tool", "echo done")
-		cfg := Config{Timeout: 5 * time.Second, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
-		if err := runStage(context.Background(), cfg, diag.StageLink, bin, nil, "hint"); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	t.Run("verbose", func(t *testing.T) {
-		bin := makeFakeTool(t, t.TempDir(), "verbose-tool", "echo out; echo err >&2")
-		var stdout, stderr bytes.Buffer
-		cfg := Config{Timeout: 5 * time.Second, Verbose: true, Stdout: &stdout, Stderr: &stderr}
-		if err := runStage(context.Background(), cfg, diag.StageLink, bin, nil, "hint"); err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(stdout.String(), "llvm-link") {
-			t.Errorf("expected stage name in verbose output, got: %q", stdout.String())
-		}
-	})
-
-	t.Run("failure", func(t *testing.T) {
-		bin := makeFakeTool(t, t.TempDir(), "fail-tool", "echo bad >&2; exit 1")
-		cfg := Config{Timeout: 5 * time.Second, Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}}
-		err := runStage(context.Background(), cfg, diag.StageLink, bin, nil, "fix it")
-		if err == nil {
-			t.Fatal("expected error")
-		}
-		if !diag.IsStage(err, diag.StageLink) {
-			t.Fatalf("expected link stage error, got: %v", err)
-		}
-	})
+	tests := []struct {
+		name      string
+		script    string
+		verbose   bool
+		wantErr   bool
+		wantStage diag.Stage
+		check     func(t *testing.T, stdout string)
+	}{
+		{
+			name:   "success",
+			script: "echo done",
+		},
+		{
+			name:    "verbose",
+			script:  "echo out; echo err >&2",
+			verbose: true,
+			check: func(t *testing.T, stdout string) {
+				t.Helper()
+				if !strings.Contains(stdout, "llvm-link") {
+					t.Errorf("expected stage name in verbose output, got: %q", stdout)
+				}
+			},
+		},
+		{
+			name:      "failure",
+			script:    "echo bad >&2; exit 1",
+			wantErr:   true,
+			wantStage: diag.StageLink,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bin := makeFakeTool(t, t.TempDir(), "test-tool", tt.script)
+			var stdout, stderr bytes.Buffer
+			cfg := Config{Timeout: 5 * time.Second, Verbose: tt.verbose, Stdout: &stdout, Stderr: &stderr}
+			err := runStage(context.Background(), cfg, diag.StageLink, bin, nil, "hint")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if tt.wantStage != "" && !diag.IsStage(err, tt.wantStage) {
+					t.Fatalf("expected stage %v, got: %v", tt.wantStage, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.check != nil {
+				tt.check(t, stdout.String())
+			}
+		})
+	}
 }
 
 func TestBuildLLCArgs(t *testing.T) {
@@ -475,51 +525,113 @@ func TestBuildLLCArgs(t *testing.T) {
 }
 
 func TestCopyFile(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		tmp := t.TempDir()
-		src := filepath.Join(tmp, "src")
-		dst := filepath.Join(tmp, "dst")
-		os.WriteFile(src, []byte("hello"), 0o644)
-		if err := copyFile(src, dst); err != nil {
-			t.Fatal(err)
-		}
-		got, _ := os.ReadFile(dst)
-		if string(got) != "hello" {
-			t.Fatalf("content mismatch: %q", got)
-		}
-	})
-
-	t.Run("missing source", func(t *testing.T) {
-		if err := copyFile("/does/not/exist", filepath.Join(t.TempDir(), "dst")); err == nil {
-			t.Fatal("expected error")
-		}
-	})
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T) (src, dst string)
+		wantErr bool
+		check   func(t *testing.T, dst string)
+	}{
+		{
+			name: "success",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				tmp := t.TempDir()
+				src := filepath.Join(tmp, "src")
+				os.WriteFile(src, []byte("hello"), 0o644)
+				return src, filepath.Join(tmp, "dst")
+			},
+			check: func(t *testing.T, dst string) {
+				t.Helper()
+				got, _ := os.ReadFile(dst)
+				if string(got) != "hello" {
+					t.Fatalf("content mismatch: %q", got)
+				}
+			},
+		},
+		{
+			name: "missing source",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				return "/does/not/exist", filepath.Join(t.TempDir(), "dst")
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src, dst := tt.setup(t)
+			err := copyFile(src, dst)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.check != nil {
+				tt.check(t, dst)
+			}
+		})
+	}
 }
 
 func TestStripHostPaths(t *testing.T) {
-	t.Run("replaces temp dir", func(t *testing.T) {
-		tmp := t.TempDir()
-		ll := filepath.Join(tmp, "test.ll")
-		content := `source_filename = "` + tmp + `/input.ll"` + "\ndefine void @f() { ret void }\n"
-		os.WriteFile(ll, []byte(content), 0o644)
-
-		if err := stripHostPaths(ll, tmp); err != nil {
-			t.Fatal(err)
-		}
-		got, _ := os.ReadFile(ll)
-		if strings.Contains(string(got), tmp) {
-			t.Fatalf("temp dir not stripped: %s", got)
-		}
-		if !strings.Contains(string(got), "./input.ll") {
-			t.Fatalf("expected relative path: %s", got)
-		}
-	})
-
-	t.Run("missing file", func(t *testing.T) {
-		if err := stripHostPaths("/does/not/exist.ll", "/tmp"); err == nil {
-			t.Fatal("expected error")
-		}
-	})
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T) (ll, workDir string)
+		wantErr bool
+		check   func(t *testing.T, ll, workDir string)
+	}{
+		{
+			name: "replaces temp dir",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				tmp := t.TempDir()
+				ll := filepath.Join(tmp, "test.ll")
+				content := `source_filename = "` + tmp + `/input.ll"` + "\ndefine void @f() { ret void }\n"
+				os.WriteFile(ll, []byte(content), 0o644)
+				return ll, tmp
+			},
+			check: func(t *testing.T, ll, workDir string) {
+				t.Helper()
+				got, _ := os.ReadFile(ll)
+				if strings.Contains(string(got), workDir) {
+					t.Fatalf("temp dir not stripped: %s", got)
+				}
+				if !strings.Contains(string(got), "./input.ll") {
+					t.Fatalf("expected relative path: %s", got)
+				}
+			},
+		},
+		{
+			name: "missing file",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				return "/does/not/exist.ll", "/tmp"
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ll, workDir := tt.setup(t)
+			err := stripHostPaths(ll, workDir)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.check != nil {
+				tt.check(t, ll, workDir)
+			}
+		})
+	}
 }
 
 func TestParseSectionFlags(t *testing.T) {
@@ -565,7 +677,7 @@ func TestParseSectionFlags(t *testing.T) {
 	}
 }
 
-func TestRunE2ESmoke(t *testing.T) {
+func TestRunE2E(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("BPF validation requires Linux")
 	}
@@ -576,42 +688,41 @@ func TestRunE2ESmoke(t *testing.T) {
 	}
 
 	wd, _ := os.Getwd()
-	input := filepath.Join(wd, "..", "..", "testdata", "minimal.ll")
-	if _, err := os.Stat(input); err != nil {
-		t.Fatalf("missing test fixture: %v", err)
-	}
 
-	output := filepath.Join(t.TempDir(), "prog.o")
-	artifacts, err := Run(context.Background(), Config{
-		Inputs: []string{input}, Output: output, Timeout: 30 * time.Second,
-	})
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name      string
+		fixture   string
+		wantErr   bool
+		wantStage diag.Stage
+	}{
+		{"smoke", "minimal.ll", false, ""},
+		{"invalid IR", "invalid.ll", true, diag.StageLink},
 	}
-	if artifacts == nil {
-		t.Fatal("expected artifacts")
-	}
-}
-
-func TestRunInvalidIRFixture(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("BPF validation requires Linux")
-	}
-	for _, tool := range []string{"llvm-link", "opt", "llc"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			t.Skipf("missing %s", tool)
-		}
-	}
-
-	wd, _ := os.Getwd()
-	input := filepath.Join(wd, "..", "..", "testdata", "invalid.ll")
-	_, err := Run(context.Background(), Config{
-		Inputs: []string{input}, Output: filepath.Join(t.TempDir(), "prog.o"),
-	})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !diag.IsStage(err, diag.StageLink) {
-		t.Fatalf("expected link stage error, got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := filepath.Join(wd, "..", "..", "testdata", tt.fixture)
+			if _, err := os.Stat(input); err != nil {
+				t.Fatalf("missing test fixture: %v", err)
+			}
+			output := filepath.Join(t.TempDir(), "prog.o")
+			artifacts, err := Run(context.Background(), Config{
+				Inputs: []string{input}, Output: output, Timeout: 30 * time.Second,
+			})
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if tt.wantStage != "" && !diag.IsStage(err, tt.wantStage) {
+					t.Fatalf("expected stage %v, got: %v", tt.wantStage, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if artifacts == nil {
+				t.Fatal("expected artifacts")
+			}
+		})
 	}
 }
