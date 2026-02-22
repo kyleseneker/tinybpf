@@ -43,13 +43,13 @@ func TestRun(t *testing.T) {
 					"//go:build !tinygo",
 					"package main",
 				},
-			"Makefile": {
-				"tinybpf build",
-				"--section xdp_filter=",
-				"SECTION :=",
-				"bpf/xdp_filter.go",
-				"xdp_filter.bpf.o",
-			},
+				"Makefile": {
+					"tinybpf build",
+					"--section xdp_filter=",
+					"SECTION :=",
+					"bpf/xdp_filter.go",
+					"xdp_filter.bpf.o",
+				},
 			},
 		},
 		{
