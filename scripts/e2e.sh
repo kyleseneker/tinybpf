@@ -42,6 +42,7 @@ PIN_PATH="/sys/fs/bpf/tinybpf_validate"
 PASSED=0
 FAILED=0
 SKIPPED=0
+LOAD_RC=0
 
 mkdir -p "${BUILD_DIR}" "${LOG_DIR}"
 
