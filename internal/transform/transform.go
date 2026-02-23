@@ -105,9 +105,9 @@ func camelToSnake(s string) string {
 			if i > 0 {
 				b.WriteByte('_')
 			}
-			b.WriteByte(byte(c - 'A' + 'a'))
+			b.WriteRune(c + 'a' - 'A')
 		} else {
-			b.WriteByte(byte(c))
+			b.WriteRune(c)
 		}
 	}
 	return b.String()
