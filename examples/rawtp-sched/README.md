@@ -2,7 +2,7 @@
 
 A raw tracepoint exec tracer written entirely in Go, built with `tinybpf`.
 
-This example demonstrates the full lifecycle: writing a CO-RE portable eBPF program in Go, compiling it through TinyGo and `tinybpf --core`, loading it into the kernel with [`cilium/ebpf`](https://github.com/cilium/ebpf), and reading exec events from userspace.
+This example demonstrates the full lifecycle: writing a CO-RE portable eBPF program in Go, compiling it through TinyGo and `tinybpf`, loading it into the kernel with [`cilium/ebpf`](https://github.com/cilium/ebpf), and reading exec events from userspace.
 
 ## Overview
 
@@ -31,7 +31,7 @@ cmd/tracer/
 internal/
   loader/                ELF loading and raw tracepoint attachment (cilium/ebpf)
 scripts/
-  build.sh               TinyGo + tinybpf build pipeline (with --core)
+  build.sh               TinyGo + tinybpf build pipeline
 ```
 
 ## Prerequisites
@@ -65,7 +65,9 @@ The program stays attached until you press Ctrl+C.
 
 ## CO-RE portability
 
-This example uses `bpfCoreTaskStruct` -- a Go struct stub whose field offsets are resolved at load time via BTF relocations. The `--core` flag tells tinybpf to emit `llvm.preserve.struct.access.index` intrinsics for these accesses, so the compiled program works across kernel versions without recompilation.
+This example uses `bpfCoreTaskStruct` — a Go struct stub whose field offsets are resolved at load time via BTF relocations. `tinybpf` automatically detects `bpfCore*` types and emits `llvm.preserve.struct.access.index` intrinsics for these accesses, so the compiled program works across kernel versions without recompilation.
+
+The program also demonstrates `bpfCoreFieldExists` — a compile-time relocation marker that checks whether a specific field exists in the running kernel's `task_struct`. This enables conditional access patterns that gracefully handle kernel version differences.
 
 ## Troubleshooting
 

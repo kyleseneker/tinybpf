@@ -25,7 +25,6 @@ echo "[2/2] tinybpf build -> ${BUILD_DIR}/sched.bpf.o"
   "${TINYBPF_BIN}" build \
     --output "${BUILD_DIR}/sched.bpf.o" \
     --section raw_tracepoint_sched_process_exec=raw_tracepoint/sched_process_exec \
-    --core \
     --cpu "${CPU}" \
     --verbose \
     ./bpf

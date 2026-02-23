@@ -1,0 +1,48 @@
+name: Kernel Matrix
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 3" # weekly, Wednesday 06:00 UTC
+
+concurrency:
+  group: kernel-matrix-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TINYGO_VERSION: "0.40.1"
+
+jobs:
+  kernel-matrix:
+    runs-on: self-hosted
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel:
+          - "5.15"
+          - "6.1"
+          - "6.6"
+          - "6.12"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+
+      - name: Install TinyGo
+        run: |
+          wget -qO /tmp/tinygo.deb "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
+          sudo dpkg -i /tmp/tinygo.deb
+
+      - name: Install virtme-ng
+        run: pip3 install --user virtme-ng
+
+      - name: Build tinybpf
+        run: go build -o tinybpf ./cmd/tinybpf
+
+      - name: Run kernel matrix test
+        run: sudo -E env "PATH=$PATH" ./scripts/kernel-matrix.sh ${{ matrix.kernel }}

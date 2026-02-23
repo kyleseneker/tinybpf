@@ -440,6 +440,75 @@ IDs from `___BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`. The helper list is 
 |---------|-------------|---:|
 | `bpfTailCall` | `bpf_tail_call` | 12 |
 
+## CO-RE (Compile Once – Run Everywhere)
+
+CO-RE enables BPF programs to work across kernel versions without recompilation. Field offsets are resolved at load time via BTF relocations rather than hardcoded at compile time.
+
+### Portable struct access
+
+Declare a Go struct with the `bpfCore` prefix. Field offsets in the compiled ELF are resolved by the BPF loader against the running kernel's BTF:
+
+```go
+type bpfCoreTaskStruct struct {
+    Pid  int32
+    Tgid int32
+}
+```
+
+Use the struct normally in your program:
+
+```go
+var core bpfCoreTaskStruct
+bpfProbeReadKernel(unsafe.Pointer(&core), uint32(unsafe.Sizeof(core)), task)
+pid := core.Pid
+```
+
+`tinybpf` automatically detects `bpfCore*` types and emits `llvm.preserve.struct.access.index` intrinsics that the BPF loader uses to resolve field offsets at load time.
+
+### Field naming convention
+
+Go struct fields use CamelCase (`Pid`, `LoginUid`), but kernel structs use snake_case (`pid`, `login_uid`). The `sanitizeCoreFieldNames` transform automatically converts field names in BTF metadata:
+
+| Go field | Kernel BTF |
+|----------|-----------|
+| `Pid` | `pid` |
+| `Tgid` | `tgid` |
+| `LoginUid` | `login_uid` |
+
+The struct type name is also converted: `bpfCoreTaskStruct` becomes `task_struct` in BTF (the `bpfCore` prefix is stripped and the remainder is converted to snake_case).
+
+### Field and type existence checks
+
+Check whether a field or type exists in the running kernel's BTF before accessing it:
+
+```go
+//go:extern bpf_core_field_exists
+func bpfCoreFieldExists(field unsafe.Pointer) int32
+
+//go:extern bpf_core_type_exists
+func bpfCoreTypeExists(typePtr unsafe.Pointer) int32
+```
+
+Usage:
+
+```go
+if bpfCoreFieldExists(unsafe.Pointer(&core.Tgid)) != 0 {
+    ev.Tgid = uint32(core.Tgid)
+}
+```
+
+These are compile-time relocation markers, not kernel helpers. `tinybpf` rewrites them to `llvm.bpf.preserve.field.info` and `llvm.bpf.preserve.type.info` intrinsics. The BPF loader resolves them to 0 or 1 at load time.
+
+### CO-RE conventions
+
+| Convention | Details |
+|------------|---------|
+| Struct prefix | `bpfCore` — e.g. `bpfCoreTaskStruct`, `bpfCoreCredStruct` |
+| Field names | CamelCase in Go, automatically converted to snake_case for kernel BTF |
+| Activation | Automatic — no flag needed, transforms are no-ops without `bpfCore*` types |
+| Field exists | `bpfCoreFieldExists(unsafe.Pointer(&s.Field))` returns 1 if the field exists |
+| Type exists | `bpfCoreTypeExists(unsafe.Pointer(&s))` returns 1 if the type exists |
+
 ## Common patterns
 
 ### Bounded loops
@@ -547,7 +616,7 @@ C with `libbpf`/`clang` has the broadest ecosystem. `tinybpf` trades that maturi
 Not directly — BPF helpers are kernel-only symbols. Test logic in pure Go with `go test`, then integration-test the compiled `.o` with a loader on a real kernel or VM.
 
 **What does `tinybpf` actually do to the IR?**
-It runs a 13-step transformation: retarget to BPF, strip runtime, rewrite helpers, assign data and program sections, rewrite CO-RE field accesses (when --core is enabled), replace allocations, inject metadata. See [Architecture](ARCHITECTURE.md) for the full breakdown.
+It runs a 15-step transformation: retarget to BPF, strip runtime, rewrite helpers, CO-RE transforms (field access, field/type existence checks, field name mapping), assign data and program sections, replace allocations, inject metadata. See [Architecture](ARCHITECTURE.md) for the full breakdown.
 
 ## Further reading
 

@@ -53,9 +53,13 @@ func bpfGetCurrentComm(buf unsafe.Pointer, size uint32) int32
 //go:extern bpf_perf_event_output
 func bpfPerfEventOutput(ctx unsafe.Pointer, mapPtr unsafe.Pointer, flags uint64, data unsafe.Pointer, size uint32) int64
 
+//go:extern bpf_core_field_exists
+func bpfCoreFieldExists(field unsafe.Pointer) int32
+
 // raw_tracepoint_sched_process_exec fires on every execve.
 // It reads pid/tgid from the current task using CO-RE portable
-// field access, then emits an event to userspace.
+// field access. Uses bpfCoreFieldExists to conditionally read
+// tgid only when the kernel's task_struct contains it.
 //
 //export raw_tracepoint_sched_process_exec
 func raw_tracepoint_sched_process_exec(ctx unsafe.Pointer) int32 { //nolint:revive
@@ -69,7 +73,9 @@ func raw_tracepoint_sched_process_exec(ctx unsafe.Pointer) int32 { //nolint:revi
 
 	var ev execEvent
 	ev.Pid = uint32(core.Pid)
-	ev.Tgid = uint32(core.Tgid)
+	if bpfCoreFieldExists(unsafe.Pointer(&core.Tgid)) != 0 {
+		ev.Tgid = uint32(core.Tgid)
+	}
 	bpfGetCurrentComm(unsafe.Pointer(&ev.Comm), 16)
 
 	bpfPerfEventOutput(ctx, unsafe.Pointer(&events), 0xFFFFFFFF, unsafe.Pointer(&ev), uint32(unsafe.Sizeof(ev)))

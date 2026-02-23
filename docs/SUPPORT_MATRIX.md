@@ -44,6 +44,19 @@ TinyGo 0.40.x emits LLVM 20 IR. System LLVM tools (`llvm-link`, `opt`, `llc`) mu
 |--------|-------------|--------------|--------|
 | 6.8.0-100 | Ubuntu 24.04 | arm64 | Verifier accepted, tracepoint attached, events captured |
 
+## CO-RE kernel matrix
+
+CO-RE relocations are tested across active LTS kernel versions via the `kernel-matrix` CI workflow:
+
+| Kernel | LTS EOL | CO-RE status |
+|--------|---------|-------------|
+| 5.15 | Dec 2026 | Tested |
+| 6.1 | Dec 2027 | Tested |
+| 6.6 | Dec 2026 | Tested |
+| 6.12 (SLTS) | Dec 2026 | Tested |
+
+CO-RE requires a kernel with BTF support (CONFIG_DEBUG_INFO_BTF=y), which is enabled by default on most distributions since kernel 5.4+.
+
 ## Platform support
 
 | OS | Architecture | Compilation | Kernel loading |
@@ -56,12 +69,11 @@ TinyGo 0.40.x emits LLVM 20 IR. System LLVM tools (`llvm-link`, `opt`, `llc`) mu
 
 | Feature | Flag | Description |
 |---------|------|-------------|
-| IR stage dump | `--dump-ir` | Writes a numbered `.ll` file after each of the 13 transform stages |
+| IR stage dump | `--dump-ir` | Writes a numbered `.ll` file after each of the 15 transform stages |
 | Verbose logging | `-v` / `--verbose` | Stage names, commands, and timing |
 | Intermediate files | `--keep-temp` | Preserves the temp directory with all artifacts |
 | Toolchain check | `tinybpf doctor` | Checks LLVM, TinyGo, and pahole availability and versions |
 | Program type check | `--program-type` | Validates `--section` values against a known BPF program type |
-| CO-RE mode | `--core` | Rewrites bpfCore* struct accesses for portable field offsets (experimental) |
 
 ## Testing notes
 
