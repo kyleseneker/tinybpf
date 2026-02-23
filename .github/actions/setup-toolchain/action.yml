@@ -16,6 +16,7 @@ runs:
       uses: actions/setup-go@v6
       with:
         go-version: ${{ inputs.go-version }}
+        cache: false
 
     - name: Install TinyGo
       shell: bash

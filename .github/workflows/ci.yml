@@ -21,6 +21,7 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: "1.25.x"
+          cache: false
 
       - name: Vet
         run: go vet ./...
@@ -188,6 +189,7 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version: "1.25.x"
+          cache: false
 
       - name: Benchmark PR
         run: go test -bench=. -benchmem -count=6 -timeout=5m ./internal/transform/ | tee /tmp/bench-pr.txt
