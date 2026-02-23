@@ -338,6 +338,88 @@ IDs from `___BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`. The helper list is 
 | `bpfDynptrWrite` | `bpf_dynptr_write` | 202 |
 | `bpfDynptrData` | `bpf_dynptr_data` | 203 |
 
+### Seq operations
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfSeqPrintf` | `bpf_seq_printf` | 126 |
+| `bpfSeqWrite` | `bpf_seq_write` | 127 |
+| `bpfSeqPrintfBtf` | `bpf_seq_printf_btf` | 150 |
+
+### System
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfSysBpf` | `bpf_sys_bpf` | 166 |
+| `bpfBtfFindByNameKind` | `bpf_btf_find_by_name_kind` | 167 |
+| `bpfSysClose` | `bpf_sys_close` | 168 |
+
+### Sysctl
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfSysctlGetName` | `bpf_sysctl_get_name` | 101 |
+| `bpfSysctlGetCurrentValue` | `bpf_sysctl_get_current_value` | 102 |
+| `bpfSysctlGetNewValue` | `bpf_sysctl_get_new_value` | 103 |
+| `bpfSysctlSetNewValue` | `bpf_sysctl_set_new_value` | 104 |
+
+### Inode / path
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfInodeStorageGet` | `bpf_inode_storage_get` | 145 |
+| `bpfInodeStorageDelete` | `bpf_inode_storage_delete` | 146 |
+| `bpfDPath` | `bpf_d_path` | 147 |
+| `bpfImaInodeHash` | `bpf_ima_inode_hash` | 161 |
+| `bpfImaFileHash` | `bpf_ima_file_hash` | 193 |
+
+### Per-CPU
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfPerCpuPtr` | `bpf_per_cpu_ptr` | 153 |
+| `bpfThisCpuPtr` | `bpf_this_cpu_ptr` | 154 |
+
+### Ring buffer (dynamic)
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfRingbufReserveDynptr` | `bpf_ringbuf_reserve_dynptr` | 198 |
+| `bpfRingbufSubmitDynptr` | `bpf_ringbuf_submit_dynptr` | 199 |
+| `bpfRingbufDiscardDynptr` | `bpf_ringbuf_discard_dynptr` | 200 |
+| `bpfUserRingbufDrain` | `bpf_user_ringbuf_drain` | 209 |
+
+### VMA / memory
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfFindVma` | `bpf_find_vma` | 180 |
+| `bpfCopyFromUserTask` | `bpf_copy_from_user_task` | 191 |
+| `bpfKptrXchg` | `bpf_kptr_xchg` | 194 |
+
+### Function info
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfGetFuncArg` | `bpf_get_func_arg` | 183 |
+| `bpfGetFuncRet` | `bpf_get_func_ret` | 184 |
+| `bpfGetFuncArgCnt` | `bpf_get_func_arg_cnt` | 185 |
+| `bpfGetRetval` | `bpf_get_retval` | 186 |
+| `bpfSetRetval` | `bpf_set_retval` | 187 |
+| `bpfGetBranchSnapshot` | `bpf_get_branch_snapshot` | 176 |
+
+### Socket conversion
+
+| Go name | Kernel name | ID |
+|---------|-------------|---:|
+| `bpfSkcToTcp6Sock` | `bpf_skc_to_tcp6_sock` | 136 |
+| `bpfSkcToTcpSock` | `bpf_skc_to_tcp_sock` | 137 |
+| `bpfSkcToTcpTimewaitSock` | `bpf_skc_to_tcp_timewait_sock` | 138 |
+| `bpfSkcToTcpRequestSock` | `bpf_skc_to_tcp_request_sock` | 139 |
+| `bpfSkcToUdp6Sock` | `bpf_skc_to_udp6_sock` | 140 |
+| `bpfSkcToUnixSock` | `bpf_skc_to_unix_sock` | 178 |
+| `bpfSkcToMptcpSock` | `bpf_skc_to_mptcp_sock` | 196 |
+
 ### Signals
 
 | Go name | Kernel name | ID |
@@ -465,7 +547,7 @@ C with `libbpf`/`clang` has the broadest ecosystem. `tinybpf` trades that maturi
 Not directly — BPF helpers are kernel-only symbols. Test logic in pure Go with `go test`, then integration-test the compiled `.o` with a loader on a real kernel or VM.
 
 **What does `tinybpf` actually do to the IR?**
-It runs a 12-step transformation: retarget to BPF, strip runtime, rewrite helpers, assign data and program sections, replace allocations, inject metadata. See [Architecture](ARCHITECTURE.md) for the full breakdown.
+It runs a 13-step transformation: retarget to BPF, strip runtime, rewrite helpers, assign data and program sections, rewrite CO-RE field accesses (when --core is enabled), replace allocations, inject metadata. See [Architecture](ARCHITECTURE.md) for the full breakdown.
 
 ## Further reading
 

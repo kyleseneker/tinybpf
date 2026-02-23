@@ -106,6 +106,7 @@ tinybpf build --output program.o \
 - [`tc-filter/`](examples/tc-filter/) — TC classifier that drops packets by port
 - [`cgroup-connect/`](examples/cgroup-connect/) — cgroup/connect4 connection blocker
 - [`fentry-open/`](examples/fentry-open/) — fentry tracing `openat2` with ring buffer
+- [`rawtp-sched/`](examples/rawtp-sched/) — raw tracepoint exec tracer with CO-RE portable struct access
 
 ### Scaffold a new project
 
@@ -144,6 +145,7 @@ Run `tinybpf --help` or `tinybpf <command> --help`.
 | `--timeout` | `30s` | Per-stage timeout |
 | `--dump-ir` | `false` | Write intermediate IR after each transform stage |
 | `--program-type` | | Validate sections match a BPF program type (e.g. `kprobe`, `xdp`) |
+| `--core` | `false` | Enable CO-RE portable struct access (experimental) |
 | `--keep-temp` | `false` | Preserve intermediate files |
 | `--tmpdir` | | Directory for intermediate files |
 
@@ -177,7 +179,7 @@ Run `tinybpf --help` or `tinybpf <command> --help`.
 | Document | Description |
 |----------|-------------|
 | [Writing Go for eBPF](docs/TINYGO_COMPAT.md) | Language constraints, BPF concepts, helpers, patterns, and FAQ |
-| [Architecture](docs/ARCHITECTURE.md) | Pipeline design and the 12-step IR transformation |
+| [Architecture](docs/ARCHITECTURE.md) | Pipeline design and the 13-step IR transformation |
 | [Support Matrix](docs/SUPPORT_MATRIX.md) | Tested toolchain versions and platforms |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Setup issues, pipeline errors, and verifier debugging |
 | [Contributing](CONTRIBUTING.md) | Development setup, testing, and PR process |
