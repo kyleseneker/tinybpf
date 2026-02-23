@@ -1,0 +1,30 @@
+name: Setup Toolchain
+description: Install Go and TinyGo for tinybpf CI workflows.
+
+inputs:
+  go-version:
+    description: Go version to install.
+    default: "1.25.x"
+  tinygo-version:
+    description: TinyGo version to install.
+    default: "0.40.1"
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: ${{ inputs.go-version }}
+
+    - name: Install TinyGo
+      shell: bash
+      run: |
+        wget -qO /tmp/tinygo.deb "https://github.com/tinygo-org/tinygo/releases/download/v${{ inputs.tinygo-version }}/tinygo_${{ inputs.tinygo-version }}_amd64.deb"
+        sudo dpkg -i /tmp/tinygo.deb
+
+    - name: Print versions
+      shell: bash
+      run: |
+        go version
+        tinygo version
