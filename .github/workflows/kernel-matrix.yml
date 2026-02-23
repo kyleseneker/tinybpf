@@ -9,12 +9,9 @@ concurrency:
   group: kernel-matrix-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  TINYGO_VERSION: "0.40.1"
-
 jobs:
   kernel-matrix:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -28,15 +25,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.25.x"
+      - name: Setup toolchain
+        uses: ./.github/actions/setup-toolchain
 
-      - name: Install TinyGo
+      - name: Install LLVM
         run: |
-          wget -qO /tmp/tinygo.deb "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
-          sudo dpkg -i /tmp/tinygo.deb
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm
 
       - name: Install virtme-ng
         run: pip3 install --user virtme-ng

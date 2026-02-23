@@ -9,34 +9,26 @@ concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  TINYGO_VERSION: "0.40.1"
-
 jobs:
   e2e:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.25.x"
+      - name: Setup toolchain
+        uses: ./.github/actions/setup-toolchain
 
-      - name: Install TinyGo
+      - name: Install LLVM and BPF tools
         run: |
-          wget -qO /tmp/tinygo.deb "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
-          sudo dpkg -i /tmp/tinygo.deb
-
-      - name: Print versions
-        run: |
-          go version
-          tinygo version
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm
+          sudo apt-get install -y -qq linux-tools-$(uname -r) 2>/dev/null || \
+            sudo apt-get install -y -qq linux-tools-generic 2>/dev/null || true
 
       - name: Build tinybpf
         run: go build -o tinybpf ./cmd/tinybpf
 
       - name: Run E2E
-        run: sudo ./scripts/e2e.sh
+        run: sudo -E env "PATH=$PATH" ./scripts/e2e.sh --skip-attach
