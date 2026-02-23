@@ -9,9 +9,6 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  TINYGO_VERSION: "0.40.1"
-
 jobs:
   lint:
     runs-on: ubuntu-24.04
@@ -104,8 +101,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
+      - name: Setup toolchain
+        uses: ./.github/actions/setup-toolchain
         with:
           go-version: ${{ matrix.go-version }}
 
@@ -118,22 +115,14 @@ jobs:
           sudo apt-get install -y -qq llvm-${{ matrix.llvm-version }}
           echo "/usr/lib/llvm-${{ matrix.llvm-version }}/bin" >> "$GITHUB_PATH"
 
-      - name: Install TinyGo
-        run: |
-          wget -qO /tmp/tinygo.deb "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
-          sudo dpkg -i /tmp/tinygo.deb
-
       - name: Generate fresh IR fixture
         if: matrix.primary
         run: |
           cd examples/tracepoint-connect
           tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o ../../testdata/tinygo_probe.ll ./bpf
 
-      - name: Print versions
+      - name: Print LLVM versions
         run: |
-          echo "=== Toolchain ==="
-          echo "Go:     $(go version)"
-          if command -v tinygo >/dev/null 2>&1; then echo "TinyGo: $(tinygo version)"; fi
           echo "LLVM:   $(llvm-link --version 2>&1 | head -1)"
           echo "opt:    $(opt --version 2>&1 | head -1)"
           echo "llc:    $(llc --version 2>&1 | head -1)"
