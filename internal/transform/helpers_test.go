@@ -111,6 +111,36 @@ func TestRewriteHelpers(t *testing.T) {
 		{"snprintf",
 			`  %1 = call i64 @main.bpfSnprintf(ptr %buf, i32 256, ptr %fmt, ptr %data, i32 1, ptr undef) #7`,
 			"inttoptr (i64 165 to ptr)"},
+		{"perf event read",
+			`  %1 = call i64 @main.bpfPerfEventRead(ptr %map, i64 %flags, ptr undef) #7`,
+			"inttoptr (i64 22 to ptr)"},
+		{"override return",
+			`  %1 = call i64 @main.bpfOverrideReturn(ptr %ctx, i64 %rc, ptr undef) #7`,
+			"inttoptr (i64 58 to ptr)"},
+		{"seq printf",
+			`  %1 = call i64 @main.bpfSeqPrintf(ptr %seq, ptr %fmt, i32 %len, ptr %data, i32 %cnt, ptr undef) #7`,
+			"inttoptr (i64 126 to ptr)"},
+		{"inode storage get",
+			`  %1 = call ptr @main.bpfInodeStorageGet(ptr %map, ptr %inode, ptr %value, i64 0, ptr undef) #7`,
+			"inttoptr (i64 145 to ptr)"},
+		{"per cpu ptr",
+			`  %1 = call ptr @main.bpfPerCpuPtr(ptr %percpu, i32 %cpu, ptr undef) #7`,
+			"inttoptr (i64 153 to ptr)"},
+		{"sys bpf",
+			`  %1 = call i64 @main.bpfSysBpf(i32 %cmd, ptr %attr, i32 %size, ptr undef) #7`,
+			"inttoptr (i64 166 to ptr)"},
+		{"find vma",
+			`  %1 = call i64 @main.bpfFindVma(ptr %task, i64 %addr, ptr %cb, ptr %ctx, i64 0, ptr undef) #7`,
+			"inttoptr (i64 180 to ptr)"},
+		{"kptr xchg",
+			`  %1 = call ptr @main.bpfKptrXchg(ptr %kptr, ptr %new, ptr undef) #7`,
+			"inttoptr (i64 194 to ptr)"},
+		{"ringbuf reserve dynptr",
+			`  %1 = call i64 @main.bpfRingbufReserveDynptr(ptr %rb, i32 %size, i64 0, ptr %dynptr, ptr undef) #7`,
+			"inttoptr (i64 198 to ptr)"},
+		{"user ringbuf drain",
+			`  %1 = call i64 @main.bpfUserRingbufDrain(ptr %rb, ptr %cb, ptr %ctx, i64 0, ptr undef) #7`,
+			"inttoptr (i64 209 to ptr)"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -129,6 +159,9 @@ func TestRewriteHelpers(t *testing.T) {
 	}
 
 	t.Run("all known helpers resolve", func(t *testing.T) {
+		if len(knownHelpers) != 211 {
+			t.Fatalf("expected 211 helpers, got %d", len(knownHelpers))
+		}
 		for name, id := range knownHelpers {
 			line := fmt.Sprintf(`  %%1 = call i64 @%s(ptr undef) #7`, name)
 			got, err := rewriteHelpers([]string{line})
@@ -163,6 +196,28 @@ func TestRewriteHelpers(t *testing.T) {
 			t.Errorf("line changed: %q", got[0])
 		}
 	})
+}
+
+func TestSnakeToCamel(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"bpf_map_lookup_elem", "bpfMapLookupElem"},
+		{"bpf_get_current_pid_tgid", "bpfGetCurrentPidTgid"},
+		{"bpf_l3_csum_replace", "bpfL3CsumReplace"},
+		{"bpf_skc_to_tcp6_sock", "bpfSkcToTcp6Sock"},
+		{"bpf_tcp_raw_gen_syncookie_ipv4", "bpfTcpRawGenSyncookieIpv4"},
+		{"bpf_jiffies64", "bpfJiffies64"},
+		{"bpf_d_path", "bpfDPath"},
+		{"bpf_redirect", "bpfRedirect"},
+		{"bpf_bind", "bpfBind"},
+		{"bpf_loop", "bpfLoop"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := snakeToCamel(tt.in); got != tt.want {
+				t.Errorf("snakeToCamel(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestStripTrailingUndef(t *testing.T) {

@@ -4,18 +4,19 @@
 package transform
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 )
 
-// parseDefineName extracts the function name from a trimmed "define ... @name("
-// line. Equivalent to regexp `^define\s+.*@(\w[\w.]*)\(`.
-func parseDefineName(trimmed string) (string, bool) {
-	if !strings.HasPrefix(trimmed, "define ") {
+// parseFuncName extracts the function name from a trimmed line starting with
+// prefix ("define " or "declare ") followed by ... @name(. The noLeadingDot
+// flag rejects identifiers starting with '.', which is invalid for defines.
+func parseFuncName(trimmed, prefix string, noLeadingDot bool) (string, bool) {
+	if !strings.HasPrefix(trimmed, prefix) {
 		return "", false
 	}
 	atIdx := strings.IndexByte(trimmed, '@')
@@ -23,7 +24,7 @@ func parseDefineName(trimmed string) (string, bool) {
 		return "", false
 	}
 	start := atIdx + 1
-	if start >= len(trimmed) || !isWordChar(trimmed[start]) {
+	if start >= len(trimmed) || !isIdentChar(trimmed[start]) || (noLeadingDot && trimmed[start] == '.') {
 		return "", false
 	}
 	end := start + 1
@@ -36,34 +37,9 @@ func parseDefineName(trimmed string) (string, bool) {
 	return trimmed[start:end], true
 }
 
-// isDefineLine reports whether a trimmed line is a define statement.
-func isDefineLine(trimmed string) bool {
-	_, ok := parseDefineName(trimmed)
-	return ok
-}
-
-// parseDeclareName extracts the function name from a trimmed "declare ... @name("
-// line. Equivalent to regexp `^declare\s+.*@([\w.]+)\(`.
+func parseDefineName(trimmed string) (string, bool) { return parseFuncName(trimmed, "define ", true) }
 func parseDeclareName(trimmed string) (string, bool) {
-	if !strings.HasPrefix(trimmed, "declare ") {
-		return "", false
-	}
-	atIdx := strings.IndexByte(trimmed, '@')
-	if atIdx < 0 {
-		return "", false
-	}
-	start := atIdx + 1
-	if start >= len(trimmed) || !isIdentChar(trimmed[start]) {
-		return "", false
-	}
-	end := start + 1
-	for end < len(trimmed) && isIdentChar(trimmed[end]) {
-		end++
-	}
-	if end >= len(trimmed) || trimmed[end] != '(' {
-		return "", false
-	}
-	return trimmed[start:end], true
+	return parseFuncName(trimmed, "declare ", false)
 }
 
 // parseGlobalName extracts the global name from a trimmed "@name = ..." line.
@@ -94,15 +70,44 @@ func parseGlobalName(trimmed string) (string, bool) {
 	return trimmed[start:end], true
 }
 
-// isGlobalLine reports whether a trimmed line is a global variable definition.
-func isGlobalLine(trimmed string) bool {
-	_, ok := parseGlobalName(trimmed)
-	return ok
+// extractMetadataID parses "!N = ..." and returns N, or -1 on failure.
+func extractMetadataID(line string) int {
+	if len(line) == 0 || line[0] != '!' {
+		return -1
+	}
+	i := 1
+	for i < len(line) && line[i] >= '0' && line[i] <= '9' {
+		i++
+	}
+	if i == 1 {
+		return -1
+	}
+	n, err := strconv.Atoi(line[1:i])
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
-func isWordChar(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-		(c >= '0' && c <= '9') || c == '_'
+// irSnippet returns up to radius lines before and after index center for error context.
+func irSnippet(lines []string, center, radius int) string {
+	start := center - radius
+	if start < 0 {
+		start = 0
+	}
+	end := center + radius + 1
+	if end > len(lines) {
+		end = len(lines)
+	}
+	var b strings.Builder
+	for i := start; i < end; i++ {
+		marker := "  "
+		if i == center {
+			marker = "> "
+		}
+		fmt.Fprintf(&b, "%s%d: %s\n", marker, i+1, lines[i])
+	}
+	return b.String()
 }
 
 // Options configures the IR transformation pass.
@@ -112,6 +117,34 @@ type Options struct {
 	Verbose  bool
 	Stdout   io.Writer
 	DumpDir  string
+	CoreMode bool
+}
+
+// hasDeclare reports whether any declare line contains substr.
+func hasDeclare(lines []string, substr string) bool {
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "declare") && strings.Contains(trimmed, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+// insertBeforeFunc splices toInsert lines before the first declare or define
+// statement. Falls back to appending if no function statement is found.
+func insertBeforeFunc(lines []string, toInsert ...string) []string {
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "declare ") || strings.HasPrefix(trimmed, "define ") {
+			result := make([]string, 0, len(lines)+len(toInsert)+1)
+			result = append(result, lines[:i]...)
+			result = append(result, toInsert...)
+			result = append(result, lines[i:]...)
+			return result
+		}
+	}
+	return append(lines, toInsert...)
 }
 
 // Run reads a .ll file, applies all transformations, and writes the result.
@@ -124,18 +157,7 @@ func Run(ctx context.Context, inputLL, outputLL string, opts Options) error {
 	if err != nil {
 		return err
 	}
-	size := len(lines) // newlines
-	for _, line := range lines {
-		size += len(line)
-	}
-	buf := bytes.NewBuffer(make([]byte, 0, size))
-	for i, line := range lines {
-		if i > 0 {
-			buf.WriteByte('\n')
-		}
-		buf.WriteString(line)
-	}
-	return os.WriteFile(outputLL, buf.Bytes(), 0o600)
+	return os.WriteFile(outputLL, []byte(strings.Join(lines, "\n")), 0o600)
 }
 
 // TransformLines applies the full transformations to IR text lines:
@@ -144,6 +166,7 @@ func Run(ctx context.Context, inputLL, outputLL string, opts Options) error {
 // - extract programs
 // - replace alloc
 // - rewrite helpers
+// - rewrite CO-RE access (when --core is enabled)
 // - assign data sections
 // - assign program sections
 // - strip map prefix
@@ -192,6 +215,11 @@ func TransformLines(ctx context.Context, lines []string, opts Options) ([]string
 		return nil, err
 	}
 	dumper.dump("rewrite-helpers", lines)
+
+	if opts.CoreMode {
+		lines = rewriteCoreAccess(lines)
+		dumper.dump("rewrite-core-access", lines)
+	}
 
 	lines = assignDataSections(lines)
 	dumper.dump("assign-data-sections", lines)

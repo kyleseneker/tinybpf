@@ -25,17 +25,13 @@ func assignProgramSections(lines []string, sections map[string]string) []string 
 			}
 		}
 
-		if isGlobalLine(trimmed) && strings.Contains(line, "bpfMapDef") {
+		if _, ok := parseGlobalName(trimmed); ok && strings.Contains(line, "bpfMapDef") {
 			if strings.Contains(line, " internal ") {
 				lines[i] = strings.Replace(lines[i], " internal ", " ", 1)
 				line = lines[i]
 			}
 			if !strings.Contains(line, " section ") {
-				if idx := strings.Index(line, ", align"); idx >= 0 {
-					lines[i] = line[:idx] + `, section ".maps"` + line[idx:]
-				} else {
-					lines[i] = strings.TrimRight(line, " \t") + `, section ".maps"`
-				}
+				lines[i] = insertSectionAttr(line, ".maps")
 			}
 		}
 	}

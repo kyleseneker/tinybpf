@@ -35,7 +35,7 @@ func scanAllocSites(lines []string) ([]allocFuncInfo, error) {
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !inDef {
-			if isDefineLine(trimmed) {
+			if _, ok := parseDefineName(trimmed); ok {
 				inDef = true
 				depth = strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
 				funcs = append(funcs, allocFuncInfo{startIdx: i, entryIdx: -1})
@@ -109,37 +109,15 @@ func replaceAlloc(lines []string) ([]string, error) {
 		lines = newLines
 	}
 
-	if needMemset && !containsMemsetDecl(lines) {
+	if needMemset && !hasDeclare(lines, "@llvm.memset.p0.i64") {
 		lines = insertMemsetDecl(lines)
 	}
 
 	return lines, nil
 }
 
-// insertMemsetDecl inserts a memset declaration before the first define block.
-func insertMemsetDecl(lines []string) []string {
-	insertIdx := len(lines)
-	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "define ") {
-			insertIdx = i
-			break
-		}
-	}
-	decl := "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)"
-	newLines := make([]string, 0, len(lines)+2)
-	newLines = append(newLines, lines[:insertIdx]...)
-	newLines = append(newLines, decl, "")
-	newLines = append(newLines, lines[insertIdx:]...)
-	return newLines
-}
+const memsetDecl = "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)"
 
-// containsMemsetDecl checks if the IR contains a memset declaration.
-func containsMemsetDecl(lines []string) bool {
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "declare") && strings.Contains(trimmed, "@llvm.memset.p0.i64") {
-			return true
-		}
-	}
-	return false
+func insertMemsetDecl(lines []string) []string {
+	return insertBeforeFunc(lines, memsetDecl, "")
 }

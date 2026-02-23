@@ -1,0 +1,4 @@
+github.com/cilium/ebpf v0.20.0 h1:cpnJMrBMkNkbPHqDqf53OR+boWwlIiy2iFnMkeMJ9JA=
+github.com/cilium/ebpf v0.20.0/go.mod h1:eiMLFIGIzjZ8iyQL/0EbdJpoh+jSTOaouJQpCkkesKoU=
+golang.org/x/sys v0.37.0 h1:AAhVHduBSRGIoh8h0FMfGRFBOA0VG0jJVBGkuknpeXU=
+golang.org/x/sys v0.37.0/go.mod h1:a8sR5BOs/YmjAS4MFwlgG5KbL/0s3iMz4oepoOHv/eE=

@@ -39,6 +39,7 @@ type Config struct {
 	ConfigPath   string
 	CustomPasses []string
 	DumpIR       bool
+	CoreMode     bool
 	ProgramType  string
 }
 
@@ -103,6 +104,7 @@ func Run(ctx context.Context, cfg Config) (*Artifacts, error) {
 		Verbose:  cfg.Verbose,
 		Stdout:   cfg.Stdout,
 		DumpDir:  dumpDir,
+		CoreMode: cfg.CoreMode,
 	}
 	if err := transform.Run(ctx, artifacts.LinkedBC, artifacts.TransformedLL, transformOpts); err != nil {
 		return nil, &diag.Error{Stage: diag.StageTransform, Err: err,

@@ -142,6 +142,36 @@ var btfMapIR6Field = `
 `
 
 //nolint:dupword
+var btfMapIR7Field = `
+%main.bpfMapDef = type { i32, i32, i32, i32, i32, i32, i32 }
+@main.outer = global %main.bpfMapDef { i32 12, i32 4, i32 4, i32 64, i32 0, i32 0, i32 0 }, align 4
+!0 = !DIDerivedType(tag: DW_TAG_member, name: "Type", baseType: !1, size: 32, offset: 0)
+!1 = !DIBasicType(name: "uint32", size: 32, encoding: DW_ATE_unsigned)
+!2 = !DIDerivedType(tag: DW_TAG_member, name: "KeySize", baseType: !1, size: 32, offset: 32)
+!3 = !DIDerivedType(tag: DW_TAG_member, name: "ValueSize", baseType: !1, size: 32, offset: 64)
+!4 = !DIDerivedType(tag: DW_TAG_member, name: "MaxEntries", baseType: !1, size: 32, offset: 96)
+!5 = !DIDerivedType(tag: DW_TAG_member, name: "MapFlags", baseType: !1, size: 32, offset: 128)
+!6 = !DIDerivedType(tag: DW_TAG_member, name: "Pinning", baseType: !1, size: 32, offset: 160)
+!7 = !DIDerivedType(tag: DW_TAG_member, name: "InnerMapFd", baseType: !1, size: 32, offset: 192)
+!8 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfMapDef", size: 224, elements: !{!0, !2, !3, !4, !5, !6, !7})
+`
+
+//nolint:dupword
+var btfMapIR7FieldZeroinit = `
+%main.bpfMapDef = type { i32, i32, i32, i32, i32, i32, i32 }
+@main.outer = global %main.bpfMapDef zeroinitializer, align 4
+!0 = !DIDerivedType(tag: DW_TAG_member, name: "Type", baseType: !1, size: 32, offset: 0)
+!1 = !DIBasicType(name: "uint32", size: 32, encoding: DW_ATE_unsigned)
+!2 = !DIDerivedType(tag: DW_TAG_member, name: "KeySize", baseType: !1, size: 32, offset: 32)
+!3 = !DIDerivedType(tag: DW_TAG_member, name: "ValueSize", baseType: !1, size: 32, offset: 64)
+!4 = !DIDerivedType(tag: DW_TAG_member, name: "MaxEntries", baseType: !1, size: 32, offset: 96)
+!5 = !DIDerivedType(tag: DW_TAG_member, name: "MapFlags", baseType: !1, size: 32, offset: 128)
+!6 = !DIDerivedType(tag: DW_TAG_member, name: "Pinning", baseType: !1, size: 32, offset: 160)
+!7 = !DIDerivedType(tag: DW_TAG_member, name: "InnerMapFd", baseType: !1, size: 32, offset: 192)
+!8 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfMapDef", size: 224, elements: !{!0, !2, !3, !4, !5, !6, !7})
+`
+
+//nolint:dupword
 var btfMapIRWrongFieldCount = `
 %main.bpfMapDef = type { i32, i32, i32 }
 @main.events = global %main.bpfMapDef { i32 27, i32 0, i32 0 }, align 4
@@ -252,6 +282,29 @@ func TestRewriteMapForBTF(t *testing.T) {
 				`name: "pinning"`,
 				"size: 384",
 				"DISubrange(count: 1)",
+			},
+		},
+		{
+			name: "seven fields with inner_map_fd",
+			ir:   btfMapIR7Field,
+			wantContain: []string{
+				"global { ptr, ptr, ptr, ptr, ptr, ptr, ptr } zeroinitializer", //nolint:dupword
+				`name: "inner_map_fd"`,
+				"size: 448",
+				"DISubrange(count: 12)",
+			},
+		},
+		{
+			name: "seven fields zeroinitializer",
+			ir:   btfMapIR7FieldZeroinit,
+			wantContain: []string{
+				"global { ptr, ptr, ptr, ptr, ptr, ptr, ptr } zeroinitializer", //nolint:dupword
+			},
+			check: func(t *testing.T, text string) {
+				t.Helper()
+				if strings.Count(text, "DISubrange(count: 0)") < 7 {
+					t.Error("expected 7 zero subranges")
+				}
 			},
 		},
 		{

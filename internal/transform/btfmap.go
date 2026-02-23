@@ -13,23 +13,15 @@ type mapFieldInfo struct {
 	cName  string
 }
 
-// mapFields5 is the standard 5-field bpfMapDef layout.
-var mapFields5 = []mapFieldInfo{
-	{"Type", "type"},
-	{"KeySize", "key_size"},
-	{"ValueSize", "value_size"},
-	{"MaxEntries", "max_entries"},
-	{"MapFlags", "map_flags"},
-}
-
-// mapFields6 extends the standard layout with an optional 6th pinning field.
-var mapFields6 = []mapFieldInfo{
+// mapFields lists all bpfMapDef fields in order.
+var mapFields = []mapFieldInfo{
 	{"Type", "type"},
 	{"KeySize", "key_size"},
 	{"ValueSize", "value_size"},
 	{"MaxEntries", "max_entries"},
 	{"MapFlags", "map_flags"},
 	{"Pinning", "pinning"},
+	{"InnerMapFd", "inner_map_fd"},
 }
 
 var reMapGlobal = regexp.MustCompile(
@@ -39,14 +31,15 @@ var reMapGlobal = regexp.MustCompile(
 var reMapGlobalZero = regexp.MustCompile(
 	`^@([\w.]+)\s*=\s*(global|internal global)\s+%[\w.]*bpfMapDef\s+zeroinitializer`)
 
+// mapDef represents a bpfMapDef global declaration.
 type mapDef struct {
 	lineIdx int
 	name    string
 	values  []int
 }
 
-// rewriteMapForBTF rewrites bpfMapDef map globals and their debug metadata to use the libbpf-compatible BTF encoding.
-// Supports both 5-field (standard) and 6-field (with pinning) bpfMapDef layouts.
+// rewriteMapForBTF rewrites bpfMapDef map globals and their debug metadata
+// to use the libbpf-compatible BTF encoding.
 func rewriteMapForBTF(lines []string) []string {
 	fieldCount := detectMapFieldCount(lines)
 	maps := collectMapDefs(lines, fieldCount)
@@ -54,22 +47,20 @@ func rewriteMapForBTF(lines []string) []string {
 		return lines
 	}
 
-	mapFields := mapFields5
-	if fieldCount == 6 {
-		mapFields = mapFields6
-	}
+	fields := mapFields[:fieldCount]
 
 	maxMeta := findMaxMetadataID(lines)
 	for _, md := range maps {
 		var nextID int
-		lines, nextID = processMapDef(lines, md, mapFields, fieldCount, maxMeta)
+		lines, nextID = processMapDef(lines, md, fields, fieldCount, maxMeta)
 		maxMeta = nextID
 	}
 
 	return lines
 }
 
-// collectMapDefs scans lines for bpfMapDef globals (both initialized and zeroinitializer forms).
+// collectMapDefs scans lines for bpfMapDef globals (both initialized
+// and zeroinitializer forms) and returns a list of mapDef structs.
 func collectMapDefs(lines []string, fieldCount int) []mapDef {
 	var maps []mapDef
 	for i, line := range lines {
@@ -121,10 +112,12 @@ func processMapDef(lines []string, md mapDef, mapFields []mapFieldInfo, fieldCou
 		)
 	}
 
+	ptrFields := strings.TrimSuffix(strings.Repeat("ptr, ", fieldCount), ", ")
+
 	rewriteMemberNodes(lines, mapFields, fieldPtrIDs)
 	rewriteStructSize(lines, fieldCount)
-	rewriteMapGlobal(lines, md, fieldCount)
-	rewriteMapTypeDef(lines, fieldCount)
+	rewriteMapGlobal(lines, md, ptrFields)
+	rewriteMapTypeDef(lines, ptrFields, fieldCount)
 
 	lines = appendMetadata(lines, newMeta)
 	return lines, nextID
@@ -183,8 +176,7 @@ func rewriteStructSize(lines []string, fieldCount int) {
 
 // rewriteMapGlobal replaces the original map global declaration with a
 // pointer-field zeroinitializer form.
-func rewriteMapGlobal(lines []string, md mapDef, fieldCount int) {
-	ptrFields := strings.TrimSuffix(strings.Repeat("ptr, ", fieldCount), ", ")
+func rewriteMapGlobal(lines []string, md mapDef, ptrFields string) {
 	replacement := fmt.Sprintf("@%s = global { %s } zeroinitializer", md.name, ptrFields)
 
 	origLine := lines[md.lineIdx]
@@ -203,8 +195,7 @@ func rewriteMapGlobal(lines []string, md mapDef, fieldCount int) {
 
 // rewriteMapTypeDef replaces the bpfMapDef type definition fields from
 // i32 to ptr.
-func rewriteMapTypeDef(lines []string, fieldCount int) {
-	ptrFields := strings.TrimSuffix(strings.Repeat("ptr, ", fieldCount), ", ")
+func rewriteMapTypeDef(lines []string, ptrFields string, fieldCount int) {
 	origI32Fields := strings.TrimSuffix(strings.Repeat("i32, ", fieldCount), ", ")
 	for i, line := range lines {
 		if strings.Contains(line, "bpfMapDef") && strings.Contains(line, "= type {") {
@@ -235,24 +226,24 @@ var (
 	reMapDefType = regexp.MustCompile(`%[\w.]*bpfMapDef\s*=\s*type\s*\{([^}]+)\}`)
 )
 
-// detectMapFieldCount determines whether the bpfMapDef struct has 5 or 6 fields
-// by inspecting the type definition. Returns 5 (standard) or 6 (with pinning).
+// detectMapFieldCount determines the number of fields in a bpfMapDef struct
+// by inspecting the type definition.
 func detectMapFieldCount(lines []string) int {
 	for _, line := range lines {
 		m := reMapDefType.FindStringSubmatch(line)
 		if m == nil {
 			continue
 		}
-		fields := strings.Split(m[1], ",")
-		if len(fields) == 6 {
-			return 6
+		if n := len(strings.Split(m[1], ",")); n >= 5 && n <= 7 {
+			return n
 		}
 		return 5
 	}
 	return 5
 }
 
-// parseI32Initializer extracts integer values from an LLVM IR struct initializer.
+// parseI32Initializer extracts integer values from an LLVM IR struct
+// initializer.
 func parseI32Initializer(s string) []int {
 	parts := strings.Split(s, ",")
 	var vals []int
@@ -273,25 +264,7 @@ func parseI32Initializer(s string) []int {
 func findMaxMetadataID(lines []string) int {
 	max := 0
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if len(trimmed) == 0 || trimmed[0] != '!' {
-			continue
-		}
-		i := 1
-		for i < len(trimmed) && trimmed[i] >= '0' && trimmed[i] <= '9' {
-			i++
-		}
-		if i == 1 {
-			continue
-		}
-		if i >= len(trimmed) || (trimmed[i] != ' ' && trimmed[i] != '=') {
-			continue
-		}
-		n, err := strconv.Atoi(trimmed[1:i])
-		if err != nil {
-			continue
-		}
-		if n > max {
+		if n := extractMetadataID(strings.TrimSpace(line)); n > max {
 			max = n
 		}
 	}

@@ -127,6 +127,75 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestExtractMetadataID(t *testing.T) {
+	tests := []struct {
+		in   string
+		want int
+	}{
+		{"!0 = !DICompositeType(...)", 0},
+		{"!42 = !DIBasicType(name: \"int\")", 42},
+		{"not metadata", -1},
+		{"!abc = bad", -1},
+		{"", -1},
+	}
+	for _, tt := range tests {
+		if got := extractMetadataID(tt.in); got != tt.want {
+			t.Errorf("extractMetadataID(%q) = %d, want %d", tt.in, got, tt.want)
+		}
+	}
+}
+
+func TestIrSnippet(t *testing.T) {
+	lines := []string{"aaa", "bbb", "ccc", "ddd", "eee", "fff"}
+
+	tests := []struct {
+		name   string
+		center int
+		radius int
+		want   string
+	}{
+		{
+			name:   "middle with radius 1",
+			center: 2,
+			radius: 1,
+			want:   "  2: bbb\n> 3: ccc\n  4: ddd\n",
+		},
+		{
+			name:   "start clamped",
+			center: 0,
+			radius: 2,
+			want:   "> 1: aaa\n  2: bbb\n  3: ccc\n",
+		},
+		{
+			name:   "end clamped",
+			center: 5,
+			radius: 2,
+			want:   "  4: ddd\n  5: eee\n> 6: fff\n",
+		},
+		{
+			name:   "radius 0",
+			center: 3,
+			radius: 0,
+			want:   "> 4: ddd\n",
+		},
+		{
+			name:   "radius larger than input",
+			center: 2,
+			radius: 10,
+			want:   "  1: aaa\n  2: bbb\n> 3: ccc\n  4: ddd\n  5: eee\n  6: fff\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := irSnippet(lines, tt.center, tt.radius)
+			if got != tt.want {
+				t.Errorf("got:\n%s\nwant:\n%s", got, tt.want)
+			}
+		})
+	}
+}
+
 // --- Integration tests (require fixtures + LLVM tools) ---
 
 func TestFullTransform(t *testing.T) {
