@@ -23,7 +23,10 @@ func TestRetarget(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := retarget(tt.input)
+			got, err := retarget(tt.input)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if got[1] != tt.wantDatalayout {
 				t.Errorf("datalayout:\n  got  %q\n  want %q", got[1], tt.wantDatalayout)
 			}

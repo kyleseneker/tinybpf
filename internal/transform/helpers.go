@@ -265,6 +265,15 @@ func rewriteHelpers(lines []string) ([]string, error) {
 		}
 		loc := reHelperCall.FindStringSubmatchIndex(line)
 		if loc == nil {
+			if strings.Contains(line, "call") {
+				return nil, &diag.Error{
+					Stage:     diag.StageTransform,
+					Err:       fmt.Errorf("line references @main.bpf* but does not match expected call pattern"),
+					IRLine:    i + 1,
+					IRSnippet: irSnippet(lines, i, 2),
+					Hint:      "the IR call syntax may have changed; check LLVM/TinyGo version compatibility",
+				}
+			}
 			continue
 		}
 

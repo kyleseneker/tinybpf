@@ -121,7 +121,10 @@ func TestStripMapPrefix(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := stripMapPrefix(tt.input)
+			got, err := stripMapPrefix(tt.input)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if strings.Join(got, "\n") != strings.Join(tt.want, "\n") {
 				t.Errorf("stripMapPrefix():\n  got:  %v\n  want: %v", got, tt.want)
 			}

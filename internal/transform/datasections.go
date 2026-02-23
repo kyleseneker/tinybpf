@@ -7,7 +7,7 @@ import (
 // assignDataSections adds BPF data section attributes to user-defined global
 // variables so they appear in .data, .rodata, or .bss. Globals that already
 // have a section assignment (e.g. maps in ".maps") are left unchanged.
-func assignDataSections(lines []string) []string {
+func assignDataSections(lines []string) ([]string, error) {
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		name, ok := parseGlobalName(trimmed)
@@ -26,7 +26,7 @@ func assignDataSections(lines []string) []string {
 		}
 		lines[i] = insertSectionAttr(line, section)
 	}
-	return lines
+	return lines, nil
 }
 
 // classifyGlobalSection determines the BPF data section for a global.

@@ -3,7 +3,7 @@ package transform
 import "strings"
 
 // stripMapPrefix renames Go package-qualified map globals in the ".maps" section to unqualified names.
-func stripMapPrefix(lines []string) []string {
+func stripMapPrefix(lines []string) ([]string, error) {
 	type rename struct {
 		oldRef string
 		newRef string
@@ -34,7 +34,7 @@ func stripMapPrefix(lines []string) []string {
 	}
 
 	if len(renames) == 0 {
-		return lines
+		return lines, nil
 	}
 
 	for i, line := range lines {
@@ -45,5 +45,5 @@ func stripMapPrefix(lines []string) []string {
 			}
 		}
 	}
-	return lines
+	return lines, nil
 }

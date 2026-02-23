@@ -87,7 +87,10 @@ entry:
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := assignProgramSections(tt.input, tt.sections)
+			got, err := assignProgramSections(tt.input, tt.sections)
+			if err != nil {
+				t.Fatal(err)
+			}
 			text := strings.Join(got, "\n")
 			for _, want := range tt.wantContain {
 				if !strings.Contains(text, want) {

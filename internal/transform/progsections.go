@@ -8,7 +8,7 @@ import (
 
 // assignProgramSections adds BPF program section attributes to function definitions
 // and ".maps" section attributes to map globals that don't already have one.
-func assignProgramSections(lines []string, sections map[string]string) []string {
+func assignProgramSections(lines []string, sections map[string]string) ([]string, error) {
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
@@ -35,7 +35,7 @@ func assignProgramSections(lines []string, sections map[string]string) []string 
 			}
 		}
 	}
-	return lines
+	return lines, nil
 }
 
 // insertSection inserts a section attribute into a define line before any metadata attachments.

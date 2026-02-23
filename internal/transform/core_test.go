@@ -168,7 +168,10 @@ func TestRewriteCoreAccess(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			input := strings.Split(strings.TrimSpace(tt.ir), "\n")
-			got := rewriteCoreAccess(input)
+			got, err := rewriteCoreAccess(input)
+			if err != nil {
+				t.Fatal(err)
+			}
 			text := strings.Join(got, "\n")
 			for _, want := range tt.wantContain {
 				if !strings.Contains(text, want) {
@@ -215,7 +218,10 @@ func TestFindCoreTypes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := findCoreTypes(tt.lines)
+			got, err := findCoreTypes(tt.lines)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if len(tt.wantKeys) == 0 && len(got) == 0 {
 				return
 			}
@@ -226,6 +232,172 @@ func TestFindCoreTypes(t *testing.T) {
 			}
 			if len(got) != len(tt.wantKeys) {
 				t.Errorf("expected %d types, got %d", len(tt.wantKeys), len(got))
+			}
+		})
+	}
+}
+
+func TestSanitizeCoreFieldNames(t *testing.T) {
+	tests := []struct {
+		name        string
+		lines       []string
+		wantContain []string
+		notContain  []string
+	}{
+		{
+			name: "renames struct type and field names",
+			lines: []string{
+				`!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main_bpfCoreTaskStruct", size: 64, elements: !{!1, !2})`,
+				`!1 = !DIDerivedType(tag: DW_TAG_member, name: "Pid", baseType: !3, size: 32, offset: 0)`,
+				`!2 = !DIDerivedType(tag: DW_TAG_member, name: "Tgid", baseType: !3, size: 32, offset: 32)`,
+				`!3 = !DIBasicType(name: "int32", size: 32)`,
+			},
+			wantContain: []string{
+				`name: "task_struct"`,
+				`name: "pid"`,
+				`name: "tgid"`,
+			},
+			notContain: []string{
+				`name: "Pid"`,
+				`name: "Tgid"`,
+				`name: "main_bpfCoreTaskStruct"`,
+			},
+		},
+		{
+			name: "multi-word field names become snake_case",
+			lines: []string{
+				`!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main_bpfCoreCredStruct", size: 64, elements: !{!1})`,
+				`!1 = !DIDerivedType(tag: DW_TAG_member, name: "LoginUid", baseType: !2, size: 32, offset: 0)`,
+				`!2 = !DIBasicType(name: "int32", size: 32)`,
+			},
+			wantContain: []string{
+				`name: "cred_struct"`,
+				`name: "login_uid"`,
+			},
+		},
+		{
+			name: "non-core metadata unchanged",
+			lines: []string{
+				`!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main_bpfMapDef", size: 160, elements: !{!1})`,
+				`!1 = !DIDerivedType(tag: DW_TAG_member, name: "Type", baseType: !2, size: 32, offset: 0)`,
+				`!2 = !DIBasicType(name: "int32", size: 32)`,
+			},
+			wantContain: []string{
+				`name: "Type"`,
+				`name: "main_bpfMapDef"`,
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := sanitizeCoreFieldNames(tt.lines)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := strings.Join(got, "\n")
+			for _, want := range tt.wantContain {
+				if !strings.Contains(text, want) {
+					t.Errorf("output missing %q\n---\n%s", want, text)
+				}
+			}
+			for _, bad := range tt.notContain {
+				if strings.Contains(text, bad) {
+					t.Errorf("output should not contain %q\n---\n%s", bad, text)
+				}
+			}
+		})
+	}
+}
+
+func TestRewriteCoreExistsChecks(t *testing.T) {
+	tests := []struct {
+		name        string
+		lines       []string
+		wantContain []string
+		notContain  []string
+	}{
+		{
+			name: "field_exists rewrite",
+			lines: []string{
+				"declare i32 @main.bpfCoreFieldExists(ptr, ptr)",
+				"define void @main.prog(ptr %ctx) {",
+				"  %1 = call i32 @main.bpfCoreFieldExists(ptr %field, ptr undef)",
+				"}",
+			},
+			wantContain: []string{
+				"@llvm.bpf.preserve.field.info.p0(ptr %field, i64 0)",
+				"declare i32 @llvm.bpf.preserve.field.info.p0(ptr, i64 immarg)",
+			},
+			notContain: []string{
+				"@main.bpfCoreFieldExists",
+			},
+		},
+		{
+			name: "type_exists rewrite",
+			lines: []string{
+				"declare i32 @main.bpfCoreTypeExists(ptr, ptr)",
+				"define void @main.prog(ptr %ctx) {",
+				"  %1 = call i32 @main.bpfCoreTypeExists(ptr %type, ptr undef)",
+				"}",
+			},
+			wantContain: []string{
+				"@llvm.bpf.preserve.type.info.p0(ptr %type, i64 0)",
+				"declare i32 @llvm.bpf.preserve.type.info.p0(ptr, i64 immarg)",
+			},
+			notContain: []string{
+				"@main.bpfCoreTypeExists",
+			},
+		},
+		{
+			name: "both field and type exists",
+			lines: []string{
+				"declare i32 @main.bpfCoreFieldExists(ptr, ptr)",
+				"declare i32 @main.bpfCoreTypeExists(ptr, ptr)",
+				"define void @main.prog(ptr %ctx) {",
+				"  %1 = call i32 @main.bpfCoreFieldExists(ptr %field, ptr undef)",
+				"  %2 = call i32 @main.bpfCoreTypeExists(ptr %type, ptr undef)",
+				"}",
+			},
+			wantContain: []string{
+				"@llvm.bpf.preserve.field.info.p0",
+				"@llvm.bpf.preserve.type.info.p0",
+			},
+			notContain: []string{
+				"@main.bpfCoreFieldExists",
+				"@main.bpfCoreTypeExists",
+			},
+		},
+		{
+			name: "no exists calls unchanged",
+			lines: []string{
+				"define void @main.prog(ptr %ctx) {",
+				"  ret void",
+				"}",
+			},
+			wantContain: []string{
+				"define void @main.prog",
+			},
+			notContain: []string{
+				"llvm.bpf.preserve",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := rewriteCoreExistsChecks(tt.lines)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := strings.Join(got, "\n")
+			for _, want := range tt.wantContain {
+				if !strings.Contains(text, want) {
+					t.Errorf("output missing %q\n---\n%s", want, text)
+				}
+			}
+			for _, bad := range tt.notContain {
+				if strings.Contains(text, bad) {
+					t.Errorf("output should not contain %q\n---\n%s", bad, text)
+				}
 			}
 		})
 	}

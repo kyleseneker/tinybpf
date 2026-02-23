@@ -44,7 +44,10 @@ func TestAssignDataSections(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			lines := assignDataSections([]string{tt.line})
+			lines, err := assignDataSections([]string{tt.line})
+			if err != nil {
+				t.Fatal(err)
+			}
 			result := lines[0]
 			if !strings.Contains(result, tt.want) {
 				t.Errorf("expected %q in result:\n%s", tt.want, result)
@@ -54,7 +57,10 @@ func TestAssignDataSections(t *testing.T) {
 
 	t.Run("map global not modified", func(t *testing.T) {
 		input := `@main.events = global %main.bpfMapDef { i32 27, i32 0, i32 0, i32 16777216, i32 0 }, align 4`
-		lines := assignDataSections([]string{input})
+		lines, err := assignDataSections([]string{input})
+		if err != nil {
+			t.Fatal(err)
+		}
 		if lines[0] != input {
 			t.Errorf("map global was modified:\n  got:  %s\n  want: %s", lines[0], input)
 		}
@@ -62,7 +68,10 @@ func TestAssignDataSections(t *testing.T) {
 
 	t.Run("runtime global not modified", func(t *testing.T) {
 		input := `@runtime.heapStart = global i64 0, align 8`
-		lines := assignDataSections([]string{input})
+		lines, err := assignDataSections([]string{input})
+		if err != nil {
+			t.Fatal(err)
+		}
 		if lines[0] != input {
 			t.Errorf("runtime global was modified:\n  got:  %s\n  want: %s", lines[0], input)
 		}

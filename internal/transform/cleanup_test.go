@@ -66,7 +66,10 @@ attributes #4 = { nounwind }
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			input := strings.Split(strings.TrimSpace(tt.ir), "\n")
-			got := cleanup(input)
+			got, err := cleanup(input)
+			if err != nil {
+				t.Fatal(err)
+			}
 			text := strings.Join(got, "\n")
 			for _, want := range tt.wantContain {
 				if !strings.Contains(text, want) {

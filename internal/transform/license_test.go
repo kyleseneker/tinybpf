@@ -28,7 +28,10 @@ func TestAddLicense(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := addLicense(tt.input)
+			got, err := addLicense(tt.input)
+			if err != nil {
+				t.Fatal(err)
+			}
 			text := strings.Join(got, "\n")
 			for _, want := range tt.wantContain {
 				if !strings.Contains(text, want) {

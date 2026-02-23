@@ -27,7 +27,10 @@ func TestStripAttributes(t *testing.T) {
 		`attributes #4 = { nounwind "target-cpu"="generic" "target-features"="+ete,+fp-armv8,+neon,+trbe,+v8a" }`,
 		`attributes #7 = { nounwind }`,
 	}
-	got := stripAttributes(lines)
+	got, err := stripAttributes(lines)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name        string

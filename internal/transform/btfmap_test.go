@@ -39,13 +39,6 @@ func FuzzSanitizeBTFNames(f *testing.F) {
 	})
 }
 
-func runRewriteMap(t *testing.T, ir string) string {
-	t.Helper()
-	input := strings.Split(strings.TrimSpace(ir), "\n")
-	got := rewriteMapForBTF(input)
-	return strings.Join(got, "\n")
-}
-
 func TestParseI32Initializer(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -183,6 +176,7 @@ func TestRewriteMapForBTF(t *testing.T) {
 		ir          string
 		wantContain []string
 		notContain  []string
+		wantErr     bool
 		check       func(t *testing.T, text string)
 	}{
 		{
@@ -208,18 +202,9 @@ func TestRewriteMapForBTF(t *testing.T) {
 			},
 		},
 		{
-			name: "member sizes rewritten to 64",
-			ir:   btfMapIR5Field,
-			check: func(t *testing.T, text string) {
-				t.Helper()
-				for _, line := range strings.Split(text, "\n") {
-					if strings.Contains(line, "DW_TAG_member") && strings.Contains(line, `name: "type"`) {
-						if !strings.Contains(line, "size: 64") {
-							t.Error("member size not rewritten to 64")
-						}
-					}
-				}
-			},
+			name:        "member sizes rewritten to 64",
+			ir:          btfMapIR5Field,
+			wantContain: []string{"size: 64"},
 		},
 		{
 			name:        "struct size rewritten to 320",
@@ -308,14 +293,25 @@ func TestRewriteMapForBTF(t *testing.T) {
 			},
 		},
 		{
-			name:       "wrong field count ignored",
-			ir:         btfMapIRWrongFieldCount,
-			notContain: []string{"zeroinitializer"},
+			name:    "wrong field count errors",
+			ir:      btfMapIRWrongFieldCount,
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			text := runRewriteMap(t, tt.ir)
+			input := strings.Split(strings.TrimSpace(tt.ir), "\n")
+			got, err := rewriteMapForBTF(input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error but got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := strings.Join(got, "\n")
 			for _, want := range tt.wantContain {
 				if !strings.Contains(text, want) {
 					t.Errorf("output missing %q", want)
@@ -336,7 +332,10 @@ func TestRewriteMapForBTF(t *testing.T) {
 func runSanitizeBTF(t *testing.T, ir string) string {
 	t.Helper()
 	input := strings.Split(strings.TrimSpace(ir), "\n")
-	got := sanitizeBTFNames(input)
+	got, err := sanitizeBTFNames(input)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return strings.Join(got, "\n")
 }
 

@@ -13,7 +13,7 @@ var (
 )
 
 // stripAttributes removes host-specific entries from attribute groups.
-func stripAttributes(lines []string) []string {
+func stripAttributes(lines []string) ([]string, error) {
 	for i, line := range lines {
 		if !reAttrLine.MatchString(line) {
 			continue
@@ -26,5 +26,5 @@ func stripAttributes(lines []string) []string {
 		line = reMultiSpace.ReplaceAllString(line, " ")
 		lines[i] = line
 	}
-	return lines
+	return lines, nil
 }

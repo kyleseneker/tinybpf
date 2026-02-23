@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 )
 
@@ -37,54 +36,41 @@ func parseFuncName(trimmed, prefix string, noLeadingDot bool) (string, bool) {
 	return trimmed[start:end], true
 }
 
-func parseDefineName(trimmed string) (string, bool) { return parseFuncName(trimmed, "define ", true) }
+func parseDefineName(trimmed string) (string, bool) {
+	return parseFuncName(trimmed, "define ", true)
+}
+
 func parseDeclareName(trimmed string) (string, bool) {
 	return parseFuncName(trimmed, "declare ", false)
 }
 
 // parseGlobalName extracts the global name from a trimmed "@name = ..." line.
-// Equivalent to regexp `^@([\w.]+)\s*=`.
 func parseGlobalName(trimmed string) (string, bool) {
-	if len(trimmed) == 0 || trimmed[0] != '@' {
+	if len(trimmed) < 3 || trimmed[0] != '@' || !isIdentChar(trimmed[1]) {
 		return "", false
 	}
-	start := 1
-	if start >= len(trimmed) || !isIdentChar(trimmed[start]) {
-		return "", false
-	}
-	end := start + 1
-	for end < len(trimmed) && isIdentChar(trimmed[end]) {
-		end++
-	}
-	rest := trimmed[end:]
-	if len(rest) == 0 {
-		return "", false
-	}
-	i := 0
-	for i < len(rest) && (rest[i] == ' ' || rest[i] == '\t') {
+	i := 2
+	for i < len(trimmed) && isIdentChar(trimmed[i]) {
 		i++
 	}
-	if i >= len(rest) || rest[i] != '=' {
+	nameEnd := i
+	for i < len(trimmed) && (trimmed[i] == ' ' || trimmed[i] == '\t') {
+		i++
+	}
+	if i >= len(trimmed) || trimmed[i] != '=' {
 		return "", false
 	}
-	return trimmed[start:end], true
+	return trimmed[1:nameEnd], true
 }
 
 // extractMetadataID parses "!N = ..." and returns N, or -1 on failure.
 func extractMetadataID(line string) int {
-	if len(line) == 0 || line[0] != '!' {
+	if len(line) < 2 || line[0] != '!' || line[1] < '0' || line[1] > '9' {
 		return -1
 	}
-	i := 1
-	for i < len(line) && line[i] >= '0' && line[i] <= '9' {
-		i++
-	}
-	if i == 1 {
-		return -1
-	}
-	n, err := strconv.Atoi(line[1:i])
-	if err != nil {
-		return -1
+	n := int(line[1] - '0')
+	for i := 2; i < len(line) && line[i] >= '0' && line[i] <= '9'; i++ {
+		n = n*10 + int(line[i]-'0')
 	}
 	return n
 }
@@ -110,6 +96,23 @@ func irSnippet(lines []string, center, radius int) string {
 	return b.String()
 }
 
+// camelToSnake converts "TaskStruct" to "task_struct".
+func camelToSnake(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 4)
+	for i, c := range s {
+		if c >= 'A' && c <= 'Z' {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			b.WriteByte(byte(c - 'A' + 'a'))
+		} else {
+			b.WriteByte(byte(c))
+		}
+	}
+	return b.String()
+}
+
 // Options configures the IR transformation pass.
 type Options struct {
 	Programs []string
@@ -117,7 +120,6 @@ type Options struct {
 	Verbose  bool
 	Stdout   io.Writer
 	DumpDir  string
-	CoreMode bool
 }
 
 // hasDeclare reports whether any declare line contains substr.
@@ -137,7 +139,7 @@ func insertBeforeFunc(lines []string, toInsert ...string) []string {
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "declare ") || strings.HasPrefix(trimmed, "define ") {
-			result := make([]string, 0, len(lines)+len(toInsert)+1)
+			result := make([]string, 0, len(lines)+len(toInsert))
 			result = append(result, lines[:i]...)
 			result = append(result, toInsert...)
 			result = append(result, lines[i:]...)
@@ -160,20 +162,13 @@ func Run(ctx context.Context, inputLL, outputLL string, opts Options) error {
 	return os.WriteFile(outputLL, []byte(strings.Join(lines, "\n")), 0o600)
 }
 
-// TransformLines applies the full transformations to IR text lines:
-// - retarget
-// - strip attributes
-// - extract programs
-// - replace alloc
-// - rewrite helpers
-// - rewrite CO-RE access (when --core is enabled)
-// - assign data sections
-// - assign program sections
-// - strip map prefix
-// - rewrite map BTF
-// - sanitize BTF names
-// - add license
-// - cleanup
+// transformStage pairs a human-readable name with a transform function.
+type transformStage struct {
+	name string
+	fn   func([]string) ([]string, error)
+}
+
+// TransformLines applies the full IR transformation pipeline.
 func TransformLines(ctx context.Context, lines []string, opts Options) ([]string, error) {
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
@@ -181,66 +176,42 @@ func TransformLines(ctx context.Context, lines []string, opts Options) ([]string
 
 	dumper := newStageDumper(opts.DumpDir, opts.Verbose, opts.Stdout)
 
+	extractProgs := func(l []string) ([]string, error) {
+		return extractPrograms(l, opts.Programs, opts.Verbose, opts.Stdout)
+	}
+	assignProgSections := func(l []string) ([]string, error) {
+		return assignProgramSections(l, opts.Sections)
+	}
+
+	stages := []transformStage{
+		{"retarget", retarget},
+		{"strip-attributes", stripAttributes},
+		{"extract-programs", extractProgs},
+		{"replace-alloc", replaceAlloc},
+		{"rewrite-helpers", rewriteHelpers},
+		{"rewrite-core-access", rewriteCoreAccess},
+		{"rewrite-core-exists", rewriteCoreExistsChecks},
+		{"assign-data-sections", assignDataSections},
+		{"assign-program-sections", assignProgSections},
+		{"strip-map-prefix", stripMapPrefix},
+		{"rewrite-map-btf", rewriteMapForBTF},
+		{"sanitize-btf-names", sanitizeBTFNames},
+		{"sanitize-core-fields", sanitizeCoreFieldNames},
+		{"add-license", addLicense},
+		{"cleanup", cleanup},
+	}
+
 	var err error
-
-	lines = retarget(lines)
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	for _, s := range stages {
+		lines, err = s.fn(lines)
+		if err != nil {
+			return nil, err
+		}
+		if err = ctx.Err(); err != nil {
+			return nil, err
+		}
+		dumper.dump(s.name, lines)
 	}
-	dumper.dump("retarget", lines)
-
-	lines = stripAttributes(lines)
-	dumper.dump("strip-attributes", lines)
-
-	lines, err = extractPrograms(lines, opts.Programs, opts.Verbose, opts.Stdout)
-	if err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	dumper.dump("extract-programs", lines)
-
-	lines, err = replaceAlloc(lines)
-	if err != nil {
-		return nil, err
-	}
-	dumper.dump("replace-alloc", lines)
-
-	lines, err = rewriteHelpers(lines)
-	if err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	dumper.dump("rewrite-helpers", lines)
-
-	if opts.CoreMode {
-		lines = rewriteCoreAccess(lines)
-		dumper.dump("rewrite-core-access", lines)
-	}
-
-	lines = assignDataSections(lines)
-	dumper.dump("assign-data-sections", lines)
-
-	lines = assignProgramSections(lines, opts.Sections)
-	dumper.dump("assign-program-sections", lines)
-
-	lines = stripMapPrefix(lines)
-	dumper.dump("strip-map-prefix", lines)
-
-	lines = rewriteMapForBTF(lines)
-	dumper.dump("rewrite-map-btf", lines)
-
-	lines = sanitizeBTFNames(lines)
-	dumper.dump("sanitize-btf-names", lines)
-
-	lines = addLicense(lines)
-	dumper.dump("add-license", lines)
-
-	lines = cleanup(lines)
-	dumper.dump("cleanup", lines)
 
 	return lines, nil
 }

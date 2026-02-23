@@ -40,11 +40,17 @@ type mapDef struct {
 
 // rewriteMapForBTF rewrites bpfMapDef map globals and their debug metadata
 // to use the libbpf-compatible BTF encoding.
-func rewriteMapForBTF(lines []string) []string {
-	fieldCount := detectMapFieldCount(lines)
-	maps := collectMapDefs(lines, fieldCount)
+func rewriteMapForBTF(lines []string) ([]string, error) {
+	fieldCount, err := detectMapFieldCount(lines)
+	if err != nil {
+		return nil, err
+	}
+	maps, err := collectMapDefs(lines, fieldCount)
+	if err != nil {
+		return nil, err
+	}
 	if len(maps) == 0 {
-		return lines
+		return lines, nil
 	}
 
 	fields := mapFields[:fieldCount]
@@ -56,19 +62,24 @@ func rewriteMapForBTF(lines []string) []string {
 		maxMeta = nextID
 	}
 
-	return lines
+	return lines, nil
 }
 
 // collectMapDefs scans lines for bpfMapDef globals (both initialized
 // and zeroinitializer forms) and returns a list of mapDef structs.
-func collectMapDefs(lines []string, fieldCount int) []mapDef {
+func collectMapDefs(lines []string, fieldCount int) ([]mapDef, error) {
 	var maps []mapDef
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if m := reMapGlobal.FindStringSubmatch(trimmed); m != nil {
 			vals := parseI32Initializer(m[3])
+			if vals == nil {
+				return nil, fmt.Errorf("bpfMapDef global %q matched but initializer could not be parsed (line %d): %s",
+					m[1], i+1, trimmed)
+			}
 			if len(vals) != fieldCount {
-				continue
+				return nil, fmt.Errorf("bpfMapDef global %q has %d fields but type definition has %d (line %d)",
+					m[1], len(vals), fieldCount, i+1)
 			}
 			maps = append(maps, mapDef{lineIdx: i, name: m[1], values: vals})
 			continue
@@ -77,7 +88,7 @@ func collectMapDefs(lines []string, fieldCount int) []mapDef {
 			maps = append(maps, mapDef{lineIdx: i, name: mz[1], values: make([]int, fieldCount)})
 		}
 	}
-	return maps
+	return maps, nil
 }
 
 // processMapDef rewrites a single map definition's global declaration,
@@ -228,18 +239,20 @@ var (
 
 // detectMapFieldCount determines the number of fields in a bpfMapDef struct
 // by inspecting the type definition.
-func detectMapFieldCount(lines []string) int {
-	for _, line := range lines {
+func detectMapFieldCount(lines []string) (int, error) {
+	for i, line := range lines {
 		m := reMapDefType.FindStringSubmatch(line)
 		if m == nil {
 			continue
 		}
-		if n := len(strings.Split(m[1], ",")); n >= 5 && n <= 7 {
-			return n
+		n := len(strings.Split(m[1], ","))
+		if n >= 5 && n <= 7 {
+			return n, nil
 		}
-		return 5
+		return 0, fmt.Errorf("bpfMapDef type has %d fields (expected 5-7) at line %d: %s",
+			n, i+1, strings.TrimSpace(line))
 	}
-	return 5
+	return 5, nil
 }
 
 // parseI32Initializer extracts integer values from an LLVM IR struct
@@ -272,7 +285,7 @@ func findMaxMetadataID(lines []string) int {
 }
 
 // sanitizeBTFNames replaces dots in DWARF type/variable names with underscores.
-func sanitizeBTFNames(lines []string) []string {
+func sanitizeBTFNames(lines []string) ([]string, error) {
 	var buf strings.Builder
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -298,7 +311,7 @@ func sanitizeBTFNames(lines []string) []string {
 			lines[i] = replaceDotInNameFields(line, &buf)
 		}
 	}
-	return lines
+	return lines, nil
 }
 
 // nameFieldPrefixes are the LLVM DI metadata name field prefixes we rewrite.

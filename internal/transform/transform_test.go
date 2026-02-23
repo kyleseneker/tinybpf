@@ -145,6 +145,25 @@ func TestExtractMetadataID(t *testing.T) {
 	}
 }
 
+func TestCamelToSnake(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{"TaskStruct", "task_struct"},
+		{"Pid", "pid"},
+		{"LoginUid", "login_uid"},
+		{"CredStruct", "cred_struct"},
+		{"pid", "pid"},
+		{"A", "a"},
+		{"ABCDef", "a_b_c_def"},
+	}
+	for _, tt := range tests {
+		if got := camelToSnake(tt.in); got != tt.want {
+			t.Errorf("camelToSnake(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestIrSnippet(t *testing.T) {
 	lines := []string{"aaa", "bbb", "ccc", "ddd", "eee", "fff"}
 

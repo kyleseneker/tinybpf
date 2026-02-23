@@ -8,7 +8,7 @@ const (
 )
 
 // retarget replaces the host triple and datalayout with BPF equivalents.
-func retarget(lines []string) []string {
+func retarget(lines []string) ([]string, error) {
 	for i, line := range lines {
 		if strings.HasPrefix(line, "target datalayout = ") {
 			lines[i] = bpfDatalayout
@@ -16,5 +16,5 @@ func retarget(lines []string) []string {
 			lines[i] = bpfTriple
 		}
 	}
-	return lines
+	return lines, nil
 }

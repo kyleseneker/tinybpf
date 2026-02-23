@@ -51,6 +51,10 @@ func scanAllocSites(lines []string) ([]allocFuncInfo, error) {
 		if trimmed == "entry:" && cur != nil && cur.entryIdx < 0 {
 			cur.entryIdx = i
 		}
+		if strings.Contains(line, "@runtime.alloc") && reAllocCall.FindStringSubmatch(line) == nil {
+			return nil, fmt.Errorf("line %d references @runtime.alloc but does not match expected call pattern: %s",
+				i+1, trimmed)
+		}
 		if m := reAllocCall.FindStringSubmatch(line); m != nil && cur != nil {
 			size, err := strconv.Atoi(m[3])
 			if err != nil {

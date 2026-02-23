@@ -8,7 +8,7 @@ type identRef struct {
 }
 
 // cleanup removes orphaned declares, globals, attribute groups, and stale "; Function Attrs:" comments, then condenses blank lines.
-func cleanup(lines []string) []string {
+func cleanup(lines []string) ([]string, error) {
 	remove := make([]bool, len(lines))
 	identLines := buildIdentIndex(lines)
 
@@ -17,7 +17,7 @@ func cleanup(lines []string) []string {
 	markUnusedAttrs(lines, remove)
 	markOrphanedAttrComments(lines, remove)
 
-	return compactLines(lines, remove)
+	return compactLines(lines, remove), nil
 }
 
 // buildIdentIndex scans all lines for @-prefixed identifiers and records
