@@ -25,7 +25,37 @@ jobs:
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@v0
 
-      - name: Run GoReleaser
+      - name: Build release artifacts
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: build --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Smoke test release artifacts
+        run: |
+          set -euo pipefail
+          binary=$(find dist -name tinybpf -path "*linux_amd64*" -type f | head -1)
+          if [ -z "$binary" ]; then
+            echo "ERROR: linux/amd64 binary not found in dist/"
+            find dist -type f
+            exit 1
+          fi
+          chmod +x "$binary"
+
+          "$binary" version
+          "$binary" --help
+
+          tag_version="${GITHUB_REF_NAME#v}"
+          got=$("$binary" version)
+          if ! echo "$got" | grep -qF "$tag_version"; then
+            echo "ERROR: version mismatch: got '$got', expected to contain '$tag_version'"
+            exit 1
+          fi
+          echo "Smoke test passed: $got"
+
+      - name: Publish release
         uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
