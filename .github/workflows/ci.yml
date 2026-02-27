@@ -159,7 +159,7 @@ jobs:
 
       - name: Cache fuzz corpus
         if: matrix.primary
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/go-build/fuzz
           key: fuzz-${{ runner.os }}-${{ hashFiles('internal/transform/*_test.go') }}
