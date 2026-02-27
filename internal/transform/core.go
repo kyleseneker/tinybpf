@@ -286,10 +286,46 @@ var rePtrArg = regexp.MustCompile(`ptr\s+(?:nonnull\s+)?(%[\w.]+)`)
 
 const bpfFieldExists = 2 // BPF_FIELD_EXISTS info kind for llvm.bpf.preserve.field.info
 
+// coreExistsContext holds precomputed data for rewriting bpfCore*Exists calls.
+type coreExistsContext struct {
+	fieldOffsets map[string][]int
+	allocas      map[string]string
+	typeMeta     map[string]int
+}
+
+// buildCoreExistsContext precomputes struct layouts, allocas, and metadata
+// needed for tracing bpfCoreFieldExists calls back to their access chains.
+func buildCoreExistsContext(lines []string) (*coreExistsContext, error) {
+	coreTypes, err := findCoreTypes(lines)
+	if err != nil {
+		return nil, err
+	}
+	if len(coreTypes) == 0 {
+		return &coreExistsContext{}, nil
+	}
+	fieldOffsets := make(map[string][]int, len(coreTypes))
+	for typeName := range coreTypes {
+		sizes, parseErr := parseCoreFieldSizes(lines, typeName)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		fieldOffsets[typeName] = cumulativeOffsets(sizes)
+	}
+	typeMeta, err := findCoreTypeMetadata(lines, coreTypes)
+	if err != nil {
+		return nil, err
+	}
+	return &coreExistsContext{
+		fieldOffsets: fieldOffsets,
+		allocas:      findCoreAllocas(lines),
+		typeMeta:     typeMeta,
+	}, nil
+}
+
 // rewriteCoreExistsChecks rewrites bpfCoreFieldExists/bpfCoreTypeExists
 // calls to their corresponding llvm.bpf.preserve intrinsics.
 func rewriteCoreExistsChecks(lines []string) ([]string, error) {
-	coreTypes, err := findCoreTypes(lines)
+	ctx, err := buildCoreExistsContext(lines)
 	if err != nil {
 		return nil, err
 	}
@@ -297,26 +333,6 @@ func rewriteCoreExistsChecks(lines []string) ([]string, error) {
 	needField := false
 	needType := false
 	needAccessIndex := false
-
-	var fieldOffsets map[string][]int
-	var allocas map[string]string
-	var typeMeta map[string]int
-
-	if len(coreTypes) > 0 {
-		fieldOffsets = make(map[string][]int, len(coreTypes))
-		for typeName := range coreTypes {
-			sizes, parseErr := parseCoreFieldSizes(lines, typeName)
-			if parseErr != nil {
-				return nil, parseErr
-			}
-			fieldOffsets[typeName] = cumulativeOffsets(sizes)
-		}
-		allocas = findCoreAllocas(lines)
-		typeMeta, err = findCoreTypeMetadata(lines, coreTypes)
-		if err != nil {
-			return nil, err
-		}
-	}
 
 	for i, line := range lines {
 		if !strings.Contains(line, "@main.bpfCore") {
@@ -336,7 +352,7 @@ func rewriteCoreExistsChecks(lines []string) ([]string, error) {
 
 		switch funcName {
 		case "bpfCoreFieldExists":
-			if err := rewriteFieldExists(lines, i, m, callPrefix, args, allocas, fieldOffsets, typeMeta); err != nil {
+			if err := rewriteFieldExists(lines, i, m, callPrefix, args, ctx); err != nil {
 				return nil, err
 			}
 			needField = true
@@ -369,9 +385,7 @@ func rewriteCoreExistsChecks(lines []string) ([]string, error) {
 func rewriteFieldExists(
 	lines []string, callLine int, m []int,
 	callPrefix, args string,
-	allocas map[string]string,
-	fieldOffsets map[string][]int,
-	typeMeta map[string]int,
+	ctx *coreExistsContext,
 ) error {
 	line := lines[callLine]
 
@@ -382,13 +396,13 @@ func rewriteFieldExists(
 	}
 	ptrArg := ptrArgMatch[1]
 
-	if typeName, ok := allocas[ptrArg]; ok {
-		offsets := fieldOffsets[typeName]
+	if typeName, ok := ctx.allocas[ptrArg]; ok {
+		offsets := ctx.fieldOffsets[typeName]
 		if len(offsets) == 0 {
 			return fmt.Errorf("line %d: no field offsets for type %s", callLine+1, typeName)
 		}
 		accessCall := fmt.Sprintf("call ptr %s(ptr %s, i32 0, i32 0)", coreIntrinsicName, ptrArg)
-		if metaID, ok := typeMeta[typeName]; ok {
+		if metaID, ok := ctx.typeMeta[typeName]; ok {
 			accessCall += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
 		}
 		repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)",
@@ -411,13 +425,13 @@ func rewriteFieldExists(
 	base := gepMatch[2]
 	byteOffset, _ := strconv.Atoi(gepMatch[3])
 
-	typeName, ok := allocas[base]
+	typeName, ok := ctx.allocas[base]
 	if !ok {
 		return fmt.Errorf("line %d: base pointer %s is not an alloca of a bpfCore type",
 			gepLine+1, base)
 	}
 
-	offsets := fieldOffsets[typeName]
+	offsets := ctx.fieldOffsets[typeName]
 	fieldIdx := fieldIndexFromOffset(offsets, byteOffset)
 	if fieldIdx < 0 {
 		return fmt.Errorf("line %d: byte offset %d does not match any field in %s (offsets: %v)",
@@ -426,7 +440,7 @@ func rewriteFieldExists(
 
 	gepRepl := fmt.Sprintf("  %s = call ptr %s(ptr %s, i32 %d, i32 %d)",
 		ptrArg, coreIntrinsicName, base, fieldIdx, fieldIdx)
-	if metaID, ok := typeMeta[typeName]; ok {
+	if metaID, ok := ctx.typeMeta[typeName]; ok {
 		gepRepl += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
 	}
 	if dbg := extractDBG(lines[gepLine]); dbg != "" {
@@ -470,7 +484,7 @@ func findCoreAllocas(lines []string) map[string]string {
 }
 
 // parseCoreFieldSizes extracts field sizes in bytes from a bpfCore struct
-// type definition like "%main.bpfCoreTaskStruct = type { i32, i32, [16 x i8] }".
+// type definition (e.g. "= type { i32, i64, [16 x i8] }").
 func parseCoreFieldSizes(lines []string, typeName string) ([]int, error) {
 	prefix := typeName + " = type {"
 	for _, line := range lines {
@@ -504,7 +518,7 @@ func splitStructFields(body string) []string {
 	var fields []string
 	depth := 0
 	start := 0
-	for i := 0; i < len(body); i++ {
+	for i := range len(body) {
 		switch body[i] {
 		case '[':
 			depth++

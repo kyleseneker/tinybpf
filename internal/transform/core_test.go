@@ -380,7 +380,7 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 		{
 			name: "field_exists with metadata annotation",
 			lines: []string{
-				"%main.bpfCoreTaskStruct = type { i32, i32, [16 x i8] }",
+				"%main.bpfCoreTaskStruct = type { i32, i32, [16 x i8] }", //nolint:dupword
 				"declare i32 @main.bpfCoreFieldExists(ptr, ptr)",
 				"define void @main.prog(ptr %ctx) {",
 				"  %core = alloca %main.bpfCoreTaskStruct, align 4",
