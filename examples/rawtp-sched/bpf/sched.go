@@ -35,6 +35,13 @@ type bpfCoreTaskStruct struct {
 	Tgid int32
 }
 
+// Anchor the struct type in LLVM IR so the CO-RE transform can
+// discover its layout. TinyGo strips named types that are only
+// used in local variables; a package-level extern forces emission.
+//
+//go:extern __bpf_core_task_struct
+var _coreTaskStruct bpfCoreTaskStruct
+
 type execEvent struct {
 	Pid  uint32
 	Tgid uint32

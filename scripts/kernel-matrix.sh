@@ -51,33 +51,11 @@ OBJ="${BUILD_DIR}/sched.bpf.o"
     ./bpf
 ) 2>&1 | tee "${LOG_DIR}/tinygo.log"
 
-INTERMEDIATES="${BUILD_DIR}/intermediates"
-mkdir -p "${INTERMEDIATES}"
-
-if ! "${BIN}" link \
+"${BIN}" link \
   --input "${IR_FILE}" \
   --output "${OBJ}" \
   --section raw_tracepoint_sched_process_exec=raw_tracepoint/sched_process_exec \
-  --keep-temp \
-  --tmpdir "${INTERMEDIATES}" \
-  --verbose 2>&1 | tee "${LOG_DIR}/pipeline.log"; then
-  echo ""
-  echo "--- linked IR diagnostic (bpfCore lines + first type defs) ---"
-  LINKED=$(find "${INTERMEDIATES}" -name '*.ll' | head -1)
-  if [[ -n "${LINKED}" ]]; then
-    echo "file: ${LINKED} ($(wc -l < "${LINKED}") lines)"
-    echo "=== type definitions ==="
-    head -30 "${LINKED}"
-    echo "=== bpfCore references ==="
-    grep -n -i "bpfCore" "${LINKED}" || echo "(none found)"
-    echo "=== DICompositeType entries ==="
-    grep -n "DICompositeType" "${LINKED}" | head -20 || echo "(none found)"
-    echo "=== lines 55-70 (around failure) ==="
-    sed -n '55,70p' "${LINKED}"
-  fi
-  echo "--- end diagnostic ---"
-  exit 1
-fi
+  --verbose 2>&1 | tee "${LOG_DIR}/pipeline.log"
 
 if [[ ! -f "${OBJ}" ]]; then
   echo "FAIL: pipeline did not produce ${OBJ}"

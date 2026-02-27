@@ -123,167 +123,6 @@ func findCoreTypeMetadata(lines []string, coreTypes map[string]bool) (map[string
 	return meta, nil
 }
 
-// reMetaRef matches !N metadata references inside a metadata entry.
-var reMetaRef = regexp.MustCompile(`!(\d+)`)
-
-type coreComposite struct {
-	typeName  string
-	metaID    int
-	memberIDs []int
-}
-
-// discoverCoreTypesFromMetadata finds bpfCore struct types from DWARF debug
-// metadata when no explicit type definitions are present.
-func discoverCoreTypesFromMetadata(lines []string) (map[string][]int, map[string]int) {
-	composites := findCoreComposites(lines)
-	if len(composites) == 0 {
-		return nil, nil
-	}
-
-	memberLines := make(map[int]string)
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if isMemberMeta(trimmed) {
-			if id := extractMetadataID(trimmed); id >= 0 {
-				memberLines[id] = trimmed
-			}
-		}
-	}
-
-	fieldOffsets := make(map[string][]int)
-	metaIDs := make(map[string]int)
-	for _, ci := range composites {
-		offsets := make([]int, 0, len(ci.memberIDs))
-		for _, mID := range ci.memberIDs {
-			if mLine, ok := memberLines[mID]; ok {
-				offsets = append(offsets, extractMetaIntField(mLine, "offset")/8)
-			}
-		}
-		if len(offsets) > 0 {
-			fieldOffsets[ci.typeName] = offsets
-			metaIDs[ci.typeName] = ci.metaID
-		}
-	}
-	return fieldOffsets, metaIDs
-}
-
-// findCoreComposites scans for DICompositeType metadata entries that
-// describe bpfCore struct types and extracts their member metadata IDs.
-func findCoreComposites(lines []string) []coreComposite {
-	metaIndex := buildMetadataIndex(lines)
-	var result []coreComposite
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if !strings.Contains(trimmed, "DICompositeType") ||
-			!strings.Contains(trimmed, "DW_TAG_structure_type") ||
-			!strings.Contains(trimmed, "bpfCore") {
-			continue
-		}
-		goName := extractMetaStringField(trimmed, "name")
-		if goName == "" || !strings.Contains(goName, "bpfCore") {
-			continue
-		}
-		metaID := extractMetadataID(trimmed)
-		if metaID < 0 {
-			continue
-		}
-		result = append(result, coreComposite{
-			typeName:  "%" + goName,
-			metaID:    metaID,
-			memberIDs: extractElementIDs(trimmed, metaIndex),
-		})
-	}
-	return result
-}
-
-// buildMetadataIndex maps metadata IDs to their trimmed line content
-// for resolving indirect metadata references like elements: !N.
-func buildMetadataIndex(lines []string) map[int]string {
-	idx := make(map[int]string)
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if len(trimmed) > 0 && trimmed[0] == '!' {
-			if id := extractMetadataID(trimmed); id >= 0 {
-				idx[id] = trimmed
-			}
-		}
-	}
-	return idx
-}
-
-// extractElementIDs extracts metadata IDs from an elements field.
-func extractElementIDs(line string, metaIndex map[int]string) []int {
-	elemIdx := strings.Index(line, "elements:")
-	if elemIdx < 0 {
-		return nil
-	}
-	rest := line[elemIdx:]
-
-	if ids := extractMetaIDsFromBraces(rest); ids != nil {
-		return ids
-	}
-
-	refs := reMetaRef.FindStringSubmatch(rest)
-	if refs == nil {
-		return nil
-	}
-	indirectID, _ := strconv.Atoi(refs[1])
-	if resolved, ok := metaIndex[indirectID]; ok {
-		return extractMetaIDsFromBraces(resolved)
-	}
-	return nil
-}
-
-// extractMetaIDsFromBraces extracts !N references from within { ... }.
-func extractMetaIDsFromBraces(s string) []int {
-	open := strings.IndexByte(s, '{')
-	close := strings.IndexByte(s, '}')
-	if open < 0 || close <= open {
-		return nil
-	}
-	var ids []int
-	for _, m := range reMetaRef.FindAllStringSubmatch(s[open:close], -1) {
-		n, _ := strconv.Atoi(m[1])
-		ids = append(ids, n)
-	}
-	return ids
-}
-
-// extractMetaStringField extracts a quoted string value from a metadata field.
-func extractMetaStringField(line, field string) string {
-	prefix := field + `: "`
-	idx := strings.Index(line, prefix)
-	if idx < 0 {
-		return ""
-	}
-	start := idx + len(prefix)
-	end := strings.IndexByte(line[start:], '"')
-	if end < 0 {
-		return ""
-	}
-	return line[start : start+end]
-}
-
-// extractMetaIntField extracts an integer value from a metadata field.
-// Returns 0 if the field is not found.
-func extractMetaIntField(line, field string) int {
-	prefix := field + ": "
-	idx := strings.Index(line, prefix)
-	if idx < 0 {
-		return 0
-	}
-	start := idx + len(prefix)
-	end := start
-	for end < len(line) && line[end] >= '0' && line[end] <= '9' {
-		end++
-	}
-	if end == start {
-		return 0
-	}
-	n, _ := strconv.Atoi(line[start:end])
-	return n
-}
-
 // extractDBG pulls a !dbg !N reference from trailing GEP text.
 func extractDBG(s string) string {
 	idx := strings.Index(s, "!dbg ")
@@ -469,24 +308,22 @@ func discoverCoreFieldOffsets(lines []string) (map[string][]int, map[string]int,
 	if err != nil {
 		return nil, nil, err
 	}
-
-	if len(coreTypes) > 0 {
-		fieldOffsets := make(map[string][]int, len(coreTypes))
-		for typeName := range coreTypes {
-			sizes, parseErr := parseCoreFieldSizes(lines, typeName)
-			if parseErr != nil {
-				return nil, nil, parseErr
-			}
-			fieldOffsets[typeName] = cumulativeOffsets(sizes)
-		}
-		typeMeta, metaErr := findCoreTypeMetadata(lines, coreTypes)
-		if metaErr != nil {
-			return nil, nil, metaErr
-		}
-		return fieldOffsets, typeMeta, nil
+	if len(coreTypes) == 0 {
+		return nil, nil, nil
 	}
 
-	fieldOffsets, typeMeta := discoverCoreTypesFromMetadata(lines)
+	fieldOffsets := make(map[string][]int, len(coreTypes))
+	for typeName := range coreTypes {
+		sizes, parseErr := parseCoreFieldSizes(lines, typeName)
+		if parseErr != nil {
+			return nil, nil, parseErr
+		}
+		fieldOffsets[typeName] = cumulativeOffsets(sizes)
+	}
+	typeMeta, metaErr := findCoreTypeMetadata(lines, coreTypes)
+	if metaErr != nil {
+		return nil, nil, metaErr
+	}
 	return fieldOffsets, typeMeta, nil
 }
 

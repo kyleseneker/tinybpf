@@ -434,55 +434,6 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 			},
 		},
 		{
-			name: "field_exists with metadata only (no type definition)",
-			lines: []string{
-				"declare i32 @main.bpfCoreFieldExists(ptr, ptr)",
-				"define void @main.prog(ptr %ctx) {",
-				"  %core = alloca [8 x i8], align 4",
-				"  %1 = getelementptr inbounds nuw i8, ptr %core, i64 4",
-				"  %2 = call i32 @main.bpfCoreFieldExists(ptr nonnull %1, ptr undef)",
-				"}",
-				`!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", size: 64, elements: !{!1, !2})`,
-				`!1 = !DIDerivedType(tag: DW_TAG_member, name: "Pid", baseType: !3, size: 32)`,
-				`!2 = !DIDerivedType(tag: DW_TAG_member, name: "Tgid", baseType: !3, size: 32, offset: 32)`,
-				`!3 = !DIBasicType(name: "int32", size: 32, encoding: DW_ATE_signed)`,
-			},
-			wantContain: []string{
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %core, i32 1, i32 1)",
-				"@llvm.bpf.preserve.field.info.p0(ptr nonnull %1, i64 2)",
-				"!llvm.preserve.access.index !0",
-			},
-			notContain: []string{
-				"@main.bpfCoreFieldExists",
-				"getelementptr inbounds nuw i8",
-			},
-		},
-		{
-			name: "field_exists with indirect metadata elements",
-			lines: []string{
-				"declare i32 @main.bpfCoreFieldExists(ptr, ptr)",
-				"define void @main.prog(ptr %ctx) {",
-				"  %core = alloca [8 x i8], align 4",
-				"  %1 = getelementptr inbounds nuw i8, ptr %core, i64 4",
-				"  %2 = call i32 @main.bpfCoreFieldExists(ptr nonnull %1, ptr undef)",
-				"}",
-				`!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", size: 64, elements: !5)`,
-				`!1 = !DIDerivedType(tag: DW_TAG_member, name: "Pid", baseType: !3, size: 32)`,
-				`!2 = !DIDerivedType(tag: DW_TAG_member, name: "Tgid", baseType: !3, size: 32, offset: 32)`,
-				`!3 = !DIBasicType(name: "int32", size: 32, encoding: DW_ATE_signed)`,
-				`!5 = !{!1, !2}`,
-			},
-			wantContain: []string{
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %core, i32 1, i32 1)",
-				"@llvm.bpf.preserve.field.info.p0(ptr nonnull %1, i64 2)",
-				"!llvm.preserve.access.index !0",
-			},
-			notContain: []string{
-				"@main.bpfCoreFieldExists",
-				"getelementptr inbounds nuw i8",
-			},
-		},
-		{
 			name: "type_exists rewrite",
 			lines: []string{
 				"declare i32 @main.bpfCoreTypeExists(ptr, ptr)",

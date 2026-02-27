@@ -129,7 +129,8 @@ func extractPrograms(lines []string, programNames []string, verbose bool, w io.W
 		}
 		trimmed := strings.TrimSpace(line)
 		if name, ok := parseGlobalName(trimmed); ok {
-			if strings.HasPrefix(name, "runtime.") || name == ".string" {
+			if strings.HasPrefix(name, "runtime.") || name == ".string" ||
+				strings.HasPrefix(name, "__bpf_core_") {
 				remove[i] = true
 			}
 		}
