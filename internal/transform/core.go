@@ -272,11 +272,52 @@ func renameCoreField(line string) string {
 	return line[:start] + camelToSnake(name) + line[end:]
 }
 
+// reByteGEP matches byte-level getelementptr instructions that TinyGo emits
+// for field address computations like &core.Tgid.
+var reByteGEP = regexp.MustCompile(
+	`^\s*(%[\w.]+)\s*=\s*getelementptr\s+(?:inbounds\s+)?(?:nuw\s+)?i8,\s*ptr\s+(%[\w.]+),\s*i64\s+(\d+)`)
+
+// reCoreAlloca matches alloca instructions for bpfCore struct types.
+var reCoreAlloca = regexp.MustCompile(
+	`^\s*(%[\w.]+)\s*=\s*alloca\s+(%main\.bpfCore[\w.]*)`)
+
+// rePtrArg extracts an SSA value name from a pointer argument like "ptr nonnull %4".
+var rePtrArg = regexp.MustCompile(`ptr\s+(?:nonnull\s+)?(%[\w.]+)`)
+
+const bpfFieldExists = 2 // BPF_FIELD_EXISTS info kind for llvm.bpf.preserve.field.info
+
 // rewriteCoreExistsChecks rewrites bpfCoreFieldExists/bpfCoreTypeExists
 // calls to their corresponding llvm.bpf.preserve intrinsics.
 func rewriteCoreExistsChecks(lines []string) ([]string, error) {
+	coreTypes, err := findCoreTypes(lines)
+	if err != nil {
+		return nil, err
+	}
+
 	needField := false
 	needType := false
+	needAccessIndex := false
+
+	var fieldOffsets map[string][]int
+	var allocas map[string]string
+	var typeMeta map[string]int
+
+	if len(coreTypes) > 0 {
+		fieldOffsets = make(map[string][]int, len(coreTypes))
+		for typeName := range coreTypes {
+			sizes, parseErr := parseCoreFieldSizes(lines, typeName)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+			fieldOffsets[typeName] = cumulativeOffsets(sizes)
+		}
+		allocas = findCoreAllocas(lines)
+		typeMeta, err = findCoreTypeMetadata(lines, coreTypes)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	for i, line := range lines {
 		if !strings.Contains(line, "@main.bpfCore") {
 			continue
@@ -293,19 +334,18 @@ func rewriteCoreExistsChecks(lines []string) ([]string, error) {
 		funcName := line[m[4]:m[5]]
 		args := stripTrailingUndef(strings.TrimSpace(line[m[6]:m[7]]))
 
-		var intrinsic string
 		switch funcName {
 		case "bpfCoreFieldExists":
-			intrinsic = "@llvm.bpf.preserve.field.info.p0"
+			if err := rewriteFieldExists(lines, i, m, callPrefix, args, allocas, fieldOffsets, typeMeta); err != nil {
+				return nil, err
+			}
 			needField = true
+			needAccessIndex = true
 		case "bpfCoreTypeExists":
-			intrinsic = "@llvm.bpf.preserve.type.info.p0"
+			repl := fmt.Sprintf("%s%s(%s, i64 0)", callPrefix, "@llvm.bpf.preserve.type.info.p0", args)
+			lines[i] = line[:m[0]] + repl + line[m[1]:]
 			needType = true
-		default:
-			continue
 		}
-		repl := fmt.Sprintf("%s%s(%s, i64 0)", callPrefix, intrinsic, args)
-		lines[i] = line[:m[0]] + repl + line[m[1]:]
 	}
 
 	if needField {
@@ -314,9 +354,230 @@ func rewriteCoreExistsChecks(lines []string) ([]string, error) {
 	if needType {
 		lines = addIntrinsicDecl(lines, "llvm.bpf.preserve.type.info", typeInfoIntrinsicDecl)
 	}
+	if needAccessIndex {
+		lines = addCoreIntrinsicDecl(lines)
+	}
 
 	lines = stripCoreExistsDeclarations(lines)
 	return lines, nil
+}
+
+// rewriteFieldExists handles a single bpfCoreFieldExists call: traces back
+// to the byte-level GEP, determines the struct type and field index, replaces
+// the GEP with preserve_struct_access_index, and emits preserve_field_info
+// with BPF_FIELD_EXISTS kind.
+func rewriteFieldExists(
+	lines []string, callLine int, m []int,
+	callPrefix, args string,
+	allocas map[string]string,
+	fieldOffsets map[string][]int,
+	typeMeta map[string]int,
+) error {
+	line := lines[callLine]
+
+	ptrArgMatch := rePtrArg.FindStringSubmatch(args)
+	if ptrArgMatch == nil {
+		return fmt.Errorf("line %d: cannot extract pointer arg from bpfCoreFieldExists args %q",
+			callLine+1, args)
+	}
+	ptrArg := ptrArgMatch[1]
+
+	if typeName, ok := allocas[ptrArg]; ok {
+		offsets := fieldOffsets[typeName]
+		if len(offsets) == 0 {
+			return fmt.Errorf("line %d: no field offsets for type %s", callLine+1, typeName)
+		}
+		accessCall := fmt.Sprintf("call ptr %s(ptr %s, i32 0, i32 0)", coreIntrinsicName, ptrArg)
+		if metaID, ok := typeMeta[typeName]; ok {
+			accessCall += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
+		}
+		repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)",
+			callPrefix, accessCall, bpfFieldExists)
+		lines[callLine] = line[:m[0]] + repl + line[m[1]:]
+		return nil
+	}
+
+	gepLine := findSSADef(lines, ptrArg, callLine)
+	if gepLine < 0 {
+		return fmt.Errorf("line %d: cannot find definition of %s for bpfCoreFieldExists",
+			callLine+1, ptrArg)
+	}
+
+	gepMatch := reByteGEP.FindStringSubmatch(lines[gepLine])
+	if gepMatch == nil {
+		return fmt.Errorf("line %d: definition of %s is not a byte-level GEP: %s",
+			gepLine+1, ptrArg, strings.TrimSpace(lines[gepLine]))
+	}
+	base := gepMatch[2]
+	byteOffset, _ := strconv.Atoi(gepMatch[3])
+
+	typeName, ok := allocas[base]
+	if !ok {
+		return fmt.Errorf("line %d: base pointer %s is not an alloca of a bpfCore type",
+			gepLine+1, base)
+	}
+
+	offsets := fieldOffsets[typeName]
+	fieldIdx := fieldIndexFromOffset(offsets, byteOffset)
+	if fieldIdx < 0 {
+		return fmt.Errorf("line %d: byte offset %d does not match any field in %s (offsets: %v)",
+			gepLine+1, byteOffset, typeName, offsets)
+	}
+
+	gepRepl := fmt.Sprintf("  %s = call ptr %s(ptr %s, i32 %d, i32 %d)",
+		ptrArg, coreIntrinsicName, base, fieldIdx, fieldIdx)
+	if metaID, ok := typeMeta[typeName]; ok {
+		gepRepl += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
+	}
+	if dbg := extractDBG(lines[gepLine]); dbg != "" {
+		gepRepl += ", " + dbg
+	}
+	lines[gepLine] = gepRepl
+
+	repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)",
+		callPrefix, args, bpfFieldExists)
+	lines[callLine] = line[:m[0]] + repl + line[m[1]:]
+	return nil
+}
+
+// findSSADef searches backward from startLine for the line that defines
+// the given SSA value (e.g., "%4 = ...").
+func findSSADef(lines []string, ssaName string, startLine int) int {
+	prefix := ssaName + " ="
+	limit := startLine - 30
+	if limit < 0 {
+		limit = 0
+	}
+	for j := startLine - 1; j >= limit; j-- {
+		if strings.Contains(lines[j], prefix) {
+			return j
+		}
+	}
+	return -1
+}
+
+// findCoreAllocas scans for alloca instructions of bpfCore types and
+// returns a map from SSA name to type name.
+func findCoreAllocas(lines []string) map[string]string {
+	allocas := make(map[string]string)
+	for _, line := range lines {
+		m := reCoreAlloca.FindStringSubmatch(line)
+		if m != nil {
+			allocas[m[1]] = m[2]
+		}
+	}
+	return allocas
+}
+
+// parseCoreFieldSizes extracts field sizes in bytes from a bpfCore struct
+// type definition like "%main.bpfCoreTaskStruct = type { i32, i32, [16 x i8] }".
+func parseCoreFieldSizes(lines []string, typeName string) ([]int, error) {
+	prefix := typeName + " = type {"
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, prefix) {
+			continue
+		}
+		bodyStart := strings.IndexByte(trimmed, '{')
+		bodyEnd := strings.LastIndexByte(trimmed, '}')
+		if bodyStart < 0 || bodyEnd <= bodyStart {
+			return nil, fmt.Errorf("malformed type definition for %s: %s", typeName, trimmed)
+		}
+		body := trimmed[bodyStart+1 : bodyEnd]
+		fields := splitStructFields(body)
+		sizes := make([]int, len(fields))
+		for i, f := range fields {
+			s, err := irTypeSize(f)
+			if err != nil {
+				return nil, fmt.Errorf("type %s field %d: %w", typeName, i, err)
+			}
+			sizes[i] = s
+		}
+		return sizes, nil
+	}
+	return nil, fmt.Errorf("type definition not found for %s", typeName)
+}
+
+// splitStructFields splits an IR struct body like "i32, i32, [16 x i8]"
+// into individual field type strings, respecting nested brackets.
+func splitStructFields(body string) []string {
+	var fields []string
+	depth := 0
+	start := 0
+	for i := 0; i < len(body); i++ {
+		switch body[i] {
+		case '[':
+			depth++
+		case ']':
+			depth--
+		case ',':
+			if depth == 0 {
+				fields = append(fields, strings.TrimSpace(body[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	if f := strings.TrimSpace(body[start:]); f != "" {
+		fields = append(fields, f)
+	}
+	return fields
+}
+
+// irTypeSize returns the size in bytes of an LLVM IR type.
+func irTypeSize(t string) (int, error) {
+	t = strings.TrimSpace(t)
+	switch t {
+	case "i8":
+		return 1, nil
+	case "i16":
+		return 2, nil
+	case "i32":
+		return 4, nil
+	case "i64":
+		return 8, nil
+	case "ptr":
+		return 8, nil
+	}
+	if strings.HasPrefix(t, "[") {
+		inner := strings.TrimPrefix(t, "[")
+		inner = strings.TrimSuffix(inner, "]")
+		parts := strings.SplitN(inner, " x ", 2)
+		if len(parts) != 2 {
+			return 0, fmt.Errorf("unsupported array type: %s", t)
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil {
+			return 0, fmt.Errorf("unsupported array count in %s: %w", t, err)
+		}
+		elemSize, err := irTypeSize(parts[1])
+		if err != nil {
+			return 0, err
+		}
+		return n * elemSize, nil
+	}
+	return 0, fmt.Errorf("unsupported IR type: %s", t)
+}
+
+// cumulativeOffsets converts field sizes to cumulative byte offsets.
+// For sizes [4, 4, 16] the result is [0, 4, 8].
+func cumulativeOffsets(sizes []int) []int {
+	offsets := make([]int, len(sizes))
+	off := 0
+	for i, s := range sizes {
+		offsets[i] = off
+		off += s
+	}
+	return offsets
+}
+
+// fieldIndexFromOffset returns the field index for a byte offset, or -1.
+func fieldIndexFromOffset(offsets []int, byteOffset int) int {
+	for i, off := range offsets {
+		if off == byteOffset {
+			return i
+		}
+	}
+	return -1
 }
 
 // stripCoreExistsDeclarations removes the Go-generated declare lines for
