@@ -186,6 +186,28 @@ func TestRewriteHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("core function skipped", func(t *testing.T) {
+		input := []string{`  %5 = call i32 @main.bpfCoreFieldExists(ptr nonnull %4, ptr undef) #7`}
+		got, err := rewriteHelpers(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[0] != input[0] {
+			t.Errorf("CO-RE call should be left untouched for core rewrite pass, got: %q", got[0])
+		}
+	})
+
+	t.Run("core type exists skipped", func(t *testing.T) {
+		input := []string{`  %1 = call i32 @main.bpfCoreTypeExists(ptr %type, ptr undef) #7`}
+		got, err := rewriteHelpers(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got[0] != input[0] {
+			t.Errorf("CO-RE call should be left untouched for core rewrite pass, got: %q", got[0])
+		}
+	})
+
 	t.Run("non-helper line unchanged", func(t *testing.T) {
 		input := []string{`  %1 = add i32 %a, %b`}
 		got, err := rewriteHelpers(input)

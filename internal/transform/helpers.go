@@ -279,6 +279,9 @@ func rewriteHelpers(lines []string) ([]string, error) {
 
 		retType := line[loc[2]:loc[3]]
 		funcName := line[loc[4]:loc[5]]
+		if strings.HasPrefix(funcName, "main.bpfCore") {
+			continue
+		}
 		helperID, ok := knownHelpers[funcName]
 		if !ok {
 			return nil, &diag.Error{
