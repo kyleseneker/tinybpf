@@ -289,6 +289,7 @@ const bpfFieldExists = 2 // BPF_FIELD_EXISTS info kind for llvm.bpf.preserve.fie
 // coreExistsContext holds precomputed data for rewriting bpfCore*Exists calls.
 type coreExistsContext struct {
 	fieldOffsets map[string][]int
+	structSizes  map[string]int
 	allocas      map[string]string
 	typeMeta     map[string]int
 }
@@ -304,12 +305,19 @@ func buildCoreExistsContext(lines []string) (*coreExistsContext, error) {
 		return &coreExistsContext{}, nil
 	}
 	fieldOffsets := make(map[string][]int, len(coreTypes))
+	structSizes := make(map[string]int, len(coreTypes))
 	for typeName := range coreTypes {
 		sizes, parseErr := parseCoreFieldSizes(lines, typeName)
 		if parseErr != nil {
 			return nil, parseErr
 		}
-		fieldOffsets[typeName] = cumulativeOffsets(sizes)
+		offsets := cumulativeOffsets(sizes)
+		fieldOffsets[typeName] = offsets
+		total := 0
+		for _, s := range sizes {
+			total += s
+		}
+		structSizes[typeName] = total
 	}
 	typeMeta, err := findCoreTypeMetadata(lines, coreTypes)
 	if err != nil {
@@ -317,6 +325,7 @@ func buildCoreExistsContext(lines []string) (*coreExistsContext, error) {
 	}
 	return &coreExistsContext{
 		fieldOffsets: fieldOffsets,
+		structSizes:  structSizes,
 		allocas:      findCoreAllocas(lines),
 		typeMeta:     typeMeta,
 	}, nil
@@ -396,11 +405,12 @@ func rewriteFieldExists(
 	}
 	ptrArg := ptrArgMatch[1]
 
-	if typeName, ok := ctx.allocas[ptrArg]; ok {
-		offsets := ctx.fieldOffsets[typeName]
-		if len(offsets) == 0 {
-			return fmt.Errorf("line %d: no field offsets for type %s", callLine+1, typeName)
-		}
+	gepLine := findSSADef(lines, ptrArg, callLine)
+	if gepLine >= 0 && reByteGEP.MatchString(lines[gepLine]) {
+		return rewriteFieldExistsGEP(lines, callLine, gepLine, m, callPrefix, args, ptrArg, ctx)
+	}
+
+	if typeName, ok := ctx.resolveAllocaType(ptrArg); ok {
 		accessCall := fmt.Sprintf("call ptr %s(ptr %s, i32 0, i32 0)", coreIntrinsicName, ptrArg)
 		if metaID, ok := ctx.typeMeta[typeName]; ok {
 			accessCall += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
@@ -411,24 +421,29 @@ func rewriteFieldExists(
 		return nil
 	}
 
-	gepLine := findSSADef(lines, ptrArg, callLine)
-	if gepLine < 0 {
-		return fmt.Errorf("line %d: cannot find definition of %s for bpfCoreFieldExists",
-			callLine+1, ptrArg)
-	}
+	return fmt.Errorf("line %d: cannot resolve bpfCore struct type for pointer %s",
+		callLine+1, ptrArg)
+}
 
+// rewriteFieldExistsGEP handles the GEP case of rewriteFieldExists: the
+// pointer argument is defined by a byte-level GEP with a non-zero offset.
+func rewriteFieldExistsGEP(
+	lines []string, callLine, gepLine int,
+	m []int, callPrefix, args, ptrArg string,
+	ctx *coreExistsContext,
+) error {
+	line := lines[callLine]
 	gepMatch := reByteGEP.FindStringSubmatch(lines[gepLine])
-	if gepMatch == nil {
-		return fmt.Errorf("line %d: definition of %s is not a byte-level GEP: %s",
-			gepLine+1, ptrArg, strings.TrimSpace(lines[gepLine]))
-	}
 	base := gepMatch[2]
 	byteOffset, _ := strconv.Atoi(gepMatch[3])
 
 	typeName, ok := ctx.allocas[base]
 	if !ok {
-		return fmt.Errorf("line %d: base pointer %s is not an alloca of a bpfCore type",
-			gepLine+1, base)
+		typeName, ok = ctx.inferTypeFromOffset(byteOffset)
+		if !ok {
+			return fmt.Errorf("line %d: base pointer %s is not an alloca of a bpfCore type and byte offset %d does not uniquely identify a struct",
+				gepLine+1, base, byteOffset)
+		}
 	}
 
 	offsets := ctx.fieldOffsets[typeName]
@@ -481,6 +496,35 @@ func findCoreAllocas(lines []string) map[string]string {
 		}
 	}
 	return allocas
+}
+
+// inferTypeFromOffset returns the bpfCore struct type that has a field at
+// the given byte offset, if exactly one type matches.
+func (c *coreExistsContext) inferTypeFromOffset(byteOffset int) (string, bool) {
+	var match string
+	for typeName, offsets := range c.fieldOffsets {
+		if fieldIndexFromOffset(offsets, byteOffset) >= 0 {
+			if match != "" {
+				return "", false
+			}
+			match = typeName
+		}
+	}
+	return match, match != ""
+}
+
+// resolveAllocaType returns the bpfCore struct type for an alloca pointer,
+// or "" if the alloca is not a bpfCore type.
+func (c *coreExistsContext) resolveAllocaType(ssaName string) (string, bool) {
+	if typeName, ok := c.allocas[ssaName]; ok {
+		return typeName, true
+	}
+	if len(c.fieldOffsets) == 1 {
+		for typeName := range c.fieldOffsets {
+			return typeName, true
+		}
+	}
+	return "", false
 }
 
 // parseCoreFieldSizes extracts field sizes in bytes from a bpfCore struct

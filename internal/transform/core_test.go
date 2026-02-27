@@ -395,6 +395,45 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 			},
 		},
 		{
+			name: "field_exists with byte-array alloca (replaceAlloc output)",
+			lines: []string{
+				"%main.bpfCoreTaskStruct = type { i32, i32 }",
+				"declare i32 @main.bpfCoreFieldExists(ptr, ptr)",
+				"define void @main.prog(ptr %ctx) {",
+				"  %core = alloca [8 x i8], align 4",
+				"  %1 = getelementptr inbounds nuw i8, ptr %core, i64 4",
+				"  %2 = call i32 @main.bpfCoreFieldExists(ptr nonnull %1, ptr undef)",
+				"}",
+			},
+			wantContain: []string{
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %core, i32 1, i32 1)",
+				"@llvm.bpf.preserve.field.info.p0(ptr nonnull %1, i64 2)",
+			},
+			notContain: []string{
+				"@main.bpfCoreFieldExists",
+				"getelementptr inbounds nuw i8",
+			},
+		},
+		{
+			name: "field_exists at offset 0 with byte-array alloca",
+			lines: []string{
+				"%main.bpfCoreTaskStruct = type { i32, i32 }",
+				"declare i32 @main.bpfCoreFieldExists(ptr, ptr)",
+				"define void @main.prog(ptr %ctx) {",
+				"  %core = alloca [8 x i8], align 4",
+				"  %1 = call i32 @main.bpfCoreFieldExists(ptr %core, ptr undef)",
+				"}",
+			},
+			wantContain: []string{
+				"preserve.struct.access.index.p0.p0(ptr %core, i32 0, i32 0)",
+				"@llvm.bpf.preserve.field.info.p0(",
+				"i64 2)",
+			},
+			notContain: []string{
+				"@main.bpfCoreFieldExists",
+			},
+		},
+		{
 			name: "type_exists rewrite",
 			lines: []string{
 				"declare i32 @main.bpfCoreTypeExists(ptr, ptr)",
