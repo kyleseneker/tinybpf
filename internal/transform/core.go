@@ -170,6 +170,7 @@ func discoverCoreTypesFromMetadata(lines []string) (map[string][]int, map[string
 // findCoreComposites scans for DICompositeType metadata entries that
 // describe bpfCore struct types and extracts their member metadata IDs.
 func findCoreComposites(lines []string) []coreComposite {
+	metaIndex := buildMetadataIndex(lines)
 	var result []coreComposite
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -189,26 +190,59 @@ func findCoreComposites(lines []string) []coreComposite {
 		result = append(result, coreComposite{
 			typeName:  "%" + goName,
 			metaID:    metaID,
-			memberIDs: extractElementIDs(trimmed),
+			memberIDs: extractElementIDs(trimmed, metaIndex),
 		})
 	}
 	return result
 }
 
-// extractElementIDs extracts metadata IDs from an elements: !{!N, ...} field.
-func extractElementIDs(line string) []int {
+// buildMetadataIndex maps metadata IDs to their trimmed line content
+// for resolving indirect metadata references like elements: !N.
+func buildMetadataIndex(lines []string) map[int]string {
+	idx := make(map[int]string)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if len(trimmed) > 0 && trimmed[0] == '!' {
+			if id := extractMetadataID(trimmed); id >= 0 {
+				idx[id] = trimmed
+			}
+		}
+	}
+	return idx
+}
+
+// extractElementIDs extracts metadata IDs from an elements field.
+func extractElementIDs(line string, metaIndex map[int]string) []int {
 	elemIdx := strings.Index(line, "elements:")
 	if elemIdx < 0 {
 		return nil
 	}
 	rest := line[elemIdx:]
-	open := strings.IndexByte(rest, '{')
-	close := strings.IndexByte(rest, '}')
+
+	if ids := extractMetaIDsFromBraces(rest); ids != nil {
+		return ids
+	}
+
+	refs := reMetaRef.FindStringSubmatch(rest)
+	if refs == nil {
+		return nil
+	}
+	indirectID, _ := strconv.Atoi(refs[1])
+	if resolved, ok := metaIndex[indirectID]; ok {
+		return extractMetaIDsFromBraces(resolved)
+	}
+	return nil
+}
+
+// extractMetaIDsFromBraces extracts !N references from within { ... }.
+func extractMetaIDsFromBraces(s string) []int {
+	open := strings.IndexByte(s, '{')
+	close := strings.IndexByte(s, '}')
 	if open < 0 || close <= open {
 		return nil
 	}
 	var ids []int
-	for _, m := range reMetaRef.FindAllStringSubmatch(rest[open:close], -1) {
+	for _, m := range reMetaRef.FindAllStringSubmatch(s[open:close], -1) {
 		n, _ := strconv.Atoi(m[1])
 		ids = append(ids, n)
 	}
@@ -566,8 +600,8 @@ func rewriteFieldExistsGEP(
 
 	typeName, fieldIdx := ctx.resolveField(byteOffset)
 	if typeName == "" {
-		return fmt.Errorf("line %d: byte offset %d does not match any bpfCore struct field",
-			gepLine+1, byteOffset)
+		return fmt.Errorf("line %d: byte offset %d does not match any bpfCore struct field (known types: %v)",
+			gepLine+1, byteOffset, ctx.typeNames())
 	}
 
 	gepRepl := fmt.Sprintf("  %s = call ptr %s(ptr %s, i32 %d, i32 %d)",
@@ -621,6 +655,18 @@ func (c *coreExistsContext) resolveField(byteOffset int) (string, int) {
 		}
 	}
 	return "", -1
+}
+
+// typeNames returns a summary of known types and their offsets for diagnostics.
+func (c *coreExistsContext) typeNames() string {
+	if len(c.fieldOffsets) == 0 {
+		return "none"
+	}
+	var parts []string
+	for name, offsets := range c.fieldOffsets {
+		parts = append(parts, fmt.Sprintf("%s%v", name, offsets))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // parseCoreFieldSizes extracts field sizes in bytes from a bpfCore struct
