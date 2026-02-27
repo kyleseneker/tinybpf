@@ -123,6 +123,133 @@ func findCoreTypeMetadata(lines []string, coreTypes map[string]bool) (map[string
 	return meta, nil
 }
 
+// reMetaRef matches !N metadata references inside a metadata entry.
+var reMetaRef = regexp.MustCompile(`!(\d+)`)
+
+type coreComposite struct {
+	typeName  string
+	metaID    int
+	memberIDs []int
+}
+
+// discoverCoreTypesFromMetadata finds bpfCore struct types from DWARF debug
+// metadata when no explicit type definitions are present.
+func discoverCoreTypesFromMetadata(lines []string) (map[string][]int, map[string]int) {
+	composites := findCoreComposites(lines)
+	if len(composites) == 0 {
+		return nil, nil
+	}
+
+	memberLines := make(map[int]string)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if isMemberMeta(trimmed) {
+			if id := extractMetadataID(trimmed); id >= 0 {
+				memberLines[id] = trimmed
+			}
+		}
+	}
+
+	fieldOffsets := make(map[string][]int)
+	metaIDs := make(map[string]int)
+	for _, ci := range composites {
+		offsets := make([]int, 0, len(ci.memberIDs))
+		for _, mID := range ci.memberIDs {
+			if mLine, ok := memberLines[mID]; ok {
+				offsets = append(offsets, extractMetaIntField(mLine, "offset")/8)
+			}
+		}
+		if len(offsets) > 0 {
+			fieldOffsets[ci.typeName] = offsets
+			metaIDs[ci.typeName] = ci.metaID
+		}
+	}
+	return fieldOffsets, metaIDs
+}
+
+// findCoreComposites scans for DICompositeType metadata entries that
+// describe bpfCore struct types and extracts their member metadata IDs.
+func findCoreComposites(lines []string) []coreComposite {
+	var result []coreComposite
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.Contains(trimmed, "DICompositeType") ||
+			!strings.Contains(trimmed, "DW_TAG_structure_type") ||
+			!strings.Contains(trimmed, "bpfCore") {
+			continue
+		}
+		goName := extractMetaStringField(trimmed, "name")
+		if goName == "" || !strings.Contains(goName, "bpfCore") {
+			continue
+		}
+		metaID := extractMetadataID(trimmed)
+		if metaID < 0 {
+			continue
+		}
+		result = append(result, coreComposite{
+			typeName:  "%" + goName,
+			metaID:    metaID,
+			memberIDs: extractElementIDs(trimmed),
+		})
+	}
+	return result
+}
+
+// extractElementIDs extracts metadata IDs from an elements: !{!N, ...} field.
+func extractElementIDs(line string) []int {
+	elemIdx := strings.Index(line, "elements:")
+	if elemIdx < 0 {
+		return nil
+	}
+	rest := line[elemIdx:]
+	open := strings.IndexByte(rest, '{')
+	close := strings.IndexByte(rest, '}')
+	if open < 0 || close <= open {
+		return nil
+	}
+	var ids []int
+	for _, m := range reMetaRef.FindAllStringSubmatch(rest[open:close], -1) {
+		n, _ := strconv.Atoi(m[1])
+		ids = append(ids, n)
+	}
+	return ids
+}
+
+// extractMetaStringField extracts a quoted string value from a metadata field.
+func extractMetaStringField(line, field string) string {
+	prefix := field + `: "`
+	idx := strings.Index(line, prefix)
+	if idx < 0 {
+		return ""
+	}
+	start := idx + len(prefix)
+	end := strings.IndexByte(line[start:], '"')
+	if end < 0 {
+		return ""
+	}
+	return line[start : start+end]
+}
+
+// extractMetaIntField extracts an integer value from a metadata field.
+// Returns 0 if the field is not found.
+func extractMetaIntField(line, field string) int {
+	prefix := field + ": "
+	idx := strings.Index(line, prefix)
+	if idx < 0 {
+		return 0
+	}
+	start := idx + len(prefix)
+	end := start
+	for end < len(line) && line[end] >= '0' && line[end] <= '9' {
+		end++
+	}
+	if end == start {
+		return 0
+	}
+	n, _ := strconv.Atoi(line[start:end])
+	return n
+}
+
 // extractDBG pulls a !dbg !N reference from trailing GEP text.
 func extractDBG(s string) string {
 	idx := strings.Index(s, "!dbg ")
@@ -277,58 +404,56 @@ func renameCoreField(line string) string {
 var reByteGEP = regexp.MustCompile(
 	`^\s*(%[\w.]+)\s*=\s*getelementptr\s+(?:inbounds\s+)?(?:nuw\s+)?i8,\s*ptr\s+(%[\w.]+),\s*i64\s+(\d+)`)
 
-// reCoreAlloca matches alloca instructions for bpfCore struct types.
-var reCoreAlloca = regexp.MustCompile(
-	`^\s*(%[\w.]+)\s*=\s*alloca\s+(%main\.bpfCore[\w.]*)`)
-
 // rePtrArg extracts an SSA value name from a pointer argument like "ptr nonnull %4".
 var rePtrArg = regexp.MustCompile(`ptr\s+(?:nonnull\s+)?(%[\w.]+)`)
 
-const bpfFieldExists = 2 // BPF_FIELD_EXISTS info kind for llvm.bpf.preserve.field.info
+const bpfFieldExists = 2
 
 // coreExistsContext holds precomputed data for rewriting bpfCore*Exists calls.
 type coreExistsContext struct {
 	fieldOffsets map[string][]int
-	structSizes  map[string]int
-	allocas      map[string]string
 	typeMeta     map[string]int
 }
 
-// buildCoreExistsContext precomputes struct layouts, allocas, and metadata
-// needed for tracing bpfCoreFieldExists calls back to their access chains.
+// buildCoreExistsContext precomputes struct layouts and metadata needed for
+// rewriting bpfCoreFieldExists calls.
 func buildCoreExistsContext(lines []string) (*coreExistsContext, error) {
-	coreTypes, err := findCoreTypes(lines)
-	if err != nil {
-		return nil, err
-	}
-	if len(coreTypes) == 0 {
-		return &coreExistsContext{}, nil
-	}
-	fieldOffsets := make(map[string][]int, len(coreTypes))
-	structSizes := make(map[string]int, len(coreTypes))
-	for typeName := range coreTypes {
-		sizes, parseErr := parseCoreFieldSizes(lines, typeName)
-		if parseErr != nil {
-			return nil, parseErr
-		}
-		offsets := cumulativeOffsets(sizes)
-		fieldOffsets[typeName] = offsets
-		total := 0
-		for _, s := range sizes {
-			total += s
-		}
-		structSizes[typeName] = total
-	}
-	typeMeta, err := findCoreTypeMetadata(lines, coreTypes)
+	fieldOffsets, typeMeta, err := discoverCoreFieldOffsets(lines)
 	if err != nil {
 		return nil, err
 	}
 	return &coreExistsContext{
 		fieldOffsets: fieldOffsets,
-		structSizes:  structSizes,
-		allocas:      findCoreAllocas(lines),
 		typeMeta:     typeMeta,
 	}, nil
+}
+
+// discoverCoreFieldOffsets finds bpfCore struct types and their field byte
+// offsets from type definitions.
+func discoverCoreFieldOffsets(lines []string) (map[string][]int, map[string]int, error) {
+	coreTypes, err := findCoreTypes(lines)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if len(coreTypes) > 0 {
+		fieldOffsets := make(map[string][]int, len(coreTypes))
+		for typeName := range coreTypes {
+			sizes, parseErr := parseCoreFieldSizes(lines, typeName)
+			if parseErr != nil {
+				return nil, nil, parseErr
+			}
+			fieldOffsets[typeName] = cumulativeOffsets(sizes)
+		}
+		typeMeta, metaErr := findCoreTypeMetadata(lines, coreTypes)
+		if metaErr != nil {
+			return nil, nil, metaErr
+		}
+		return fieldOffsets, typeMeta, nil
+	}
+
+	fieldOffsets, typeMeta := discoverCoreTypesFromMetadata(lines)
+	return fieldOffsets, typeMeta, nil
 }
 
 // rewriteCoreExistsChecks rewrites bpfCoreFieldExists/bpfCoreTypeExists
@@ -406,51 +531,43 @@ func rewriteFieldExists(
 	ptrArg := ptrArgMatch[1]
 
 	gepLine := findSSADef(lines, ptrArg, callLine)
-	if gepLine >= 0 && reByteGEP.MatchString(lines[gepLine]) {
-		return rewriteFieldExistsGEP(lines, callLine, gepLine, m, callPrefix, args, ptrArg, ctx)
-	}
-
-	if typeName, ok := ctx.resolveAllocaType(ptrArg); ok {
-		accessCall := fmt.Sprintf("call ptr %s(ptr %s, i32 0, i32 0)", coreIntrinsicName, ptrArg)
-		if metaID, ok := ctx.typeMeta[typeName]; ok {
-			accessCall += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
+	if gepLine >= 0 {
+		if gepMatch := reByteGEP.FindStringSubmatch(lines[gepLine]); gepMatch != nil {
+			return rewriteFieldExistsGEP(lines, callLine, gepLine, m, callPrefix, args, ptrArg, gepMatch, ctx)
 		}
-		repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)",
-			callPrefix, accessCall, bpfFieldExists)
-		lines[callLine] = line[:m[0]] + repl + line[m[1]:]
-		return nil
 	}
 
-	return fmt.Errorf("line %d: cannot resolve bpfCore struct type for pointer %s",
-		callLine+1, ptrArg)
+	typeName := ctx.soleType()
+	if typeName == "" {
+		return fmt.Errorf("line %d: cannot determine bpfCore struct type for field-0 access via %s (found %d types)",
+			callLine+1, ptrArg, len(ctx.fieldOffsets))
+	}
+	accessCall := fmt.Sprintf("call ptr %s(ptr %s, i32 0, i32 0)", coreIntrinsicName, ptrArg)
+	if metaID, ok := ctx.typeMeta[typeName]; ok {
+		accessCall += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
+	}
+	repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)",
+		callPrefix, accessCall, bpfFieldExists)
+	lines[callLine] = line[:m[0]] + repl + line[m[1]:]
+	return nil
 }
 
-// rewriteFieldExistsGEP handles the GEP case of rewriteFieldExists: the
-// pointer argument is defined by a byte-level GEP with a non-zero offset.
+// rewriteFieldExistsGEP handles the GEP case: the pointer argument is
+// defined by a byte-level GEP, giving us a non-zero field byte offset.
 func rewriteFieldExistsGEP(
 	lines []string, callLine, gepLine int,
 	m []int, callPrefix, args, ptrArg string,
+	gepMatch []string,
 	ctx *coreExistsContext,
 ) error {
 	line := lines[callLine]
-	gepMatch := reByteGEP.FindStringSubmatch(lines[gepLine])
 	base := gepMatch[2]
 	byteOffset, _ := strconv.Atoi(gepMatch[3])
 
-	typeName, ok := ctx.allocas[base]
-	if !ok {
-		typeName, ok = ctx.inferTypeFromOffset(byteOffset)
-		if !ok {
-			return fmt.Errorf("line %d: base pointer %s is not an alloca of a bpfCore type and byte offset %d does not uniquely identify a struct",
-				gepLine+1, base, byteOffset)
-		}
-	}
-
-	offsets := ctx.fieldOffsets[typeName]
-	fieldIdx := fieldIndexFromOffset(offsets, byteOffset)
-	if fieldIdx < 0 {
-		return fmt.Errorf("line %d: byte offset %d does not match any field in %s (offsets: %v)",
-			gepLine+1, byteOffset, typeName, offsets)
+	typeName, fieldIdx := ctx.resolveField(byteOffset)
+	if typeName == "" {
+		return fmt.Errorf("line %d: byte offset %d does not match any bpfCore struct field",
+			gepLine+1, byteOffset)
 	}
 
 	gepRepl := fmt.Sprintf("  %s = call ptr %s(ptr %s, i32 %d, i32 %d)",
@@ -485,46 +602,25 @@ func findSSADef(lines []string, ssaName string, startLine int) int {
 	return -1
 }
 
-// findCoreAllocas scans for alloca instructions of bpfCore types and
-// returns a map from SSA name to type name.
-func findCoreAllocas(lines []string) map[string]string {
-	allocas := make(map[string]string)
-	for _, line := range lines {
-		m := reCoreAlloca.FindStringSubmatch(line)
-		if m != nil {
-			allocas[m[1]] = m[2]
-		}
-	}
-	return allocas
-}
-
-// inferTypeFromOffset returns the bpfCore struct type that has a field at
-// the given byte offset, if exactly one type matches.
-func (c *coreExistsContext) inferTypeFromOffset(byteOffset int) (string, bool) {
-	var match string
-	for typeName, offsets := range c.fieldOffsets {
-		if fieldIndexFromOffset(offsets, byteOffset) >= 0 {
-			if match != "" {
-				return "", false
-			}
-			match = typeName
-		}
-	}
-	return match, match != ""
-}
-
-// resolveAllocaType returns the bpfCore struct type for an alloca pointer,
-// or "" if the alloca is not a bpfCore type.
-func (c *coreExistsContext) resolveAllocaType(ssaName string) (string, bool) {
-	if typeName, ok := c.allocas[ssaName]; ok {
-		return typeName, true
-	}
+// soleType returns the single bpfCore type name if exactly one is known.
+func (c *coreExistsContext) soleType() string {
 	if len(c.fieldOffsets) == 1 {
 		for typeName := range c.fieldOffsets {
-			return typeName, true
+			return typeName
 		}
 	}
-	return "", false
+	return ""
+}
+
+// resolveField finds the bpfCore struct type that has a field at byteOffset
+// and returns the type name and field index.
+func (c *coreExistsContext) resolveField(byteOffset int) (string, int) {
+	for typeName, offsets := range c.fieldOffsets {
+		if idx := fieldIndexFromOffset(offsets, byteOffset); idx >= 0 {
+			return typeName, idx
+		}
+	}
+	return "", -1
 }
 
 // parseCoreFieldSizes extracts field sizes in bytes from a bpfCore struct
