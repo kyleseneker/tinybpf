@@ -79,11 +79,49 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
 fi
 
 RESOLVED_KERNEL="${KERNEL_VERSION}"
+KERNEL_CANDIDATES=("${RESOLVED_KERNEL}")
+append_unique_candidate() {
+  local c="$1"
+  for existing in "${KERNEL_CANDIDATES[@]}"; do
+    if [[ "${existing}" == "${c}" ]]; then
+      return 0
+    fi
+  done
+  KERNEL_CANDIDATES+=("${c}")
+}
 if [[ "${KERNEL_VERSION}" =~ ^[0-9]+\.[0-9]+$ ]]; then
-  RESOLVED_KERNEL="v${KERNEL_VERSION}.0"
-  echo "  resolved kernel ${KERNEL_VERSION} -> ${RESOLVED_KERNEL}"
+  KERNEL_CANDIDATES=()
+  latest_patch=""
+  if latest_patch="$(python3 - "${KERNEL_VERSION}" <<'PY'
+import json
+import sys
+import urllib.request
+
+base = sys.argv[1] + "."
+with urllib.request.urlopen("https://www.kernel.org/releases.json", timeout=5) as r:
+    data = json.load(r)
+versions = []
+for rel in data.get("releases", []):
+    v = rel.get("version", "")
+    if v.startswith(base) and all(p.isdigit() for p in v.split(".")):
+        versions.append(v)
+if versions:
+    def key(v: str):
+        return tuple(int(p) for p in v.split("."))
+    print(max(versions, key=key))
+PY
+)"; then
+    if [[ -n "${latest_patch}" ]]; then
+      append_unique_candidate "v${latest_patch}"
+    fi
+  fi
+  append_unique_candidate "v${KERNEL_VERSION}"
+  append_unique_candidate "v${KERNEL_VERSION}.0"
+  RESOLVED_KERNEL="${KERNEL_CANDIDATES[0]}"
+  echo "  resolved kernel ${KERNEL_VERSION} candidates: ${KERNEL_CANDIDATES[*]}"
 elif [[ "${KERNEL_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   RESOLVED_KERNEL="v${KERNEL_VERSION}"
+  KERNEL_CANDIDATES=("${RESOLVED_KERNEL}")
   echo "  resolved kernel ${KERNEL_VERSION} -> ${RESOLVED_KERNEL}"
 fi
 
@@ -114,10 +152,20 @@ fi
 INNEREOF
 chmod +x "${INNER_SCRIPT}"
 
-vng --run "${RESOLVED_KERNEL}" -- \
-  bash "${INNER_SCRIPT}" "${OBJ}" \
-  2>&1 | tee "${LOG_DIR}/vng.log"
-VNG_RC=${PIPESTATUS[0]}
+VNG_RC=1
+for candidate in "${KERNEL_CANDIDATES[@]}"; do
+  echo "  trying kernel candidate: ${candidate}"
+  if vng --run "${candidate}" -- \
+    bash "${INNER_SCRIPT}" "${OBJ}" \
+    2>&1 | tee "${LOG_DIR}/vng-${candidate//\//_}.log"; then
+    VNG_RC=0
+    RESOLVED_KERNEL="${candidate}"
+    break
+  fi
+done
+if [[ ${VNG_RC} -ne 0 ]]; then
+  echo "  tried kernel candidates: ${KERNEL_CANDIDATES[*]}"
+fi
 
 # --- Step 4: Summary ---
 echo ""
