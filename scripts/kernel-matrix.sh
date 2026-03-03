@@ -80,38 +80,11 @@ fi
 
 RESOLVED_KERNEL="${KERNEL_VERSION}"
 if [[ "${KERNEL_VERSION}" =~ ^[0-9]+\.[0-9]+$ ]]; then
-  kernel_re="^v?${KERNEL_VERSION}\\.[0-9]+$"
-  available_versions="$(vng --list 2>/dev/null || true)"
-  if [[ -n "${available_versions}" ]]; then
-    match="$(
-      printf '%s\n' "${available_versions}" \
-        | awk -v re="${kernel_re}" '
-            {
-              for (i = 1; i <= NF; i++) {
-                tok = $i
-                gsub(/^[()[:space:]]+|[()[:space:]]+$/, "", tok)
-                if (tok ~ re) {
-                  sub(/^v/, "", tok)
-                  print tok
-                }
-              }
-            }
-          ' \
-        | sort -V \
-        | tail -n1 || true
-    )"
-    if [[ -n "${match}" ]]; then
-      RESOLVED_KERNEL="${match}"
-      echo "  resolved kernel ${KERNEL_VERSION} -> ${RESOLVED_KERNEL}"
-    else
-      echo "FAIL: kernel ${KERNEL_VERSION} not present in virtme-ng catalog."
-      echo "Run 'vng --list' and choose a listed full version (for example, ${KERNEL_VERSION}.x)."
-      exit 1
-    fi
-  else
-    echo "FAIL: unable to query virtme-ng kernel catalog via 'vng --list'."
-    exit 1
-  fi
+  RESOLVED_KERNEL="v${KERNEL_VERSION}.0"
+  echo "  resolved kernel ${KERNEL_VERSION} -> ${RESOLVED_KERNEL}"
+elif [[ "${KERNEL_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  RESOLVED_KERNEL="v${KERNEL_VERSION}"
+  echo "  resolved kernel ${KERNEL_VERSION} -> ${RESOLVED_KERNEL}"
 fi
 
 INNER_SCRIPT="${BUILD_DIR}/inner-test.sh"
