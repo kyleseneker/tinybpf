@@ -37,11 +37,15 @@ jobs:
           sudo apt-get install -y -qq llvm-20
           echo "/usr/lib/llvm-20/bin" >> "$GITHUB_PATH"
 
-      - name: Install virtme-ng and QEMU
+      - name: Install virtme-ng, QEMU, and bpftool
         run: |
           pip3 install --user virtme-ng
-          sudo apt-get install -y -qq qemu-system-x86 qemu-utils linux-tools-common "linux-tools-$(uname -r)" || true
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils libelf-dev
           command -v qemu-system-x86_64
+          git clone --depth=1 --recurse-submodules https://github.com/libbpf/bpftool.git /tmp/bpftool
+          make -j"$(nproc)" -C /tmp/bpftool/src
+          sudo make -C /tmp/bpftool/src install
+          bpftool version
 
       - name: Build tinybpf
         run: go build -o "$PWD/tinybpf" ./cmd/tinybpf

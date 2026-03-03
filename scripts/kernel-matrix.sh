@@ -114,10 +114,14 @@ echo "[3/4] Booting kernel ${KERNEL_VERSION} via virtme-ng..."
 resolve_kernel
 echo "  resolved: ${KERNEL_VERSION} -> ${RESOLVED_KERNEL}"
 
+# Prefer a standalone bpftool (e.g. built from source at /usr/local/sbin)
+# over Ubuntu's /usr/sbin/bpftool wrapper, which dispatches via uname -r
+# and breaks inside guests running a different kernel.
 BPFTOOL=""
-# shellcheck disable=SC2012
-BPFTOOL="$(ls /usr/lib/linux-tools/*/bpftool 2>/dev/null | head -1 || true)"
-if [[ -z "${BPFTOOL}" || ! -x "${BPFTOOL}" ]]; then
+for p in /usr/local/sbin/bpftool /usr/local/bin/bpftool; do
+  [[ -x "${p}" ]] && BPFTOOL="${p}" && break
+done
+if [[ -z "${BPFTOOL}" ]]; then
   BPFTOOL="$(command -v bpftool 2>/dev/null || true)"
 fi
 if [[ -n "${BPFTOOL}" ]]; then
