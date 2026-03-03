@@ -620,11 +620,14 @@ func rewriteCoreExistsChecks(lines []string) ([]string, error) {
 
 		switch funcName {
 		case "bpfCoreFieldExists":
-			if err := rewriteFieldExists(lines, i, m, callPrefix, args, ctx); err != nil {
-				return nil, err
+			usedAccessIndex, rwErr := rewriteFieldExists(lines, i, m, callPrefix, args, ctx)
+			if rwErr != nil {
+				return nil, rwErr
+			}
+			if usedAccessIndex {
+				needAccessIndex = true
 			}
 			needField = true
-			needAccessIndex = true
 		case "bpfCoreTypeExists":
 			repl := fmt.Sprintf("%s%s(%s, i64 0)", callPrefix, "@llvm.bpf.preserve.type.info.p0", args)
 			lines[i] = line[:m[0]] + repl + line[m[1]:]
@@ -654,13 +657,13 @@ func rewriteFieldExists(
 	lines []string, callLine int, m []int,
 	callPrefix, args string,
 	ctx *coreExistsContext,
-) error {
+) (bool, error) {
 	line := lines[callLine]
 
 	firstArg := strings.TrimSpace(strings.SplitN(args, ",", 2)[0])
 	ptrArgMatch := reSSAValue.FindStringSubmatch(firstArg)
 	if ptrArgMatch == nil {
-		return fmt.Errorf("line %d: cannot extract pointer arg from bpfCoreFieldExists args %q",
+		return false, fmt.Errorf("line %d: cannot extract pointer arg from bpfCoreFieldExists args %q",
 			callLine+1, args)
 	}
 	ptrArg := ptrArgMatch[1]
@@ -674,15 +677,10 @@ func rewriteFieldExists(
 
 	typeName := ctx.soleType()
 	if typeName == "" {
-		if idx, ok := ctx.fallbackIdx[0]; ok {
-			accessCall := preserveStructAccessCall(ptrArg, "i8", strconv.Itoa(idx), strconv.Itoa(idx))
-			repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)",
-				callPrefix, accessCall, bpfFieldExists)
-			lines[callLine] = line[:m[0]] + repl + line[m[1]:]
-			return nil
-		}
-		return fmt.Errorf("line %d: cannot determine bpfCore struct type for field-0 access via %s (found %d types)",
-			callLine+1, ptrArg, len(ctx.fieldOffsets))
+		repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)",
+			callPrefix, args, bpfFieldExists)
+		lines[callLine] = line[:m[0]] + repl + line[m[1]:]
+		return false, nil
 	}
 	accessCall := preserveStructAccessCall(ptrArg, typeName, "0", "0")
 	if metaID, ok := ctx.typeMeta[typeName]; ok {
@@ -691,7 +689,7 @@ func rewriteFieldExists(
 	repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)",
 		callPrefix, accessCall, bpfFieldExists)
 	lines[callLine] = line[:m[0]] + repl + line[m[1]:]
-	return nil
+	return true, nil
 }
 
 // rewriteFieldExistsGEP handles the GEP case: the pointer argument is
@@ -701,39 +699,39 @@ func rewriteFieldExistsGEP(
 	m []int, callPrefix, args, ptrArg string,
 	gepMatch []string,
 	ctx *coreExistsContext,
-) error {
+) (bool, error) {
 	line := lines[callLine]
 	base := gepMatch[2]
 	byteOffset, _ := strconv.Atoi(gepMatch[3])
 
 	typeName, fieldIdx := ctx.resolveField(byteOffset)
+	usedFallback := false
 	if typeName == "" {
 		if idx, ok := ctx.fallbackIdx[byteOffset]; ok {
 			fieldIdx = idx
+			usedFallback = true
 		} else {
-			return fmt.Errorf("line %d: byte offset %d does not match any bpfCore struct field (known types: %v)",
+			return false, fmt.Errorf("line %d: byte offset %d does not match any bpfCore struct field (known types: %v)",
 				gepLine+1, byteOffset, ctx.typeNames())
 		}
 	}
 
-	elemType := "i8"
-	if typeName != "" {
-		elemType = typeName
+	if !usedFallback {
+		gepRepl := fmt.Sprintf("  %s = %s",
+			ptrArg, preserveStructAccessCall(base, typeName, strconv.Itoa(fieldIdx), strconv.Itoa(fieldIdx)))
+		if metaID, ok := ctx.typeMeta[typeName]; ok {
+			gepRepl += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
+		}
+		if dbg := extractDBG(lines[gepLine]); dbg != "" {
+			gepRepl += ", " + dbg
+		}
+		lines[gepLine] = gepRepl
 	}
-	gepRepl := fmt.Sprintf("  %s = %s",
-		ptrArg, preserveStructAccessCall(base, elemType, strconv.Itoa(fieldIdx), strconv.Itoa(fieldIdx)))
-	if metaID, ok := ctx.typeMeta[typeName]; ok {
-		gepRepl += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
-	}
-	if dbg := extractDBG(lines[gepLine]); dbg != "" {
-		gepRepl += ", " + dbg
-	}
-	lines[gepLine] = gepRepl
 
 	repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)",
 		callPrefix, args, bpfFieldExists)
 	lines[callLine] = line[:m[0]] + repl + line[m[1]:]
-	return nil
+	return !usedFallback, nil
 }
 
 // preserveStructAccessCall formats a call to llvm.preserve.struct.access.index

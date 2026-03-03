@@ -454,13 +454,13 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 				`!3 = !DIBasicType(name: "int32", size: 32, encoding: DW_ATE_signed)`,
 			},
 			wantContain: []string{
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr elementtype(i8) %core, i32 1, i32 1)",
 				"@llvm.bpf.preserve.field.info.p0(ptr nonnull %1, i64 2)",
 				"!dbg !10",
+				"getelementptr inbounds nuw i8, ptr %core, i64 4",
 			},
 			notContain: []string{
 				"@main.bpfCoreFieldExists",
-				"getelementptr inbounds nuw i8",
+				"@llvm.preserve.struct.access.index.p0.p0(",
 				"!llvm.preserve.access.index",
 			},
 		},
