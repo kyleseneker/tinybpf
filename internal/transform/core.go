@@ -309,7 +309,7 @@ func discoverCoreFieldOffsets(lines []string) (map[string][]int, map[string]int,
 		return nil, nil, err
 	}
 	if len(coreTypes) == 0 {
-		return nil, nil, nil
+		return discoverCoreFieldOffsetsFromMetadata(lines)
 	}
 
 	fieldOffsets := make(map[string][]int, len(coreTypes))
@@ -325,6 +325,211 @@ func discoverCoreFieldOffsets(lines []string) (map[string][]int, map[string]int,
 		return nil, nil, metaErr
 	}
 	return fieldOffsets, typeMeta, nil
+}
+
+// discoverCoreFieldOffsetsFromMetadata derives bpfCore field byte offsets from
+// DWARF metadata when LLVM type definitions are unavailable.
+func discoverCoreFieldOffsetsFromMetadata(lines []string) (map[string][]int, map[string]int, error) {
+	metaByID := buildMetadataLineIndex(lines)
+	fieldOffsets := make(map[string][]int)
+	typeMeta := make(map[string]int)
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.Contains(trimmed, "DICompositeType") ||
+			!strings.Contains(trimmed, "DW_TAG_structure_type") ||
+			!strings.Contains(trimmed, "bpfCore") {
+			continue
+		}
+
+		id := extractMetadataID(trimmed)
+		if id < 0 {
+			return nil, nil, fmt.Errorf("line %d has bpfCore DICompositeType but metadata ID could not be parsed: %s",
+				i+1, trimmed)
+		}
+
+		name, ok := extractMetadataName(trimmed)
+		if !ok {
+			return nil, nil, fmt.Errorf("line %d has bpfCore DICompositeType but name could not be parsed: %s",
+				i+1, trimmed)
+		}
+
+		memberIDs := resolveCompositeMemberIDs(trimmed, metaByID)
+		if len(memberIDs) == 0 {
+			continue
+		}
+
+		offsets := make([]int, 0, len(memberIDs))
+		for _, memberID := range memberIDs {
+			memberLine, exists := metaByID[memberID]
+			if !exists {
+				continue
+			}
+			if !isMemberMeta(memberLine) {
+				continue
+			}
+			offsetBits, found := extractMemberOffsetBits(memberLine)
+			if !found {
+				continue
+			}
+			if offsetBits%8 != 0 {
+				return nil, nil, fmt.Errorf("metadata member !%d has non-byte-aligned offset %d", memberID, offsetBits)
+			}
+			offsets = append(offsets, offsetBits/8)
+		}
+		if len(offsets) == 0 {
+			continue
+		}
+
+		typeName := "%" + name
+		fieldOffsets[typeName] = offsets
+		typeMeta[typeName] = id
+	}
+
+	if len(fieldOffsets) == 0 {
+		return nil, nil, nil
+	}
+	return fieldOffsets, typeMeta, nil
+}
+
+// buildMetadataLineIndex indexes metadata definition lines by their !N ID.
+func buildMetadataLineIndex(lines []string) map[int]string {
+	metaByID := make(map[int]string)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "!") || !strings.Contains(trimmed, "=") {
+			continue
+		}
+		id := extractMetadataID(trimmed)
+		if id < 0 {
+			continue
+		}
+		metaByID[id] = trimmed
+	}
+	return metaByID
+}
+
+// extractMetadataName returns the quoted value of name: "..." from metadata.
+func extractMetadataName(line string) (string, bool) {
+	const marker = `name: "`
+	idx := strings.Index(line, marker)
+	if idx < 0 {
+		return "", false
+	}
+	start := idx + len(marker)
+	end := strings.IndexByte(line[start:], '"')
+	if end < 0 {
+		return "", false
+	}
+	end += start
+	return line[start:end], true
+}
+
+// resolveCompositeMemberIDs returns member metadata IDs referenced by a
+// DICompositeType's elements field, including via indirection metadata nodes.
+func resolveCompositeMemberIDs(compositeLine string, metaByID map[int]string) []int {
+	const marker = "elements:"
+	idx := strings.Index(compositeLine, marker)
+	if idx < 0 {
+		return nil
+	}
+	expr := strings.TrimSpace(compositeLine[idx+len(marker):])
+	refs := parseMetadataRefs(expr)
+	if len(refs) == 0 {
+		return nil
+	}
+
+	var out []int
+	seen := make(map[int]bool)
+	for _, ref := range refs {
+		appendResolvedMetadataRefs(ref, metaByID, seen, &out)
+	}
+	return out
+}
+
+// appendResolvedMetadataRefs recursively resolves !{...} indirection nodes to
+// the concrete metadata IDs they reference, preserving source order.
+func appendResolvedMetadataRefs(id int, metaByID map[int]string, seen map[int]bool, out *[]int) {
+	if seen[id] {
+		return
+	}
+	seen[id] = true
+
+	line, ok := metaByID[id]
+	if !ok {
+		*out = append(*out, id)
+		return
+	}
+	if !strings.Contains(line, "= !{") {
+		*out = append(*out, id)
+		return
+	}
+	eq := strings.IndexByte(line, '=')
+	if eq < 0 {
+		*out = append(*out, id)
+		return
+	}
+	refs := parseMetadataRefs(line[eq+1:])
+	if len(refs) == 0 {
+		*out = append(*out, id)
+		return
+	}
+	for _, ref := range refs {
+		appendResolvedMetadataRefs(ref, metaByID, seen, out)
+	}
+}
+
+// parseMetadataRefs extracts !N numeric references from metadata expressions.
+func parseMetadataRefs(s string) []int {
+	var refs []int
+	for _, seg := range strings.Split(s, "!") {
+		seg = strings.TrimSpace(seg)
+		if seg == "" {
+			continue
+		}
+		n := 0
+		digits := 0
+		for i := range len(seg) {
+			c := seg[i]
+			if c < '0' || c > '9' {
+				break
+			}
+			n = n*10 + int(c-'0')
+			digits++
+		}
+		if digits > 0 {
+			refs = append(refs, n)
+		}
+	}
+	return refs
+}
+
+// extractMemberOffsetBits returns the integer value from "offset: N", where N
+// is in bits in DWARF metadata.
+func extractMemberOffsetBits(line string) (int, bool) {
+	const marker = "offset:"
+	idx := strings.Index(line, marker)
+	if idx < 0 {
+		return 0, false
+	}
+	s := strings.TrimSpace(line[idx+len(marker):])
+	if s == "" {
+		return 0, false
+	}
+	n := 0
+	digits := 0
+	for i := range len(s) {
+		c := s[i]
+		if c < '0' || c > '9' {
+			break
+		}
+		n = n*10 + int(c-'0')
+		digits++
+	}
+	if digits == 0 {
+		return 0, false
+	}
+	return n, true
 }
 
 // rewriteCoreExistsChecks rewrites bpfCoreFieldExists/bpfCoreTypeExists
