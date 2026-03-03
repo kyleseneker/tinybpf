@@ -196,12 +196,6 @@ func compactLines(lines []string, remove []bool) []string {
 	return append(lines, "")
 }
 
-// isIdentChar checks if a byte is a valid identifier character.
-func isIdentChar(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-		(c >= '0' && c <= '9') || c == '_' || c == '.'
-}
-
 // parseAttrDef parses an attribute definition from a trimmed string.
 func parseAttrDef(trimmed string) (string, bool) {
 	const prefix = "attributes #"

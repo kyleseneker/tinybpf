@@ -40,6 +40,7 @@ type Config struct {
 	CustomPasses []string
 	DumpIR       bool
 	ProgramType  string
+	ValidateELF  func(path string) error
 }
 
 // Artifacts records the paths of intermediate and final build products.
@@ -122,7 +123,7 @@ func Run(ctx context.Context, cfg Config) (*Artifacts, error) {
 		return nil, err
 	}
 
-	if err := elfcheck.Validate(cfg.Output); err != nil {
+	if err := cfg.ValidateELF(cfg.Output); err != nil {
 		return nil, err
 	}
 
@@ -217,6 +218,9 @@ func validateConfig(cfg *Config) error {
 	}
 	if cfg.Stderr == nil {
 		cfg.Stderr = io.Discard
+	}
+	if cfg.ValidateELF == nil {
+		cfg.ValidateELF = elfcheck.Validate
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -112,6 +113,8 @@ func (e *pipelineEnv) cfg() Config {
 	}
 }
 
+// --- Run ---
+
 func TestRunValidation(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -169,19 +172,6 @@ func TestRunValidation(t *testing.T) {
 	}
 }
 
-func TestEnsureInputSupported(t *testing.T) {
-	for _, ext := range []string{".ll", ".bc", ".o", ".a"} {
-		if err := ensureInputSupported("test" + ext); err != nil {
-			t.Errorf("expected %s supported: %v", ext, err)
-		}
-	}
-	for _, ext := range []string{".txt", ".go", ".json", ""} {
-		if err := ensureInputSupported("test" + ext); err == nil {
-			t.Errorf("expected %s rejected", ext)
-		}
-	}
-}
-
 func TestRunStageFailures(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -230,6 +220,15 @@ func TestRunErrors(t *testing.T) {
 out=""
 for arg in "$@"; do case "$arg" in -o) n=1;; *) [ "${n:-}" = 1 ] && { out="$arg"; n=0; };; esac; done
 echo "not-an-elf" > "$out"; exit 0`)
+			},
+		},
+		{
+			name: "custom ValidateELF rejects",
+			setup: func(t *testing.T, _ *pipelineEnv, cfg *Config) {
+				t.Helper()
+				cfg.ValidateELF = func(string) error {
+					return fmt.Errorf("custom validator rejected")
+				}
 			},
 		},
 		{
@@ -330,6 +329,13 @@ func TestRunSuccess(t *testing.T) {
 				cfg.CustomPasses = []string{"-inline", "-dse"}
 			},
 		},
+		{
+			name: "custom ValidateELF accepts",
+			setup: func(t *testing.T, _ *pipelineEnv, cfg *Config) {
+				t.Helper()
+				cfg.ValidateELF = func(string) error { return nil }
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -351,6 +357,86 @@ func TestRunSuccess(t *testing.T) {
 			}
 			if tt.check != nil {
 				tt.check(t, artifacts, stdout.String())
+			}
+		})
+	}
+}
+
+func TestEnsureInputSupported(t *testing.T) {
+	tests := []struct {
+		ext     string
+		wantErr bool
+	}{
+		{".ll", false},
+		{".bc", false},
+		{".o", false},
+		{".a", false},
+		{".txt", true},
+		{".go", true},
+		{".json", true},
+		{"", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ext, func(t *testing.T) {
+			err := ensureInputSupported("test" + tt.ext)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ensureInputSupported(%q): err=%v, wantErr=%v", "test"+tt.ext, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestRunStage(t *testing.T) {
+	tests := []struct {
+		name      string
+		script    string
+		verbose   bool
+		wantErr   bool
+		wantStage diag.Stage
+		check     func(t *testing.T, stdout string)
+	}{
+		{
+			name:   "success",
+			script: "echo done",
+		},
+		{
+			name:    "verbose",
+			script:  "echo out; echo err >&2",
+			verbose: true,
+			check: func(t *testing.T, stdout string) {
+				t.Helper()
+				if !strings.Contains(stdout, "llvm-link") {
+					t.Errorf("expected stage name in verbose output, got: %q", stdout)
+				}
+			},
+		},
+		{
+			name:      "failure",
+			script:    "echo bad >&2; exit 1",
+			wantErr:   true,
+			wantStage: diag.StageLink,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bin := makeFakeTool(t, t.TempDir(), "test-tool", tt.script)
+			var stdout, stderr bytes.Buffer
+			cfg := Config{Timeout: 5 * time.Second, Verbose: tt.verbose, Stdout: &stdout, Stderr: &stderr}
+			err := runStage(context.Background(), cfg, diag.StageLink, bin, nil, "hint")
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if tt.wantStage != "" && !diag.IsStage(err, tt.wantStage) {
+					t.Fatalf("expected stage %v, got: %v", tt.wantStage, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.check != nil {
+				tt.check(t, stdout.String())
 			}
 		})
 	}
@@ -455,128 +541,6 @@ func TestMakeWorkDir(t *testing.T) {
 	}
 }
 
-func TestRunStage(t *testing.T) {
-	tests := []struct {
-		name      string
-		script    string
-		verbose   bool
-		wantErr   bool
-		wantStage diag.Stage
-		check     func(t *testing.T, stdout string)
-	}{
-		{
-			name:   "success",
-			script: "echo done",
-		},
-		{
-			name:    "verbose",
-			script:  "echo out; echo err >&2",
-			verbose: true,
-			check: func(t *testing.T, stdout string) {
-				t.Helper()
-				if !strings.Contains(stdout, "llvm-link") {
-					t.Errorf("expected stage name in verbose output, got: %q", stdout)
-				}
-			},
-		},
-		{
-			name:      "failure",
-			script:    "echo bad >&2; exit 1",
-			wantErr:   true,
-			wantStage: diag.StageLink,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			bin := makeFakeTool(t, t.TempDir(), "test-tool", tt.script)
-			var stdout, stderr bytes.Buffer
-			cfg := Config{Timeout: 5 * time.Second, Verbose: tt.verbose, Stdout: &stdout, Stderr: &stderr}
-			err := runStage(context.Background(), cfg, diag.StageLink, bin, nil, "hint")
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				if tt.wantStage != "" && !diag.IsStage(err, tt.wantStage) {
-					t.Fatalf("expected stage %v, got: %v", tt.wantStage, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tt.check != nil {
-				tt.check(t, stdout.String())
-			}
-		})
-	}
-}
-
-func TestBuildLLCArgs(t *testing.T) {
-	args := buildLLCArgs("v4", "in.ll", "out.o")
-	want := []string{"-march=bpf", "-mcpu=v4", "-filetype=obj", "in.ll", "-o", "out.o"}
-	if len(args) != len(want) {
-		t.Fatalf("arg count: got=%d want=%d", len(args), len(want))
-	}
-	for i := range want {
-		if args[i] != want[i] {
-			t.Fatalf("args[%d]: got=%q want=%q", i, args[i], want[i])
-		}
-	}
-}
-
-func TestCopyFile(t *testing.T) {
-	tests := []struct {
-		name    string
-		setup   func(t *testing.T) (src, dst string)
-		wantErr bool
-		check   func(t *testing.T, dst string)
-	}{
-		{
-			name: "success",
-			setup: func(t *testing.T) (string, string) {
-				t.Helper()
-				tmp := t.TempDir()
-				src := filepath.Join(tmp, "src")
-				os.WriteFile(src, []byte("hello"), 0o644)
-				return src, filepath.Join(tmp, "dst")
-			},
-			check: func(t *testing.T, dst string) {
-				t.Helper()
-				got, _ := os.ReadFile(dst)
-				if string(got) != "hello" {
-					t.Fatalf("content mismatch: %q", got)
-				}
-			},
-		},
-		{
-			name: "missing source",
-			setup: func(t *testing.T) (string, string) {
-				t.Helper()
-				return "/does/not/exist", filepath.Join(t.TempDir(), "dst")
-			},
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			src, dst := tt.setup(t)
-			err := copyFile(src, dst)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tt.check != nil {
-				tt.check(t, dst)
-			}
-		})
-	}
-}
-
 func TestStripHostPaths(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -634,6 +598,44 @@ func TestStripHostPaths(t *testing.T) {
 	}
 }
 
+func TestBuildLLCArgs(t *testing.T) {
+	tests := []struct {
+		name   string
+		cpu    string
+		input  string
+		output string
+		want   []string
+	}{
+		{
+			name:   "v4",
+			cpu:    "v4",
+			input:  "in.ll",
+			output: "out.o",
+			want:   []string{"-march=bpf", "-mcpu=v4", "-filetype=obj", "in.ll", "-o", "out.o"},
+		},
+		{
+			name:   "v3",
+			cpu:    "v3",
+			input:  "prog.ll",
+			output: "prog.o",
+			want:   []string{"-march=bpf", "-mcpu=v3", "-filetype=obj", "prog.ll", "-o", "prog.o"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildLLCArgs(tt.cpu, tt.input, tt.output)
+			if len(got) != len(tt.want) {
+				t.Fatalf("arg count: got=%d want=%d", len(got), len(tt.want))
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("args[%d]: got=%q want=%q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestParseSectionFlags(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -672,6 +674,59 @@ func TestParseSectionFlags(t *testing.T) {
 				if m[k] != v {
 					t.Fatalf("key %q: got %q, want %q", k, m[k], v)
 				}
+			}
+		})
+	}
+}
+
+func TestCopyFile(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T) (src, dst string)
+		wantErr bool
+		check   func(t *testing.T, dst string)
+	}{
+		{
+			name: "success",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				tmp := t.TempDir()
+				src := filepath.Join(tmp, "src")
+				os.WriteFile(src, []byte("hello"), 0o644)
+				return src, filepath.Join(tmp, "dst")
+			},
+			check: func(t *testing.T, dst string) {
+				t.Helper()
+				got, _ := os.ReadFile(dst)
+				if string(got) != "hello" {
+					t.Fatalf("content mismatch: %q", got)
+				}
+			},
+		},
+		{
+			name: "missing source",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				return "/does/not/exist", filepath.Join(t.TempDir(), "dst")
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src, dst := tt.setup(t)
+			err := copyFile(src, dst)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.check != nil {
+				tt.check(t, dst)
 			}
 		})
 	}
