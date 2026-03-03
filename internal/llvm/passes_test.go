@@ -5,63 +5,6 @@ import (
 	"testing"
 )
 
-func TestBuildOptArgs(t *testing.T) {
-	tests := []struct {
-		name      string
-		pipeline  string
-		profile   string
-		wantFirst string
-		wantSub   string
-		wantLen   int
-	}{
-		{
-			name:      "defaults pipeline",
-			wantFirst: "-passes=" + DefaultPassPipeline,
-			wantLen:   5,
-		},
-		{
-			name:    "conservative profile",
-			profile: "conservative",
-			wantSub: "default<O1>",
-		},
-		{
-			name:    "default profile",
-			profile: "default",
-			wantSub: "default<Os>",
-		},
-		{
-			name:    "aggressive profile",
-			profile: "aggressive",
-			wantSub: "default<O2>",
-		},
-		{
-			name:    "verifier-safe profile",
-			profile: "verifier-safe",
-			wantSub: "function(sroa,",
-		},
-		{
-			name:      "explicit pipeline overrides profile",
-			pipeline:  "function(dce)",
-			profile:   "aggressive",
-			wantFirst: "-passes=function(dce)",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			args := BuildOptArgs("in.bc", "out.ll", tt.pipeline, tt.profile)
-			if tt.wantFirst != "" && args[0] != tt.wantFirst {
-				t.Fatalf("args[0] = %q, want %q", args[0], tt.wantFirst)
-			}
-			if tt.wantSub != "" && !strings.Contains(args[0], tt.wantSub) {
-				t.Fatalf("args[0] = %q, want substring %q", args[0], tt.wantSub)
-			}
-			if tt.wantLen > 0 && len(args) != tt.wantLen {
-				t.Fatalf("arg count: got=%d want=%d", len(args), tt.wantLen)
-			}
-		})
-	}
-}
-
 func TestOptProfiles(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -128,38 +71,36 @@ func TestVerifierSafePipeline(t *testing.T) {
 }
 
 func TestValidatePassFlag(t *testing.T) {
-	valid := []string{
-		"-inline", "instcombine",
-		"-simplifycfg<bonus-inst-threshold=4>", "-early-cse<memssa>",
-	}
-	for _, p := range valid {
-		t.Run("valid/"+p, func(t *testing.T) {
-			if err := ValidatePassFlag(p); err != nil {
-				t.Fatalf("expected valid: %v", err)
-			}
-		})
-	}
-
-	invalid := []struct {
-		name, pass string
+	tests := []struct {
+		name    string
+		pass    string
+		wantErr bool
 	}{
-		{"empty", ""},
-		{"whitespace-only", "   "},
-		{"shell-semicolon", "-inline;rm"},
-		{"shell-pipe", "pass|cat"},
-		{"shell-ampersand", "pass&bg"},
-		{"shell-dollar", "pass$var"},
-		{"shell-backtick", "pass`id`"},
-		{"slash", "foo/bar"},
-		{"backslash", "foo\\bar"},
-		{"numeric-prefix", "123bad"},
-		{"bare-dash", "-"},
-		{"leading-dot", ".leading-dot"},
+		{"valid inline", "-inline", false},
+		{"valid instcombine", "instcombine", false},
+		{"valid simplifycfg with params", "-simplifycfg<bonus-inst-threshold=4>", false},
+		{"valid early-cse with params", "-early-cse<memssa>", false},
+		{"empty", "", true},
+		{"whitespace only", "   ", true},
+		{"shell semicolon", "-inline;rm", true},
+		{"shell pipe", "pass|cat", true},
+		{"shell ampersand", "pass&bg", true},
+		{"shell dollar", "pass$var", true},
+		{"shell backtick", "pass`id`", true},
+		{"slash", "foo/bar", true},
+		{"backslash", "foo\\bar", true},
+		{"numeric prefix", "123bad", true},
+		{"bare dash", "-", true},
+		{"leading dot", ".leading-dot", true},
 	}
-	for _, tt := range invalid {
-		t.Run("invalid/"+tt.name, func(t *testing.T) {
-			if err := ValidatePassFlag(tt.pass); err == nil {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidatePassFlag(tt.pass)
+			if tt.wantErr && err == nil {
 				t.Fatalf("expected error for %q", tt.pass)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error for %q: %v", tt.pass, err)
 			}
 		})
 	}
@@ -218,6 +159,90 @@ func TestAppendCustomPasses(t *testing.T) {
 			}
 			if tt.wantFirst != "" && got[0] != tt.wantFirst {
 				t.Fatalf("got[0] = %q, want %q", got[0], tt.wantFirst)
+			}
+		})
+	}
+}
+
+func TestResolvePassPipeline(t *testing.T) {
+	tests := []struct {
+		name     string
+		pipeline string
+		profile  string
+		want     string
+	}{
+		{"empty defaults to Os", "", "", DefaultPassPipeline},
+		{"explicit pipeline wins", "function(dce)", "aggressive", "function(dce)"},
+		{"conservative profile", "", "conservative", "default<O1>"},
+		{"default profile", "", "default", DefaultPassPipeline},
+		{"aggressive profile", "", "aggressive", "default<O2>"},
+		{"verifier-safe profile", "", "verifier-safe", VerifierSafePipeline},
+		{"unknown profile defaults", "", "nonexistent", DefaultPassPipeline},
+		{"case insensitive profile", "", "AGGRESSIVE", "default<O2>"},
+		{"whitespace trimmed from pipeline", "  function(dce)  ", "", "function(dce)"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolvePassPipeline(tt.pipeline, tt.profile)
+			if got != tt.want {
+				t.Errorf("resolvePassPipeline(%q, %q) = %q, want %q", tt.pipeline, tt.profile, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildOptArgs(t *testing.T) {
+	tests := []struct {
+		name      string
+		pipeline  string
+		profile   string
+		wantFirst string
+		wantSub   string
+		wantLen   int
+	}{
+		{
+			name:      "defaults pipeline",
+			wantFirst: "-passes=" + DefaultPassPipeline,
+			wantLen:   5,
+		},
+		{
+			name:    "conservative profile",
+			profile: "conservative",
+			wantSub: "default<O1>",
+		},
+		{
+			name:    "default profile",
+			profile: "default",
+			wantSub: "default<Os>",
+		},
+		{
+			name:    "aggressive profile",
+			profile: "aggressive",
+			wantSub: "default<O2>",
+		},
+		{
+			name:    "verifier-safe profile",
+			profile: "verifier-safe",
+			wantSub: "function(sroa,",
+		},
+		{
+			name:      "explicit pipeline overrides profile",
+			pipeline:  "function(dce)",
+			profile:   "aggressive",
+			wantFirst: "-passes=function(dce)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := BuildOptArgs("in.bc", "out.ll", tt.pipeline, tt.profile)
+			if tt.wantFirst != "" && args[0] != tt.wantFirst {
+				t.Fatalf("args[0] = %q, want %q", args[0], tt.wantFirst)
+			}
+			if tt.wantSub != "" && !strings.Contains(args[0], tt.wantSub) {
+				t.Fatalf("args[0] = %q, want substring %q", args[0], tt.wantSub)
+			}
+			if tt.wantLen > 0 && len(args) != tt.wantLen {
+				t.Fatalf("arg count: got=%d want=%d", len(args), tt.wantLen)
 			}
 		})
 	}

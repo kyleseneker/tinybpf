@@ -218,25 +218,27 @@ type Result struct {
 	Stderr  string
 }
 
+// commandRunner is a function that executes a command and returns the stdout and stderr.
+type commandRunner func(ctx context.Context, bin string, args, env []string) (stdout, stderr []byte, err error)
+
 // Run executes an LLVM binary with a per-invocation timeout.
 func Run(ctx context.Context, timeout time.Duration, bin string, args ...string) (Result, error) {
+	return runWith(ctx, timeout, bin, args, execCommand)
+}
+
+// runWith executes a command with a timeout and returns the result.
+func runWith(ctx context.Context, timeout time.Duration, bin string, args []string, run commandRunner) (Result, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cmdCtx, bin, args...)
-	cmd.Env = sanitizedEnv()
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	runErr := cmd.Run()
+	stdout, stderr, runErr := run(cmdCtx, bin, args, sanitizedEnv())
 	result := Result{
 		Command: formatCommand(bin, args),
-		Stdout:  stdout.String(),
-		Stderr:  stderr.String(),
+		Stdout:  string(stdout),
+		Stderr:  string(stderr),
 	}
 	if runErr == nil {
 		return result, nil
@@ -245,6 +247,17 @@ func Run(ctx context.Context, timeout time.Duration, bin string, args ...string)
 		return result, fmt.Errorf("command timed out after %s: %w", timeout, runErr)
 	}
 	return result, runErr
+}
+
+// execCommand executes a command and returns the stdout and stderr.
+func execCommand(ctx context.Context, bin string, args, env []string) ([]byte, []byte, error) {
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Env = env
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+	err := cmd.Run()
+	return stdoutBuf.Bytes(), stderrBuf.Bytes(), err
 }
 
 // findRequired resolves a tool name that must exist (absolute path or PATH lookup).
@@ -275,6 +288,7 @@ func findOptional(override, defaultName string) (string, error) {
 	return path, nil
 }
 
+// firstNonEmpty returns the first non-empty string from a list.
 func firstNonEmpty(v, fallback string) string {
 	if strings.TrimSpace(v) != "" {
 		return v
@@ -282,6 +296,7 @@ func firstNonEmpty(v, fallback string) string {
 	return fallback
 }
 
+// formatCommand formats a command and its arguments as a single string.
 func formatCommand(bin string, args []string) string {
 	parts := make([]string, 0, len(args)+1)
 	parts = append(parts, shellQuote(bin))
@@ -291,6 +306,7 @@ func formatCommand(bin string, args []string) string {
 	return strings.Join(parts, " ")
 }
 
+// shellQuote quotes a string if it contains special characters.
 func shellQuote(v string) string {
 	if v == "" {
 		return "''"

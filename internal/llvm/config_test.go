@@ -105,3 +105,60 @@ func TestLoadConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    string
+		wantN   int
+		wantErr bool
+	}{
+		{"valid object", `{"custom_passes":["a"]}`, 1, false},
+		{"empty object", `{}`, 0, false},
+		{"invalid json", `{bad`, 0, true},
+		{"null passes", `{"custom_passes":null}`, 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg, err := decodeConfig("test.json", []byte(tt.data))
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(cfg.CustomPasses) != tt.wantN {
+				t.Fatalf("expected %d passes, got %d", tt.wantN, len(cfg.CustomPasses))
+			}
+		})
+	}
+}
+
+func TestValidateConfig(t *testing.T) {
+	tests := []struct {
+		name    string
+		passes  []string
+		wantErr bool
+	}{
+		{"valid passes", []string{"-inline", "-dse"}, false},
+		{"empty list", nil, false},
+		{"rejects injection", []string{"-inline;rm"}, true},
+		{"rejects empty pass", []string{""}, true},
+		{"trims whitespace", []string{"  -dse  "}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &LinkerConfig{CustomPasses: tt.passes}
+			err := validateConfig("test.json", cfg)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}

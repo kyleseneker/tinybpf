@@ -2,6 +2,7 @@ package llvm
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,7 +10,6 @@ import (
 	"time"
 )
 
-// makeTool creates a fake shell script in dir and returns its path.
 func makeTool(t *testing.T, dir, name string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)
@@ -19,10 +19,135 @@ func makeTool(t *testing.T, dir, name string) string {
 	return p
 }
 
-// makeRequiredTools creates the three required tools and returns their paths.
 func makeRequiredTools(t *testing.T, dir string) (link, opt, llc string) {
 	t.Helper()
 	return makeTool(t, dir, "llvm-link"), makeTool(t, dir, "opt"), makeTool(t, dir, "llc")
+}
+
+func TestValidateBinary(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"allowed opt", "/usr/bin/opt", false},
+		{"allowed llc", "/usr/local/bin/llc", false},
+		{"allowed llvm-link-18", "/usr/bin/llvm-link-18", false},
+		{"allowed pahole", "/usr/bin/pahole", false},
+		{"allowed tinygo", "/usr/bin/tinygo", false},
+		{"allowed ld.lld", "/usr/bin/ld.lld", false},
+		{"rejects shell semicolon", "/bin/sh;rm -rf /", true},
+		{"rejects shell pipe", "/bin/opt|cat", true},
+		{"rejects shell dollar", "/tmp/opt$HOME", true},
+		{"rejects shell backtick", "/tmp/opt`id`", true},
+		{"rejects disallowed binary", "/usr/bin/not-allowed", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateBinary(tt.path)
+			if tt.wantErr && err == nil {
+				t.Fatalf("expected error for %q", tt.path)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("unexpected error for %q: %v", tt.path, err)
+			}
+		})
+	}
+}
+
+func TestIsVersionSuffix(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"numeric", "18", true},
+		{"dotted version", "17.0.6", true},
+		{"zero", "0", true},
+		{"empty", "", false},
+		{"trailing dot", "18.", false},
+		{"leading dot", ".18", false},
+		{"alpha", "abc", false},
+		{"mixed", "18a", false},
+		{"dotted alpha", "18.0.a", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isVersionSuffix(tt.in); got != tt.want {
+				t.Errorf("isVersionSuffix(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSanitizedEnv(t *testing.T) {
+	env := sanitizedEnv()
+	hasKey := func(key string) bool {
+		prefix := key + "="
+		for _, e := range env {
+			if strings.HasPrefix(e, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if !hasKey("LC_ALL") {
+		t.Error("expected LC_ALL in sanitized env")
+	}
+	if !hasKey("TZ") {
+		t.Error("expected TZ in sanitized env")
+	}
+	for _, key := range []string{"GOPATH", "GOROOT", "USER", "SHELL"} {
+		if hasKey(key) {
+			t.Errorf("unexpected %s in sanitized env", key)
+		}
+	}
+}
+
+func TestToolsList(t *testing.T) {
+	tools := Tools{
+		LLVMLink: "/usr/bin/llvm-link",
+		Opt:      "/usr/bin/opt",
+		LLC:      "/usr/bin/llc",
+		LLVMAr:   "/usr/bin/llvm-ar",
+		Objcopy:  "",
+		Pahole:   "/usr/bin/pahole",
+	}
+
+	list := tools.List()
+	if len(list) != 6 {
+		t.Fatalf("expected 6 tools, got %d", len(list))
+	}
+
+	expected := []struct {
+		name     string
+		required bool
+	}{
+		{"llvm-link", true},
+		{"opt", true},
+		{"llc", true},
+		{"llvm-ar", false},
+		{"llvm-objcopy", false},
+		{"pahole", false},
+	}
+	for i, tt := range expected {
+		t.Run(tt.name, func(t *testing.T) {
+			if list[i].Name != tt.name {
+				t.Errorf("Name = %q, want %q", list[i].Name, tt.name)
+			}
+			if list[i].Required != tt.required {
+				t.Errorf("Required = %v, want %v", list[i].Required, tt.required)
+			}
+			if !tt.required && list[i].Note == "" {
+				t.Error("optional tool should have a note")
+			}
+		})
+	}
+
+	if list[4].Path != "" {
+		t.Errorf("expected empty path for llvm-objcopy, got %q", list[4].Path)
+	}
 }
 
 func TestDiscoverTools(t *testing.T) {
@@ -115,6 +240,26 @@ func TestDiscoverTools(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "bad llvm-ar override",
+			overrides: func(t *testing.T) ToolOverrides {
+				t.Helper()
+				dir := t.TempDir()
+				link, opt, llc := makeRequiredTools(t, dir)
+				return ToolOverrides{LLVMLink: link, Opt: opt, LLC: llc, LLVMAr: "/does/not/exist/llvm-ar"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "bad llvm-objcopy override",
+			overrides: func(t *testing.T) ToolOverrides {
+				t.Helper()
+				dir := t.TempDir()
+				link, opt, llc := makeRequiredTools(t, dir)
+				return ToolOverrides{LLVMLink: link, Opt: opt, LLC: llc, Objcopy: "/does/not/exist/llvm-objcopy"}
+			},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -139,86 +284,212 @@ func TestDiscoverTools(t *testing.T) {
 	}
 }
 
-func TestDiscoverToolsBadOptionalOverride(t *testing.T) {
+func TestResolveOptional(t *testing.T) {
 	tests := []struct {
 		name      string
-		overrides func(link, opt, llc string) ToolOverrides
+		setup     func(t *testing.T) (override, name string)
+		wantErr   bool
+		errSubstr string
+		check     func(t *testing.T, got string)
 	}{
 		{
-			name: "bad llvm-ar",
-			overrides: func(link, opt, llc string) ToolOverrides {
-				return ToolOverrides{LLVMLink: link, Opt: opt, LLC: llc, LLVMAr: "/does/not/exist/llvm-ar"}
+			name: "valid override passes validation",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				return makeTool(t, t.TempDir(), "llvm-ar"), "llvm-ar"
+			},
+			check: func(t *testing.T, got string) {
+				t.Helper()
+				if got == "" {
+					t.Fatal("expected non-empty path")
+				}
 			},
 		},
 		{
-			name: "bad llvm-objcopy",
-			overrides: func(link, opt, llc string) ToolOverrides {
-				return ToolOverrides{LLVMLink: link, Opt: opt, LLC: llc, Objcopy: "/does/not/exist/llvm-objcopy"}
+			name: "rejects disallowed name",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				bad := makeTool(t, t.TempDir(), "not-allowed")
+				return bad, "llvm-ar"
+			},
+			wantErr:   true,
+			errSubstr: "allowed tool set",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			override, name := tt.setup(t)
+			got, err := resolveOptional(override, name)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if tt.errSubstr != "" && !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Fatalf("expected %q in error, got: %v", tt.errSubstr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.check != nil {
+				tt.check(t, got)
+			}
+		})
+	}
+}
+
+func TestRunWith(t *testing.T) {
+	tests := []struct {
+		name      string
+		timeout   time.Duration
+		run       commandRunner
+		wantErr   bool
+		errSubstr string
+		check     func(t *testing.T, res Result)
+	}{
+		{
+			name:    "success",
+			timeout: 5 * time.Second,
+			run: func(_ context.Context, _ string, _, _ []string) ([]byte, []byte, error) {
+				return []byte("hello\n"), nil, nil
+			},
+			check: func(t *testing.T, res Result) {
+				t.Helper()
+				if !strings.Contains(res.Stdout, "hello") {
+					t.Fatalf("expected hello in stdout, got: %q", res.Stdout)
+				}
+			},
+		},
+		{
+			name:    "failure captures stderr",
+			timeout: 5 * time.Second,
+			run: func(_ context.Context, _ string, _, _ []string) ([]byte, []byte, error) {
+				return nil, []byte("err output"), fmt.Errorf("exit status 1")
+			},
+			wantErr: true,
+			check: func(t *testing.T, res Result) {
+				t.Helper()
+				if !strings.Contains(res.Stderr, "err output") {
+					t.Fatalf("expected stderr, got: %q", res.Stderr)
+				}
+			},
+		},
+		{
+			name:    "timeout detection",
+			timeout: 10 * time.Millisecond,
+			run: func(ctx context.Context, _ string, _, _ []string) ([]byte, []byte, error) {
+				<-ctx.Done()
+				return nil, nil, ctx.Err()
+			},
+			wantErr:   true,
+			errSubstr: "timed out",
+		},
+		{
+			name:    "default timeout applied",
+			timeout: 0,
+			run: func(_ context.Context, _ string, _, _ []string) ([]byte, []byte, error) {
+				return []byte("ok"), nil, nil
+			},
+			check: func(t *testing.T, res Result) {
+				t.Helper()
+				if !strings.Contains(res.Stdout, "ok") {
+					t.Fatalf("unexpected stdout: %q", res.Stdout)
+				}
+			},
+		},
+		{
+			name:    "command string recorded",
+			timeout: 1 * time.Second,
+			run: func(_ context.Context, _ string, _, _ []string) ([]byte, []byte, error) {
+				return nil, nil, nil
+			},
+			check: func(t *testing.T, res Result) {
+				t.Helper()
+				if !strings.Contains(res.Command, "echo") {
+					t.Fatalf("expected echo in command, got: %q", res.Command)
+				}
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			link, opt, llc := makeRequiredTools(t, dir)
-			_, err := DiscoverTools(tt.overrides(link, opt, llc))
-			if err == nil {
-				t.Fatal("expected error")
+			res, err := runWith(context.Background(), tt.timeout, "/usr/bin/echo", []string{"test"}, tt.run)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if tt.errSubstr != "" && !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Fatalf("expected %q in error, got: %v", tt.errSubstr, err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if tt.check != nil {
+				tt.check(t, res)
 			}
 		})
 	}
 }
 
-func TestValidateBinary(t *testing.T) {
-	rejected := []struct {
-		name, path string
-	}{
-		{"shell semicolon", "/bin/sh;rm -rf /"},
-		{"shell pipe", "/bin/opt|cat"},
-		{"shell dollar", "/tmp/opt$HOME"},
-		{"shell backtick", "/tmp/opt`id`"},
-	}
-	for _, tt := range rejected {
-		t.Run("rejects/"+tt.name, func(t *testing.T) {
-			if err := ValidateBinary(tt.path); err == nil {
-				t.Fatalf("expected error for %q", tt.path)
-			}
-		})
-	}
-
-	accepted := []string{
-		"/usr/bin/opt", "/usr/local/bin/llc",
-		"/usr/bin/llvm-link-18", "/usr/bin/pahole",
-		"/usr/bin/tinygo", "/usr/bin/ld.lld",
-	}
-	for _, p := range accepted {
-		t.Run("accepts/"+filepath.Base(p), func(t *testing.T) {
-			if err := ValidateBinary(p); err != nil {
-				t.Fatalf("expected %q to be allowed: %v", p, err)
-			}
-		})
-	}
-}
-
-func TestIsVersionSuffix(t *testing.T) {
+func TestRun(t *testing.T) {
 	tests := []struct {
-		in   string
-		want bool
+		name    string
+		timeout time.Duration
+		bin     string
+		args    []string
+		wantErr bool
+		check   func(t *testing.T, res Result)
 	}{
-		{"18", true},
-		{"17.0.6", true},
-		{"0", true},
-		{"", false},
-		{"18.", false},
-		{".18", false},
-		{"abc", false},
-		{"18a", false},
-		{"18.0.a", false},
+		{
+			name: "success", timeout: 5 * time.Second,
+			bin: "/bin/echo", args: []string{"hello"},
+			check: func(t *testing.T, res Result) {
+				t.Helper()
+				if !strings.Contains(res.Stdout, "hello") {
+					t.Fatalf("expected hello in stdout, got: %q", res.Stdout)
+				}
+				if !strings.Contains(res.Command, "echo") {
+					t.Fatalf("expected echo in command, got: %q", res.Command)
+				}
+			},
+		},
+		{
+			name: "failure", timeout: 5 * time.Second,
+			bin: "/bin/sh", args: []string{"-c", "echo err >&2; exit 42"},
+			wantErr: true,
+			check: func(t *testing.T, res Result) {
+				t.Helper()
+				if !strings.Contains(res.Stderr, "err") {
+					t.Fatalf("expected stderr, got: %q", res.Stderr)
+				}
+			},
+		},
+		{
+			name: "default timeout", timeout: 0,
+			bin: "/bin/echo", args: []string{"ok"},
+			check: func(t *testing.T, res Result) {
+				t.Helper()
+				if !strings.Contains(res.Stdout, "ok") {
+					t.Fatalf("unexpected stdout: %q", res.Stdout)
+				}
+			},
+		},
 	}
 	for _, tt := range tests {
-		if got := isVersionSuffix(tt.in); got != tt.want {
-			t.Errorf("isVersionSuffix(%q) = %v, want %v", tt.in, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := Run(context.Background(), tt.timeout, tt.bin, tt.args...)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if tt.check != nil {
+				tt.check(t, res)
+			}
+		})
 	}
 }
 
@@ -297,11 +568,10 @@ func TestFindRequired(t *testing.T) {
 
 func TestFindOptional(t *testing.T) {
 	tests := []struct {
-		name      string
-		setup     func(t *testing.T) (override, name string)
-		wantErr   bool
-		errSubstr string
-		check     func(t *testing.T, got string)
+		name    string
+		setup   func(t *testing.T) (override, name string)
+		wantErr bool
+		check   func(t *testing.T, got string)
 	}{
 		{
 			name: "empty not on PATH",
@@ -347,33 +617,14 @@ func TestFindOptional(t *testing.T) {
 				}
 			},
 		},
-		{
-			name: "rejects disallowed name",
-			setup: func(t *testing.T) (string, string) {
-				t.Helper()
-				bad := makeTool(t, t.TempDir(), "not-allowed")
-				return bad, "llvm-ar"
-			},
-			wantErr:   true,
-			errSubstr: "allowed tool set",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			override, name := tt.setup(t)
-			var got string
-			var err error
-			if tt.name == "rejects disallowed name" {
-				got, err = resolveOptional(override, name)
-			} else {
-				got, err = findOptional(override, name)
-			}
+			got, err := findOptional(override, name)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error")
-				}
-				if tt.errSubstr != "" && !strings.Contains(err.Error(), tt.errSubstr) {
-					t.Fatalf("expected %q in error, got: %v", tt.errSubstr, err)
 				}
 				return
 			}
@@ -382,76 +633,6 @@ func TestFindOptional(t *testing.T) {
 			}
 			if tt.check != nil {
 				tt.check(t, got)
-			}
-		})
-	}
-}
-
-func TestRun(t *testing.T) {
-	tests := []struct {
-		name      string
-		timeout   time.Duration
-		bin       string
-		args      []string
-		wantErr   bool
-		errSubstr string
-		check     func(t *testing.T, res Result)
-	}{
-		{
-			name: "success", timeout: 5 * time.Second,
-			bin: "/bin/echo", args: []string{"hello"},
-			check: func(t *testing.T, res Result) {
-				t.Helper()
-				if !strings.Contains(res.Stdout, "hello") {
-					t.Fatalf("expected hello in stdout, got: %q", res.Stdout)
-				}
-				if !strings.Contains(res.Command, "echo") {
-					t.Fatalf("expected echo in command, got: %q", res.Command)
-				}
-			},
-		},
-		{
-			name: "timeout", timeout: 10 * time.Millisecond,
-			bin: "/bin/sh", args: []string{"-c", "sleep 1"},
-			wantErr: true, errSubstr: "timed out",
-		},
-		{
-			name: "failure", timeout: 5 * time.Second,
-			bin: "/bin/sh", args: []string{"-c", "echo err >&2; exit 42"},
-			wantErr: true,
-			check: func(t *testing.T, res Result) {
-				t.Helper()
-				if !strings.Contains(res.Stderr, "err") {
-					t.Fatalf("expected stderr, got: %q", res.Stderr)
-				}
-			},
-		},
-		{
-			name: "default timeout", timeout: 0,
-			bin: "/bin/echo", args: []string{"ok"},
-			check: func(t *testing.T, res Result) {
-				t.Helper()
-				if !strings.Contains(res.Stdout, "ok") {
-					t.Fatalf("unexpected stdout: %q", res.Stdout)
-				}
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			res, err := Run(context.Background(), tt.timeout, tt.bin, tt.args...)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				if tt.errSubstr != "" && !strings.Contains(err.Error(), tt.errSubstr) {
-					t.Fatalf("expected %q in error, got: %v", tt.errSubstr, err)
-				}
-			} else if err != nil {
-				t.Fatal(err)
-			}
-			if tt.check != nil {
-				tt.check(t, res)
 			}
 		})
 	}
@@ -511,47 +692,5 @@ func TestShellQuote(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("shellQuote(%q) = %q, want %q", tt.in, got, tt.want)
 		}
-	}
-}
-
-func TestToolsList(t *testing.T) {
-	tools := Tools{
-		LLVMLink: "/usr/bin/llvm-link",
-		Opt:      "/usr/bin/opt",
-		LLC:      "/usr/bin/llc",
-		LLVMAr:   "/usr/bin/llvm-ar",
-		Objcopy:  "",
-		Pahole:   "/usr/bin/pahole",
-	}
-
-	list := tools.List()
-	if len(list) != 6 {
-		t.Fatalf("expected 6 tools, got %d", len(list))
-	}
-
-	wantNames := []string{"llvm-link", "opt", "llc", "llvm-ar", "llvm-objcopy", "pahole"}
-	for i, want := range wantNames {
-		if list[i].Name != want {
-			t.Errorf("list[%d].Name = %q, want %q", i, list[i].Name, want)
-		}
-	}
-
-	for _, nt := range list[:3] {
-		if !nt.Required {
-			t.Errorf("%s should be required", nt.Name)
-		}
-	}
-
-	for _, nt := range list[3:] {
-		if nt.Required {
-			t.Errorf("%s should be optional", nt.Name)
-		}
-		if nt.Note == "" {
-			t.Errorf("%s should have a note", nt.Name)
-		}
-	}
-
-	if list[4].Path != "" {
-		t.Errorf("expected empty path for llvm-objcopy, got %q", list[4].Path)
 	}
 }
