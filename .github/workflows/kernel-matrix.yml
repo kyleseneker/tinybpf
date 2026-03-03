@@ -40,12 +40,13 @@ jobs:
       - name: Install virtme-ng and QEMU
         run: |
           pip3 install --user virtme-ng
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-system-x86 qemu-utils bpftool
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils linux-tools-common "linux-tools-$(uname -r)" || true
           command -v qemu-system-x86_64
 
       - name: Build tinybpf
-        run: go build -o tinybpf ./cmd/tinybpf
+        run: go build -o "$PWD/tinybpf" ./cmd/tinybpf
 
       - name: Run kernel matrix test
-        run: sudo -E env "PATH=$PATH" ./scripts/kernel-matrix.sh ${{ matrix.kernel }}
+        run: |
+          sudo -E env "PATH=$PATH" "TINYBPF_BIN=$PWD/tinybpf" \
+            ./scripts/kernel-matrix.sh ${{ matrix.kernel }}
