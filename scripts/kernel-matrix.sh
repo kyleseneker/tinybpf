@@ -115,15 +115,15 @@ resolve_kernel
 echo "  resolved: ${KERNEL_VERSION} -> ${RESOLVED_KERNEL}"
 
 BPFTOOL=""
-if command -v bpftool >/dev/null 2>&1; then
-  BPFTOOL="$(realpath "$(command -v bpftool)" 2>/dev/null || true)"
-fi
+# shellcheck disable=SC2012
+BPFTOOL="$(ls /usr/lib/linux-tools/*/bpftool 2>/dev/null | head -1 || true)"
 if [[ -z "${BPFTOOL}" || ! -x "${BPFTOOL}" ]]; then
-  # shellcheck disable=SC2012
-  BPFTOOL="$(ls /usr/lib/linux-tools/*/bpftool 2>/dev/null | head -1 || true)"
+  BPFTOOL="$(command -v bpftool 2>/dev/null || true)"
 fi
-if [[ -z "${BPFTOOL}" || ! -x "${BPFTOOL}" ]]; then
-  echo "  WARNING: bpftool not found on host; guest will skip verifier load"
+if [[ -n "${BPFTOOL}" ]]; then
+  echo "  bpftool: ${BPFTOOL}"
+else
+  echo "  WARNING: bpftool not found on host"
 fi
 
 vng --run "${RESOLVED_KERNEL}" -- \
