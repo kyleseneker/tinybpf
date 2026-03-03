@@ -78,6 +78,23 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
   exit 1
 fi
 
+RESOLVED_KERNEL="${KERNEL_VERSION}"
+if [[ "${KERNEL_VERSION}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+  kernel_prefix="${KERNEL_VERSION}."
+  available_versions="$(vng --list 2>/dev/null || true)"
+  if [[ -n "${available_versions}" ]]; then
+    match="$(printf '%s\n' "${available_versions}" | awk -v pfx="${kernel_prefix}" '$1 ~ ("^" pfx "[0-9]+$") {print $1}' | sort -V | tail -n1 || true)"
+    if [[ -n "${match}" ]]; then
+      RESOLVED_KERNEL="${match}"
+      echo "  resolved kernel ${KERNEL_VERSION} -> ${RESOLVED_KERNEL}"
+    else
+      echo "FAIL: kernel ${KERNEL_VERSION} not present in virtme-ng catalog."
+      echo "Run 'vng --list' and choose a listed version (for example, ${KERNEL_VERSION}.x)."
+      exit 1
+    fi
+  fi
+fi
+
 INNER_SCRIPT="${BUILD_DIR}/inner-test.sh"
 cat > "${INNER_SCRIPT}" << 'INNEREOF'
 #!/bin/bash
@@ -105,7 +122,7 @@ fi
 INNEREOF
 chmod +x "${INNER_SCRIPT}"
 
-vng --run "${KERNEL_VERSION}" -- \
+vng --run "${RESOLVED_KERNEL}" -- \
   bash "${INNER_SCRIPT}" "${OBJ}" \
   2>&1 | tee "${LOG_DIR}/vng.log"
 VNG_RC=${PIPESTATUS[0]}
