@@ -16,13 +16,18 @@ type Config struct {
 	Stdout  io.Writer
 }
 
+type plannedFile struct {
+	path    string
+	content string
+}
+
 // Run generates a minimal tinybpf project skeleton in cfg.Dir.
 func Run(cfg Config) error {
 	if cfg.Stdout == nil {
 		cfg.Stdout = io.Discard
 	}
-	if strings.TrimSpace(cfg.Program) == "" {
-		return fmt.Errorf("program name is required")
+	if err := validateProgramName(cfg.Program); err != nil {
+		return err
 	}
 
 	bpfDir := filepath.Join(cfg.Dir, "bpf")
@@ -30,29 +35,52 @@ func Run(cfg Config) error {
 		return fmt.Errorf("creating bpf directory: %w", err)
 	}
 
-	files := []struct {
-		path    string
-		content string
-	}{
-		{filepath.Join(bpfDir, cfg.Program+".go"), programGo(cfg.Program)},
-		{filepath.Join(bpfDir, cfg.Program+"_stub.go"), programStubGo()},
-		{filepath.Join(cfg.Dir, "Makefile"), makefile(cfg.Program)},
-	}
+	files := buildPlan(cfg.Dir, bpfDir, cfg.Program)
 
+	if err := checkCollisions(files); err != nil {
+		return err
+	}
+	return writePlannedFiles(cfg.Dir, cfg.Stdout, files)
+}
+
+func buildPlan(dir, bpfDir, program string) []plannedFile {
+	return []plannedFile{
+		{filepath.Join(bpfDir, program+".go"), programGo(program)},
+		{filepath.Join(bpfDir, program+"_stub.go"), programStubGo()},
+		{filepath.Join(dir, "Makefile"), makefile(program)},
+	}
+}
+
+func checkCollisions(files []plannedFile) error {
 	for _, f := range files {
 		if _, err := os.Stat(f.path); err == nil {
 			return fmt.Errorf("%s already exists; refusing to overwrite", f.path)
 		}
+	}
+	return nil
+}
+
+func writePlannedFiles(baseDir string, out io.Writer, files []plannedFile) error {
+	for _, f := range files {
 		if err := os.WriteFile(f.path, []byte(f.content), 0o600); err != nil {
 			return fmt.Errorf("writing %s: %w", f.path, err)
 		}
-		rel, _ := filepath.Rel(cfg.Dir, f.path)
+		rel, _ := filepath.Rel(baseDir, f.path)
 		if rel == "" {
 			rel = f.path
 		}
-		fmt.Fprintf(cfg.Stdout, "  create %s\n", rel)
+		fmt.Fprintf(out, "  create %s\n", rel)
 	}
+	return nil
+}
 
+func validateProgramName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("program name is required")
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("program name must not contain path separators")
+	}
 	return nil
 }
 

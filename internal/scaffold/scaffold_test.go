@@ -53,6 +53,13 @@ func TestRun(t *testing.T) {
 			},
 		},
 		{
+			name: "nil stdout still creates files",
+			cfg: func(dir string) Config {
+				return Config{Dir: dir, Program: "tc_filter", Stdout: nil}
+			},
+			wantFiles: []string{"bpf/tc_filter.go", "bpf/tc_filter_stub.go", "Makefile"},
+		},
+		{
 			name:    "missing name",
 			cfg:     func(dir string) Config { return Config{Dir: dir} },
 			wantErr: "program name is required",
@@ -63,7 +70,7 @@ func TestRun(t *testing.T) {
 			wantErr: "program name is required",
 		},
 		{
-			name: "refuses overwrite",
+			name: "refuses overwrite of first file",
 			cfg: func(dir string) Config {
 				return Config{Dir: dir, Program: "xdp_filter"}
 			},
@@ -73,6 +80,23 @@ func TestRun(t *testing.T) {
 				os.WriteFile(filepath.Join(dir, "bpf", "xdp_filter.go"), []byte("existing"), 0o644)
 			},
 			wantErr: "already exists",
+		},
+		{
+			name: "refuses overwrite of later file",
+			cfg: func(dir string) Config {
+				return Config{Dir: dir, Program: "xdp_filter"}
+			},
+			setup: func(t *testing.T, dir string) {
+				t.Helper()
+				os.MkdirAll(filepath.Join(dir, "bpf"), 0o755)
+				os.WriteFile(filepath.Join(dir, "Makefile"), []byte("existing"), 0o644)
+			},
+			wantErr: "already exists",
+		},
+		{
+			name:    "name with path separator",
+			cfg:     func(dir string) Config { return Config{Dir: dir, Program: "foo/bar"} },
+			wantErr: "path separators",
 		},
 		{
 			name:    "bad directory",
@@ -130,6 +154,113 @@ func TestRun(t *testing.T) {
 	}
 }
 
+func TestBuildPlan(t *testing.T) {
+	files := buildPlan("/proj", "/proj/bpf", "myprobe")
+	if len(files) != 3 {
+		t.Fatalf("expected 3 planned files, got %d", len(files))
+	}
+
+	wantPaths := []string{
+		filepath.Join("/proj/bpf", "myprobe.go"),
+		filepath.Join("/proj/bpf", "myprobe_stub.go"),
+		filepath.Join("/proj", "Makefile"),
+	}
+	for i, want := range wantPaths {
+		if files[i].path != want {
+			t.Errorf("files[%d].path = %q, want %q", i, files[i].path, want)
+		}
+	}
+
+	if !strings.Contains(files[0].content, "//export myprobe") {
+		t.Error("program file missing //export directive")
+	}
+	if !strings.Contains(files[1].content, "//go:build !tinygo") {
+		t.Error("stub file missing build constraint")
+	}
+	if !strings.Contains(files[2].content, "tinybpf build") {
+		t.Error("Makefile missing build command")
+	}
+}
+
+func TestCheckCollisions(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "exists.go")
+	os.WriteFile(existing, []byte("x"), 0o644)
+
+	tests := []struct {
+		name    string
+		files   []plannedFile
+		wantErr string
+	}{
+		{
+			name:  "no collisions",
+			files: []plannedFile{{path: filepath.Join(dir, "new.go")}},
+		},
+		{
+			name:    "collision detected",
+			files:   []plannedFile{{path: existing}},
+			wantErr: "already exists",
+		},
+		{
+			name: "collision on second file",
+			files: []plannedFile{
+				{path: filepath.Join(dir, "new.go")},
+				{path: existing},
+			},
+			wantErr: "already exists",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := checkCollisions(tt.files)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error %q does not contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateProgramName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{name: "valid name", input: "xdp_filter"},
+		{name: "valid single char", input: "x"},
+		{name: "empty", input: "", wantErr: "program name is required"},
+		{name: "whitespace only", input: "   ", wantErr: "program name is required"},
+		{name: "forward slash", input: "foo/bar", wantErr: "path separators"},
+		{name: "backslash", input: `foo\bar`, wantErr: "path separators"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateProgramName(tt.input)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error %q does not contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func assertFilesExist(t *testing.T, dir string, paths []string) {
 	t.Helper()
 	for _, f := range paths {
@@ -160,19 +291,6 @@ func assertFileContents(t *testing.T, dir string, wantContain map[string][]strin
 			if !strings.Contains(string(data), want) {
 				t.Errorf("%s missing %q", suffix, want)
 			}
-		}
-	}
-}
-
-func TestRunNilStdout(t *testing.T) {
-	dir := t.TempDir()
-	err := Run(Config{Dir: dir, Program: "tc_filter"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, f := range []string{"bpf/tc_filter.go", "bpf/tc_filter_stub.go", "Makefile"} {
-		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
-			t.Errorf("expected %s to exist", f)
 		}
 	}
 }
