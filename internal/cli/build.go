@@ -17,10 +17,12 @@ import (
 
 type tinyGoRunner func(ctx context.Context, timeout time.Duration, bin string, args ...string) (tinyGoResult, error)
 
+// runBuild compiles Go source to a BPF ELF object in one step.
 func runBuild(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return runBuildWith(ctx, args, stdout, stderr, execTinyGo)
 }
 
+// runBuildWith is the testable core of runBuild with an injected TinyGo runner.
 func runBuildWith(ctx context.Context, args []string, stdout, stderr io.Writer, tg tinyGoRunner) int {
 	var programs multiStringFlag
 	var sectionFlags multiStringFlag
@@ -73,6 +75,7 @@ func runBuildWith(ctx context.Context, args []string, stdout, stderr io.Writer, 
 	return runPipelineAndReport(ctx, cfg, stdout, stderr)
 }
 
+// compileTinyGo runs TinyGo to produce LLVM IR from the given Go package.
 func compileTinyGo(ctx context.Context, tg tinyGoRunner, cfg pipeline.Config, tinygo, pkg, workDir string, stdout, stderr io.Writer) (string, error) {
 	irFile := filepath.Join(workDir, "program.ll")
 	tinygoArgs := []string{

@@ -98,6 +98,8 @@ func TestRunExitCodes(t *testing.T) {
 		{"doctor parse error", []string{"doctor", "--unknown-flag"}, 2},
 		{"init unknown flag", []string{"init", "--unknown-flag"}, 2},
 		{"init missing name", []string{"init"}, 2},
+		{"verify missing input", []string{"verify"}, 2},
+		{"verify unknown flag", []string{"verify", "--unknown-flag"}, 2},
 		{"unknown subcommand", []string{"notacommand"}, 2},
 	}
 	for _, tt := range tests {
@@ -125,6 +127,8 @@ func TestRunHelp(t *testing.T) {
 		{"init -h", []string{"init", "-h"}, 0},
 		{"build --help", []string{"build", "--help"}, 0},
 		{"link --help", []string{"link", "--help"}, 0},
+		{"verify --help", []string{"verify", "--help"}, 0},
+		{"verify -h", []string{"verify", "-h"}, 0},
 		{"unknown command shows usage", []string{"--input", "/dev/null"}, 2},
 	}
 	for _, tt := range tests {

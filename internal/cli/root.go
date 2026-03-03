@@ -56,6 +56,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runDoctor(ctx, args[1:], stdout, stderr)
 	case "init":
 		return runInit(ctx, args[1:], stdout, stderr)
+	case "verify":
+		return runVerify(ctx, args[1:], stdout, stderr)
 	case "version", "--version", "-version":
 		return runVersion(stdout)
 	default:
@@ -73,6 +75,7 @@ Usage:
   tinybpf build [flags] <package>   Compile Go source to BPF ELF (one step)
   tinybpf link --input <file> [flags]   Link pre-compiled LLVM IR into a BPF ELF
   tinybpf init <name>               Scaffold a new BPF project
+  tinybpf verify --input <file>     Validate a BPF ELF object
   tinybpf doctor [flags]            Check toolchain installation
   tinybpf version                   Print version information
   tinybpf help                      Show this message

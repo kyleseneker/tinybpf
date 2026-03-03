@@ -14,10 +14,12 @@ import (
 
 type heapProfileWriter func(w io.Writer) error
 
+// runLink links pre-compiled LLVM IR into a BPF ELF object.
 func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return runLinkWith(ctx, args, stdout, stderr, pprof.WriteHeapProfile)
 }
 
+// runLinkWith is the testable core of runLink with an injected heap profile writer.
 func runLinkWith(ctx context.Context, args []string, stdout, stderr io.Writer, writeHeap heapProfileWriter) int {
 	var inputs multiStringFlag
 	var programs multiStringFlag
@@ -30,6 +32,7 @@ func runLinkWith(ctx context.Context, args []string, stdout, stderr io.Writer, w
 
 	fs := newFlagSet(stderr, "tinybpf link --input <file> [flags]", "Link TinyGo LLVM IR into a BPF ELF object.")
 	fs.Var(&inputs, "input", "Input LLVM file (.ll, .bc, .o, .a). Repeat for multiple modules.")
+	fs.Var(&inputs, "i", "Input LLVM file (shorthand).")
 	registerPipelineFlags(fs, &cfg, &programs, &sectionFlags)
 	fs.IntVar(&cfg.Jobs, "jobs", 1, "Number of parallel input normalization workers.")
 	fs.IntVar(&cfg.Jobs, "j", 1, "Number of parallel input normalization workers (shorthand).")

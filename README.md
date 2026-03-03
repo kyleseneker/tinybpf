@@ -127,6 +127,7 @@ Run `tinybpf --help` or `tinybpf <command> --help`.
 | `build [flags] <package>` | Compile Go source to BPF ELF in one step |
 | `link --input <file> [flags]` | Link pre-compiled LLVM IR into a BPF ELF |
 | `init <name>` | Scaffold a new BPF project |
+| `verify --input <file>` | Validate a BPF ELF object offline |
 | `doctor` | Check toolchain installation |
 | `version` | Print version |
 
@@ -148,19 +149,25 @@ Run `tinybpf --help` or `tinybpf <command> --help`.
 | `--keep-temp` | `false` | Preserve intermediate files |
 | `--tmpdir` | | Directory for intermediate files |
 
-### build-only flags
+### build flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--tinygo` | *(PATH)* | Path to tinygo binary |
 
-### link-only flags
+### link flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--input` | *(required)* | Input file `.ll`, `.bc`, `.o`, `.a` (repeatable) |
+| `--input`, `-i` | *(required)* | Input file `.ll`, `.bc`, `.o`, `.a` (repeatable) |
 | `--config` | | Path to `linker-config.json` for custom passes |
 | `--jobs`, `-j` | `1` | Parallel input normalization workers |
+
+### verify flags
+
+| Flag | Description |
+|------|-------------|
+| `--input`, `-i` | *(required)* Path to the BPF ELF object to validate |
 
 ### Tool path overrides
 

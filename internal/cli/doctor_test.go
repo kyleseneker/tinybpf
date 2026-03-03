@@ -27,6 +27,7 @@ func TestRunDoctor(t *testing.T) {
 					return p
 				}
 				return []string{
+					"doctor",
 					"--llvm-link", fakeTool("llvm-link"),
 					"--opt", fakeTool("opt"),
 					"--llc", fakeTool("llc"),
@@ -38,7 +39,7 @@ func TestRunDoctor(t *testing.T) {
 			name: "missing tool",
 			setup: func(t *testing.T) []string {
 				t.Helper()
-				return []string{"--llvm-link", testutil.BadPath("llvm-link")}
+				return []string{"doctor", "--llvm-link", testutil.BadPath("llvm-link")}
 			},
 			wantCode: 1,
 			wantErr:  "llvm-link",
@@ -46,7 +47,7 @@ func TestRunDoctor(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			args := append([]string{"doctor"}, tt.setup(t)...)
+			args := tt.setup(t)
 			_, stderr, code := runCLI(t, args...)
 			if code != tt.wantCode {
 				t.Fatalf("exit code: got %d, want %d, stderr=%s", code, tt.wantCode, stderr)
