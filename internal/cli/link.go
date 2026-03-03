@@ -12,8 +12,13 @@ import (
 	"github.com/kyleseneker/tinybpf/internal/pipeline"
 )
 
-// runLink links the TinyGo LLVM IR into a BPF ELF object.
+type heapProfileWriter func(w io.Writer) error
+
 func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return runLinkWith(ctx, args, stdout, stderr, pprof.WriteHeapProfile)
+}
+
+func runLinkWith(ctx context.Context, args []string, stdout, stderr io.Writer, writeHeap heapProfileWriter) int {
 	var inputs multiStringFlag
 	var programs multiStringFlag
 	var sectionFlags multiStringFlag
@@ -56,7 +61,7 @@ func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 
 	if profilePath != "" {
-		cleanup, err := startProfiling(profilePath, stderr)
+		cleanup, err := startProfiling(profilePath, stderr, writeHeap)
 		if err != nil {
 			fmt.Fprintf(stderr, "warning: profiling failed to start: %v\n", err)
 		} else {
@@ -67,11 +72,9 @@ func runLink(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	return runPipelineAndReport(ctx, cfg, stdout, stderr)
 }
 
-var writeHeapProfile = pprof.WriteHeapProfile
-
 // startProfiling starts CPU profiling and returns a cleanup function that
 // stops the CPU profile and writes a heap memory profile on completion.
-func startProfiling(basePath string, w io.Writer) (func(), error) {
+func startProfiling(basePath string, w io.Writer, writeHeap heapProfileWriter) (func(), error) {
 	cpuPath := basePath + ".cpu.prof"
 	f, err := os.Create(cpuPath)
 	if err != nil {
@@ -95,7 +98,7 @@ func startProfiling(basePath string, w io.Writer) (func(), error) {
 		}
 		defer func() { _ = mf.Close() }()
 		runtime.GC()
-		if err := writeHeapProfile(mf); err != nil {
+		if err := writeHeap(mf); err != nil {
 			fmt.Fprintf(w, "warning: memory profile: %v\n", err)
 			return
 		}

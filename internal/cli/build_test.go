@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -10,78 +11,87 @@ import (
 	"time"
 )
 
+func runBuildCLI(t *testing.T, tg tinyGoRunner, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	var out, errOut bytes.Buffer
+	code = runBuildWith(context.Background(), args, &out, &errOut, tg)
+	return out.String(), errOut.String(), code
+}
+
 func TestRunBuild(t *testing.T) {
 	tests := []struct {
 		name     string
-		setup    func(t *testing.T) []string
+		setup    func(t *testing.T) (args []string, tg tinyGoRunner)
 		wantCode int
 		wantOut  string
 		wantErr  string
 	}{
 		{
-			name:     "missing package",
-			setup:    func(t *testing.T) []string { t.Helper(); return []string{"build"} },
+			name: "missing package",
+			setup: func(t *testing.T) ([]string, tinyGoRunner) {
+				t.Helper()
+				return []string{"build"}, nil
+			},
 			wantCode: 2,
 			wantErr:  "package argument",
 		},
 		{
-			name:     "--help",
-			setup:    func(t *testing.T) []string { t.Helper(); return []string{"build", "--help"} },
+			name: "--help",
+			setup: func(t *testing.T) ([]string, tinyGoRunner) {
+				t.Helper()
+				return []string{"build", "--help"}, nil
+			},
 			wantCode: 0,
 			wantErr:  "Usage:",
 		},
 		{
 			name: "tinygo not found",
-			setup: func(t *testing.T) []string {
+			setup: func(t *testing.T) ([]string, tinyGoRunner) {
 				t.Helper()
-				return []string{"build", "--tinygo", "/does/not/exist/tinygo", "./bpf"}
+				return []string{"build", "--tinygo", "/does/not/exist/tinygo", "./bpf"}, nil
 			},
 			wantCode: 1,
 			wantErr:  "tinygo not found",
 		},
 		{
 			name: "temp dir creation failure",
-			setup: func(t *testing.T) []string {
+			setup: func(t *testing.T) ([]string, tinyGoRunner) {
 				t.Helper()
 				dir := t.TempDir()
 				fakeTG := filepath.Join(dir, "tinygo")
 				os.WriteFile(fakeTG, []byte("#!/bin/sh\n"), 0o755)
 				t.Setenv("TMPDIR", "/nonexistent/path")
-				orig := runTinyGo
-				t.Cleanup(func() { runTinyGo = orig })
-				runTinyGo = func(_ context.Context, _ time.Duration, _ string, _ ...string) (tinyGoResult, error) {
-					return tinyGoResult{}, nil
-				}
-				return []string{"build", "--tinygo", fakeTG, "./bpf"}
+				return []string{"build", "--tinygo", fakeTG, "./bpf"}, nil
 			},
 			wantCode: 1,
 			wantErr:  "creating temp directory",
 		},
 		{
 			name: "tinygo compile failure",
-			setup: func(t *testing.T) []string {
+			setup: func(t *testing.T) ([]string, tinyGoRunner) {
 				t.Helper()
-				orig := runTinyGo
-				t.Cleanup(func() { runTinyGo = orig })
-				runTinyGo = func(_ context.Context, _ time.Duration, _ string, _ ...string) (tinyGoResult, error) {
-					return tinyGoResult{stderr: "cannot find package"}, fmt.Errorf("exit status 2")
-				}
 				dir := t.TempDir()
 				fakeTG := filepath.Join(dir, "tinygo")
 				os.WriteFile(fakeTG, []byte("#!/bin/sh\nexit 1\n"), 0o755)
-				return []string{"build", "--tinygo", fakeTG, "--output", filepath.Join(dir, "out.o"), "./bpf"}
+				runner := func(_ context.Context, _ time.Duration, _ string, _ ...string) (tinyGoResult, error) {
+					return tinyGoResult{stderr: "cannot find package"}, fmt.Errorf("exit status 2")
+				}
+				args := []string{"--tinygo", fakeTG, "--output", filepath.Join(dir, "out.o"), "./bpf"}
+				return args, runner
 			},
 			wantCode: 1,
 			wantErr:  "tinygo-compile",
 		},
 		{
 			name: "verbose shows tinygo stderr",
-			setup: func(t *testing.T) []string {
+			setup: func(t *testing.T) ([]string, tinyGoRunner) {
 				t.Helper()
 				ir := testIR("my_prog")
-				orig := runTinyGo
-				t.Cleanup(func() { runTinyGo = orig })
-				runTinyGo = func(_ context.Context, _ time.Duration, _ string, args ...string) (tinyGoResult, error) {
+				dir := t.TempDir()
+				fakeTG := filepath.Join(dir, "tinygo")
+				os.WriteFile(fakeTG, []byte("#!/bin/sh\n"), 0o755)
+				toolDir := fakeToolDir(t)
+				runner := func(_ context.Context, _ time.Duration, _ string, args ...string) (tinyGoResult, error) {
 					for i, a := range args {
 						if a == "-o" && i+1 < len(args) {
 							os.WriteFile(args[i+1], []byte(ir), 0o644)
@@ -90,26 +100,24 @@ func TestRunBuild(t *testing.T) {
 					}
 					return tinyGoResult{stderr: "some tinygo warning"}, nil
 				}
-				dir := t.TempDir()
-				fakeTG := filepath.Join(dir, "tinygo")
-				os.WriteFile(fakeTG, []byte("#!/bin/sh\n"), 0o755)
-				toolDir := fakeToolDir(t)
 				args := append([]string{
-					"build", "--tinygo", fakeTG, "--output", filepath.Join(dir, "out.o"), "--verbose",
+					"--tinygo", fakeTG, "--output", filepath.Join(dir, "out.o"), "--verbose",
 				}, fakeLLVMArgs(toolDir)...)
-				return append(args, "./bpf")
+				return append(args, "./bpf"), runner
 			},
 			wantCode: 0,
 			wantErr:  "some tinygo warning",
 		},
 		{
 			name: "happy path",
-			setup: func(t *testing.T) []string {
+			setup: func(t *testing.T) ([]string, tinyGoRunner) {
 				t.Helper()
 				ir := testIR("my_prog")
-				orig := runTinyGo
-				t.Cleanup(func() { runTinyGo = orig })
-				runTinyGo = func(_ context.Context, _ time.Duration, _ string, args ...string) (tinyGoResult, error) {
+				dir := t.TempDir()
+				fakeTG := filepath.Join(dir, "tinygo")
+				os.WriteFile(fakeTG, []byte("#!/bin/sh\n"), 0o755)
+				toolDir := fakeToolDir(t)
+				runner := func(_ context.Context, _ time.Duration, _ string, args ...string) (tinyGoResult, error) {
 					for i, a := range args {
 						if a == "-o" && i+1 < len(args) {
 							os.WriteFile(args[i+1], []byte(ir), 0o644)
@@ -118,14 +126,10 @@ func TestRunBuild(t *testing.T) {
 					}
 					return tinyGoResult{}, nil
 				}
-				dir := t.TempDir()
-				fakeTG := filepath.Join(dir, "tinygo")
-				os.WriteFile(fakeTG, []byte("#!/bin/sh\n"), 0o755)
-				toolDir := fakeToolDir(t)
 				args := append([]string{
-					"build", "--tinygo", fakeTG, "--output", filepath.Join(dir, "out.o"), "--verbose",
+					"--tinygo", fakeTG, "--output", filepath.Join(dir, "out.o"), "--verbose",
 				}, fakeLLVMArgs(toolDir)...)
-				return append(args, "./bpf")
+				return append(args, "./bpf"), runner
 			},
 			wantCode: 0,
 			wantOut:  "wrote",
@@ -133,8 +137,14 @@ func TestRunBuild(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			args := tt.setup(t)
-			stdout, stderr, code := runCLI(t, args...)
+			args, tg := tt.setup(t)
+			var stdout, stderr string
+			var code int
+			if tg != nil {
+				stdout, stderr, code = runBuildCLI(t, tg, args...)
+			} else {
+				stdout, stderr, code = runCLI(t, args...)
+			}
 			if code != tt.wantCode {
 				t.Fatalf("exit code: got %d, want %d, stderr=%s", code, tt.wantCode, stderr)
 			}
@@ -143,6 +153,55 @@ func TestRunBuild(t *testing.T) {
 			}
 			if tt.wantErr != "" && !strings.Contains(stderr, tt.wantErr) {
 				t.Fatalf("expected %q in stderr, got: %s", tt.wantErr, stderr)
+			}
+		})
+	}
+}
+
+func TestExecTinyGo(t *testing.T) {
+	dir := t.TempDir()
+
+	tests := []struct {
+		name       string
+		script     string
+		timeout    time.Duration
+		wantErr    bool
+		wantStderr string
+	}{
+		{
+			name:       "success with stderr",
+			script:     "#!/bin/sh\necho 'stderr output' >&2\n",
+			timeout:    5 * time.Second,
+			wantStderr: "stderr output",
+		},
+		{
+			name:       "zero timeout uses default",
+			script:     "#!/bin/sh\necho 'stderr output' >&2\n",
+			timeout:    0,
+			wantStderr: "stderr output",
+		},
+		{
+			name:       "command failure",
+			script:     "#!/bin/sh\necho 'build error' >&2\nexit 1\n",
+			timeout:    5 * time.Second,
+			wantErr:    true,
+			wantStderr: "build error",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bin := filepath.Join(dir, strings.ReplaceAll(tt.name, " ", "_"))
+			os.WriteFile(bin, []byte(tt.script), 0o755)
+
+			res, err := execTinyGo(context.Background(), tt.timeout, bin)
+			if tt.wantErr && err == nil {
+				t.Fatal("expected error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantStderr != "" && !strings.Contains(res.stderr, tt.wantStderr) {
+				t.Fatalf("expected %q in stderr, got: %q", tt.wantStderr, res.stderr)
 			}
 		})
 	}
@@ -208,55 +267,6 @@ func TestBuildWorkDir(t *testing.T) {
 				if !info.IsDir() {
 					t.Fatal("expected a directory")
 				}
-			}
-		})
-	}
-}
-
-func TestRunTinyGoReal(t *testing.T) {
-	dir := t.TempDir()
-
-	tests := []struct {
-		name       string
-		script     string
-		timeout    time.Duration
-		wantErr    bool
-		wantStderr string
-	}{
-		{
-			name:       "success with stderr",
-			script:     "#!/bin/sh\necho 'stderr output' >&2\n",
-			timeout:    5 * time.Second,
-			wantStderr: "stderr output",
-		},
-		{
-			name:       "zero timeout uses default",
-			script:     "#!/bin/sh\necho 'stderr output' >&2\n",
-			timeout:    0,
-			wantStderr: "stderr output",
-		},
-		{
-			name:       "command failure",
-			script:     "#!/bin/sh\necho 'build error' >&2\nexit 1\n",
-			timeout:    5 * time.Second,
-			wantErr:    true,
-			wantStderr: "build error",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			bin := filepath.Join(dir, strings.ReplaceAll(tt.name, " ", "_"))
-			os.WriteFile(bin, []byte(tt.script), 0o755)
-
-			res, err := runTinyGo(context.Background(), tt.timeout, bin)
-			if tt.wantErr && err == nil {
-				t.Fatal("expected error")
-			}
-			if !tt.wantErr && err != nil {
-				t.Fatal(err)
-			}
-			if tt.wantStderr != "" && !strings.Contains(res.stderr, tt.wantStderr) {
-				t.Fatalf("expected %q in stderr, got: %q", tt.wantStderr, res.stderr)
 			}
 		})
 	}

@@ -124,91 +124,6 @@ func TestRunLink(t *testing.T) {
 	}
 }
 
-func TestStartProfiling(t *testing.T) {
-	tests := []struct {
-		name       string
-		setup      func(t *testing.T) string
-		wantErr    string
-		preCleanup func(t *testing.T, basePath string)
-		wantOutput string
-	}{
-		{
-			name:       "success",
-			setup:      func(t *testing.T) string { t.Helper(); return filepath.Join(t.TempDir(), "test") },
-			wantOutput: "memory profile:",
-		},
-		{
-			name:    "bad path",
-			setup:   func(t *testing.T) string { t.Helper(); return "/does/not/exist/prof" },
-			wantErr: "creating CPU profile",
-		},
-		{
-			name: "CPU already running",
-			setup: func(t *testing.T) string {
-				t.Helper()
-				tmp := t.TempDir()
-				f, _ := os.Create(filepath.Join(tmp, "block.prof"))
-				t.Cleanup(func() { pprof.StopCPUProfile(); f.Close() })
-				pprof.StartCPUProfile(f)
-				return filepath.Join(tmp, "second")
-			},
-			wantErr: "CPU profile",
-		},
-		{
-			name: "heap profile write error",
-			setup: func(t *testing.T) string {
-				t.Helper()
-				orig := writeHeapProfile
-				t.Cleanup(func() { writeHeapProfile = orig })
-				writeHeapProfile = func(w io.Writer) error {
-					return fmt.Errorf("injected write error")
-				}
-				return filepath.Join(t.TempDir(), "test")
-			},
-			wantOutput: "warning: memory profile:",
-		},
-		{
-			name:  "memory profile create error",
-			setup: func(t *testing.T) string { t.Helper(); return filepath.Join(t.TempDir(), "test") },
-			preCleanup: func(t *testing.T, basePath string) {
-				t.Helper()
-				dir := filepath.Dir(basePath)
-				os.Chmod(dir, 0o500)
-				t.Cleanup(func() { os.Chmod(dir, 0o700) })
-			},
-			wantOutput: "warning: memory profile:",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			basePath := tt.setup(t)
-			var w bytes.Buffer
-
-			cleanup, err := startProfiling(basePath, &w)
-			if tt.wantErr != "" {
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				if !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("expected %q in error, got: %v", tt.wantErr, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tt.preCleanup != nil {
-				tt.preCleanup(t, basePath)
-			}
-			cleanup()
-
-			if tt.wantOutput != "" && !strings.Contains(w.String(), tt.wantOutput) {
-				t.Fatalf("expected %q in output, got: %s", tt.wantOutput, w.String())
-			}
-		})
-	}
-}
-
 func TestRunLinkProfile(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -258,6 +173,92 @@ func TestRunLinkProfile(t *testing.T) {
 			}
 			if tt.wantErr != "" && !strings.Contains(stderr, tt.wantErr) {
 				t.Fatalf("expected %q in stderr, got: %s", tt.wantErr, stderr)
+			}
+		})
+	}
+}
+
+func TestStartProfiling(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T) string
+		writeHeap  heapProfileWriter
+		wantErr    string
+		preCleanup func(t *testing.T, basePath string)
+		wantOutput string
+	}{
+		{
+			name:       "success",
+			setup:      func(t *testing.T) string { t.Helper(); return filepath.Join(t.TempDir(), "test") },
+			wantOutput: "memory profile:",
+		},
+		{
+			name:    "bad path",
+			setup:   func(t *testing.T) string { t.Helper(); return "/does/not/exist/prof" },
+			wantErr: "creating CPU profile",
+		},
+		{
+			name: "CPU already running",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				tmp := t.TempDir()
+				f, _ := os.Create(filepath.Join(tmp, "block.prof"))
+				t.Cleanup(func() { pprof.StopCPUProfile(); f.Close() })
+				pprof.StartCPUProfile(f)
+				return filepath.Join(tmp, "second")
+			},
+			wantErr: "CPU profile",
+		},
+		{
+			name:  "heap profile write error",
+			setup: func(t *testing.T) string { t.Helper(); return filepath.Join(t.TempDir(), "test") },
+			writeHeap: func(w io.Writer) error {
+				return fmt.Errorf("injected write error")
+			},
+			wantOutput: "warning: memory profile:",
+		},
+		{
+			name:  "memory profile create error",
+			setup: func(t *testing.T) string { t.Helper(); return filepath.Join(t.TempDir(), "test") },
+			preCleanup: func(t *testing.T, basePath string) {
+				t.Helper()
+				dir := filepath.Dir(basePath)
+				os.Chmod(dir, 0o500)
+				t.Cleanup(func() { os.Chmod(dir, 0o700) })
+			},
+			wantOutput: "warning: memory profile:",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			basePath := tt.setup(t)
+			var w bytes.Buffer
+
+			writeHeap := tt.writeHeap
+			if writeHeap == nil {
+				writeHeap = pprof.WriteHeapProfile
+			}
+
+			cleanup, err := startProfiling(basePath, &w, writeHeap)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected %q in error, got: %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.preCleanup != nil {
+				tt.preCleanup(t, basePath)
+			}
+			cleanup()
+
+			if tt.wantOutput != "" && !strings.Contains(w.String(), tt.wantOutput) {
+				t.Fatalf("expected %q in output, got: %s", tt.wantOutput, w.String())
 			}
 		})
 	}

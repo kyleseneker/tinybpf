@@ -103,9 +103,9 @@ func prepareRunContext(ctx context.Context, cfg Config) (*runContext, func(), er
 	}
 
 	rc := &runContext{
-		ctx:   ctx,
-		cfg:   cfg,
-		tools: tools,
+		ctx:     ctx,
+		cfg:     cfg,
+		tools:   tools,
 		workDir: workDir,
 		artifacts: &Artifacts{
 			TempDir:       workDir,

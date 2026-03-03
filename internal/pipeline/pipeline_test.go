@@ -416,10 +416,8 @@ func TestSetupDumpIR(t *testing.T) {
 				if !info.IsDir() {
 					t.Fatal("expected directory")
 				}
-			} else {
-				if dir != "" {
-					t.Fatalf("expected empty dir, got %q", dir)
-				}
+			} else if dir != "" {
+				t.Fatalf("expected empty dir, got %q", dir)
 			}
 			if tt.wantLog != "" && !strings.Contains(stdout.String(), tt.wantLog) {
 				t.Errorf("expected %q in stdout, got %q", tt.wantLog, stdout.String())

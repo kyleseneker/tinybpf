@@ -15,8 +15,13 @@ import (
 	"github.com/kyleseneker/tinybpf/internal/pipeline"
 )
 
-// runBuild compiles Go source with TinyGo and links the resulting IR into a BPF ELF object.
+type tinyGoRunner func(ctx context.Context, timeout time.Duration, bin string, args ...string) (tinyGoResult, error)
+
 func runBuild(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return runBuildWith(ctx, args, stdout, stderr, execTinyGo)
+}
+
+func runBuildWith(ctx context.Context, args []string, stdout, stderr io.Writer, tg tinyGoRunner) int {
 	var programs multiStringFlag
 	var sectionFlags multiStringFlag
 	var tinygoPath string
@@ -51,27 +56,8 @@ func runBuild(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		defer cleanup()
 	}
 
-	irFile := filepath.Join(workDir, "program.ll")
-	tinygoArgs := []string{
-		"build",
-		"-gc=none", "-scheduler=none", "-panic=trap", "-opt=1",
-		"-o", irFile,
-		pkg,
-	}
-
-	if cfg.Verbose {
-		fmt.Fprintf(stdout, "[tinygo-compile] %s %s\n", tinygo, strings.Join(tinygoArgs, " "))
-	}
-	tgRes, tgErr := runTinyGo(ctx, cfg.Timeout, tinygo, tinygoArgs...)
-	if cfg.Verbose && strings.TrimSpace(tgRes.stderr) != "" {
-		fmt.Fprintln(stderr, tgRes.stderr)
-	}
-	if tgErr != nil {
-		cmd := tinygo + " " + strings.Join(tinygoArgs, " ")
-		diagErr := &diag.Error{Stage: diag.StageCompile, Err: tgErr,
-			Command: cmd, Stderr: tgRes.stderr,
-			Hint: "ensure TinyGo is installed and the package compiles with: tinygo build -gc=none -scheduler=none -panic=trap -opt=1 " + pkg}
-		fmt.Fprintln(stderr, diagErr.Error())
+	irFile, err := compileTinyGo(ctx, tg, cfg, tinygo, pkg, workDir, stdout, stderr)
+	if err != nil {
 		return 1
 	}
 
@@ -85,6 +71,52 @@ func runBuild(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	cfg.Sections = sections
 
 	return runPipelineAndReport(ctx, cfg, stdout, stderr)
+}
+
+func compileTinyGo(ctx context.Context, tg tinyGoRunner, cfg pipeline.Config, tinygo, pkg, workDir string, stdout, stderr io.Writer) (string, error) {
+	irFile := filepath.Join(workDir, "program.ll")
+	tinygoArgs := []string{
+		"build",
+		"-gc=none", "-scheduler=none", "-panic=trap", "-opt=1",
+		"-o", irFile,
+		pkg,
+	}
+
+	if cfg.Verbose {
+		fmt.Fprintf(stdout, "[tinygo-compile] %s %s\n", tinygo, strings.Join(tinygoArgs, " "))
+	}
+	tgRes, tgErr := tg(ctx, cfg.Timeout, tinygo, tinygoArgs...)
+	if cfg.Verbose && strings.TrimSpace(tgRes.stderr) != "" {
+		fmt.Fprintln(stderr, tgRes.stderr)
+	}
+	if tgErr != nil {
+		cmd := tinygo + " " + strings.Join(tinygoArgs, " ")
+		diagErr := &diag.Error{Stage: diag.StageCompile, Err: tgErr,
+			Command: cmd, Stderr: tgRes.stderr,
+			Hint: "ensure TinyGo is installed and the package compiles with: tinygo build -gc=none -scheduler=none -panic=trap -opt=1 " + pkg}
+		fmt.Fprintln(stderr, diagErr.Error())
+		return "", tgErr
+	}
+	return irFile, nil
+}
+
+type tinyGoResult struct{ stderr string }
+
+// execTinyGo runs TinyGo with the full process environment so it can
+// resolve GOPATH, GOMODCACHE, and other Go toolchain variables.
+func execTinyGo(ctx context.Context, timeout time.Duration, bin string, args ...string) (tinyGoResult, error) {
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(cmdCtx, bin, args...)
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
+
+	err := cmd.Run()
+	return tinyGoResult{stderr: stderrBuf.String()}, err
 }
 
 // buildWorkDir returns the working directory for intermediate build artifacts
@@ -101,25 +133,6 @@ func buildWorkDir(explicit string) (dir string, cleanup func(), err error) {
 		return "", nil, err
 	}
 	return dir, func() { _ = os.RemoveAll(dir) }, nil
-}
-
-type tinyGoResult struct{ stderr string }
-
-// runTinyGo executes TinyGo with the full process environment so it can
-// resolve GOPATH, GOMODCACHE, and other Go toolchain variables.
-var runTinyGo = func(ctx context.Context, timeout time.Duration, bin string, args ...string) (tinyGoResult, error) {
-	if timeout <= 0 {
-		timeout = 60 * time.Second
-	}
-	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(cmdCtx, bin, args...)
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
-
-	err := cmd.Run()
-	return tinyGoResult{stderr: stderrBuf.String()}, err
 }
 
 // findTinyGo resolves the tinygo binary from an explicit path or PATH.
