@@ -16,8 +16,8 @@ import (
 
 const minLLVMMajor = 20
 
-// lookPath is the function used to locate binaries on PATH.
-var lookPath = exec.LookPath
+// pathLookup is a function that looks up a tool path by name.
+type pathLookup func(name string) (string, error)
 
 // Config holds settings for the doctor check.
 type Config struct {
@@ -29,6 +29,44 @@ type Config struct {
 
 // Run discovers LLVM tools and prints their resolved paths and versions.
 func Run(ctx context.Context, cfg Config) error {
+	return runWith(ctx, cfg, exec.LookPath)
+}
+
+// runWith runs the doctor check with a custom path lookup function.
+func runWith(ctx context.Context, cfg Config, lookup pathLookup) error {
+	normalizeConfig(&cfg)
+
+	tools, err := llvm.DiscoverTools(cfg.Tools)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(cfg.Stdout, "tinybpf doctor")
+
+	llvmMajor := reportLLVMTools(ctx, cfg, tools)
+
+	var warnings []string
+
+	if w := checkExternalTool(ctx, cfg, lookup, "tinygo", "version",
+		"TinyGo is not installed; install from https://tinygo.org/getting-started/install/"); w != "" {
+		warnings = append(warnings, w)
+	}
+
+	if w := llvmVersionWarning(llvmMajor); w != "" {
+		warnings = append(warnings, w)
+	}
+
+	if w := checkExternalTool(ctx, cfg, lookup, "pahole", "--version",
+		"pahole is not installed; needed for --btf flag. Install dwarves package."); w != "" {
+		warnings = append(warnings, w)
+	}
+
+	printSummary(cfg.Stdout, warnings)
+	return nil
+}
+
+// normalizeConfig normalizes the config.
+func normalizeConfig(cfg *Config) {
 	if cfg.Stdout == nil {
 		cfg.Stdout = io.Discard
 	}
@@ -38,17 +76,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 10 * time.Second
 	}
+}
 
-	tools, err := llvm.DiscoverTools(cfg.Tools)
-	if err != nil {
-		return err
-	}
-
-	fmt.Fprintln(cfg.Stdout, "tinybpf doctor")
-
-	var warnings []string
+// reportLLVMTools reports the LLVM tools and their versions.
+func reportLLVMTools(ctx context.Context, cfg Config, tools llvm.Tools) int {
 	var llvmMajor int
-
 	for _, t := range tools.List() {
 		label := t.Name + ":"
 		if t.Path == "" {
@@ -64,33 +96,13 @@ func Run(ctx context.Context, cfg Config) error {
 			llvmMajor = major
 		}
 	}
-
-	if w := checkExternalTool(ctx, cfg, "tinygo", "version",
-		"TinyGo is not installed; install from https://tinygo.org/getting-started/install/"); w != "" {
-		warnings = append(warnings, w)
-	}
-
-	if llvmMajor > 0 && llvmMajor < minLLVMMajor {
-		warnings = append(warnings,
-			fmt.Sprintf("LLVM %d detected; TinyGo 0.40.x requires LLVM %d+. "+
-				"Install from https://apt.llvm.org or use the LLVM bundled with TinyGo.",
-				llvmMajor, minLLVMMajor))
-	}
-
-	if w := checkExternalTool(ctx, cfg, "pahole", "--version",
-		"pahole is not installed; needed for --btf flag. Install dwarves package."); w != "" {
-		warnings = append(warnings, w)
-	}
-
-	printSummary(cfg.Stdout, warnings)
-	return nil
+	return llvmMajor
 }
 
-// checkExternalTool looks up a binary on PATH, prints its path and version,
-// and returns a warning string if the binary is not found (empty otherwise).
-func checkExternalTool(ctx context.Context, cfg Config, name, versionFlag, notFoundMsg string) string {
+// checkExternalTool checks an external tool and returns a warning message if it is not found.
+func checkExternalTool(ctx context.Context, cfg Config, lookup pathLookup, name, versionFlag, notFoundMsg string) string {
 	label := name + ":"
-	path, _ := lookPath(name)
+	path, _ := lookup(name)
 	if path == "" {
 		fmt.Fprintf(cfg.Stdout, "  %-14s (not found)\n", label)
 		return notFoundMsg
@@ -101,8 +113,7 @@ func checkExternalTool(ctx context.Context, cfg Config, name, versionFlag, notFo
 	return ""
 }
 
-// getToolVersion runs a binary with the given version flag and returns
-// the first non-empty line of output.
+// getToolVersion gets the version of a tool.
 func getToolVersion(ctx context.Context, cfg Config, path, name, flag string) string {
 	res, runErr := llvm.Run(ctx, cfg.Timeout, path, flag)
 	if runErr != nil {
@@ -119,7 +130,7 @@ func getToolVersion(ctx context.Context, cfg Config, path, name, flag string) st
 	return line
 }
 
-// printSummary outputs the warnings list and final status.
+// printSummary prints the summary of the doctor check.
 func printSummary(w io.Writer, warnings []string) {
 	if len(warnings) > 0 {
 		fmt.Fprintln(w, "")
@@ -134,6 +145,16 @@ func printSummary(w io.Writer, warnings []string) {
 	} else {
 		fmt.Fprintf(w, "%d warning(s); see above\n", len(warnings))
 	}
+}
+
+// llvmVersionWarning returns a warning message if the LLVM version is too old.
+func llvmVersionWarning(llvmMajor int) string {
+	if llvmMajor > 0 && llvmMajor < minLLVMMajor {
+		return fmt.Sprintf("LLVM %d detected; TinyGo 0.40.x requires LLVM %d+. "+
+			"Install from https://apt.llvm.org or use the LLVM bundled with TinyGo.",
+			llvmMajor, minLLVMMajor)
+	}
+	return ""
 }
 
 // parseLLVMMajor extracts the LLVM major version from a version string
@@ -159,6 +180,7 @@ func parseLLVMMajor(s string) (int, bool) {
 	return major, true
 }
 
+// firstNonEmptyLine returns the first non-empty line from a string.
 func firstNonEmptyLine(s string) string {
 	for _, line := range strings.Split(s, "\n") {
 		if t := strings.TrimSpace(line); t != "" {

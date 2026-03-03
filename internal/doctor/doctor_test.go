@@ -3,8 +3,8 @@ package doctor
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,8 +13,6 @@ import (
 	"github.com/kyleseneker/tinybpf/internal/llvm"
 )
 
-// fakeToolOverrides creates a temp directory with properly-named fake tool
-// scripts (llvm-link, opt, llc) that each run the given shell body.
 func fakeToolOverrides(t *testing.T, script string) llvm.ToolOverrides {
 	t.Helper()
 	dir := t.TempDir()
@@ -32,37 +30,11 @@ func fakeToolOverrides(t *testing.T, script string) llvm.ToolOverrides {
 	}
 }
 
-// stubLookPath replaces the package-level lookPath for the duration of a test
-// and restores it on cleanup.
-func stubLookPath(t *testing.T, fn func(string) (string, error)) {
-	t.Helper()
-	old := lookPath
-	lookPath = fn
-	t.Cleanup(func() { lookPath = old })
+func noExternalTools() pathLookup {
+	return func(string) (string, error) { return "", os.ErrNotExist }
 }
 
-// noTinyGo stubs lookPath to report tinygo as absent.
-func noTinyGo(t *testing.T) {
-	t.Helper()
-	stubLookPath(t, func(string) (string, error) { return "", os.ErrNotExist })
-}
-
-// fakeTinyGo creates a fake tinygo script and stubs lookPath to resolve it.
-func fakeTinyGo(t *testing.T, script string) {
-	t.Helper()
-	dir := t.TempDir()
-	p := filepath.Join(dir, "tinygo")
-	os.WriteFile(p, []byte("#!/bin/sh\n"+script+"\n"), 0o755)
-	stubLookPath(t, func(name string) (string, error) {
-		if name == "tinygo" {
-			return p, nil
-		}
-		return exec.LookPath(name)
-	})
-}
-
-// fakeTools creates fake scripts for the named binaries and stubs lookPath to resolve them.
-func fakeTools(t *testing.T, tools map[string]string) {
+func fakeExternalTools(t *testing.T, tools map[string]string) pathLookup {
 	t.Helper()
 	dir := t.TempDir()
 	paths := make(map[string]string, len(tools))
@@ -71,19 +43,75 @@ func fakeTools(t *testing.T, tools map[string]string) {
 		os.WriteFile(p, []byte("#!/bin/sh\n"+script+"\n"), 0o755)
 		paths[name] = p
 	}
-	stubLookPath(t, func(name string) (string, error) {
+	return func(name string) (string, error) {
 		if p, ok := paths[name]; ok {
 			return p, nil
 		}
-		return exec.LookPath(name)
-	})
+		return "", os.ErrNotExist
+	}
 }
 
-func TestRun(t *testing.T) {
+func TestNormalizeConfig(t *testing.T) {
+	tests := []struct {
+		name  string
+		cfg   Config
+		check func(t *testing.T, cfg Config)
+	}{
+		{
+			name: "nil writers default to non-nil",
+			cfg:  Config{},
+			check: func(t *testing.T, cfg Config) {
+				t.Helper()
+				if cfg.Stdout == nil || cfg.Stderr == nil {
+					t.Error("expected non-nil writers")
+				}
+			},
+		},
+		{
+			name: "zero timeout defaults to 10s",
+			cfg:  Config{},
+			check: func(t *testing.T, cfg Config) {
+				t.Helper()
+				if cfg.Timeout != 10*time.Second {
+					t.Errorf("Timeout = %v, want 10s", cfg.Timeout)
+				}
+			},
+		},
+		{
+			name: "negative timeout defaults to 10s",
+			cfg:  Config{Timeout: -1},
+			check: func(t *testing.T, cfg Config) {
+				t.Helper()
+				if cfg.Timeout != 10*time.Second {
+					t.Errorf("Timeout = %v, want 10s", cfg.Timeout)
+				}
+			},
+		},
+		{
+			name: "explicit values preserved",
+			cfg:  Config{Stdout: io.Discard, Stderr: io.Discard, Timeout: 30 * time.Second},
+			check: func(t *testing.T, cfg Config) {
+				t.Helper()
+				if cfg.Timeout != 30*time.Second {
+					t.Errorf("Timeout = %v, want 30s", cfg.Timeout)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+			normalizeConfig(&cfg)
+			tt.check(t, cfg)
+		})
+	}
+}
+
+func TestRunWith(t *testing.T) {
 	tests := []struct {
 		name        string
 		tools       func(t *testing.T) llvm.ToolOverrides
-		setup       func(t *testing.T) // optional pre-run setup (lookPath stubs, etc.)
+		lookup      func(t *testing.T) pathLookup
 		nilWriters  bool
 		wantErr     bool
 		wantStdout  []string
@@ -169,7 +197,6 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'Ubuntu LLVM version 18.1.8'")
 			},
-			setup:      noTinyGo,
 			wantStdout: []string{"warnings:", "LLVM 18", "warning(s)"},
 		},
 		{
@@ -178,7 +205,12 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup:      func(t *testing.T) { t.Helper(); fakeTinyGo(t, "echo 'tinygo version 0.40.1'") },
+			lookup: func(t *testing.T) pathLookup {
+				t.Helper()
+				return fakeExternalTools(t, map[string]string{
+					"tinygo": "echo 'tinygo version 0.40.1'",
+				})
+			},
 			wantStdout: []string{"tinygo:", "[OK]   tinygo:", "0.40.1"},
 		},
 		{
@@ -187,7 +219,6 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup:      noTinyGo,
 			wantStdout: []string{"tinygo:", "(not found)", "TinyGo is not installed"},
 		},
 		{
@@ -196,7 +227,10 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup:      func(t *testing.T) { t.Helper(); fakeTinyGo(t, "exit 1") },
+			lookup: func(t *testing.T) pathLookup {
+				t.Helper()
+				return fakeExternalTools(t, map[string]string{"tinygo": "exit 1"})
+			},
 			wantStderr: []string{"[FAIL] tinygo"},
 		},
 		{
@@ -205,7 +239,10 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup:      func(t *testing.T) { t.Helper(); fakeTinyGo(t, "echo 'tinygo version 0.40.1' >&2") },
+			lookup: func(t *testing.T) pathLookup {
+				t.Helper()
+				return fakeExternalTools(t, map[string]string{"tinygo": "echo 'tinygo version 0.40.1' >&2"})
+			},
 			wantStdout: []string{"0.40.1"},
 		},
 		{
@@ -214,7 +251,10 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup:      func(t *testing.T) { t.Helper(); fakeTinyGo(t, "exit 0") },
+			lookup: func(t *testing.T) pathLookup {
+				t.Helper()
+				return fakeExternalTools(t, map[string]string{"tinygo": "exit 0"})
+			},
 			wantStdout: []string{"(no version output)"},
 		},
 		{
@@ -223,9 +263,9 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup: func(t *testing.T) {
+			lookup: func(t *testing.T) pathLookup {
 				t.Helper()
-				fakeTools(t, map[string]string{
+				return fakeExternalTools(t, map[string]string{
 					"tinygo": "echo 'tinygo version 0.40.1'",
 					"pahole": "echo 'v1.27'",
 				})
@@ -238,7 +278,12 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup:      func(t *testing.T) { t.Helper(); fakeTinyGo(t, "echo 'tinygo version 0.40.1'") },
+			lookup: func(t *testing.T) pathLookup {
+				t.Helper()
+				return fakeExternalTools(t, map[string]string{
+					"tinygo": "echo 'tinygo version 0.40.1'",
+				})
+			},
 			wantStdout: []string{"pahole:", "(not found)", "dwarves"},
 		},
 		{
@@ -247,9 +292,9 @@ func TestRun(t *testing.T) {
 				t.Helper()
 				return fakeToolOverrides(t, "echo 'LLVM version 20.1.1'")
 			},
-			setup: func(t *testing.T) {
+			lookup: func(t *testing.T) pathLookup {
 				t.Helper()
-				fakeTools(t, map[string]string{
+				return fakeExternalTools(t, map[string]string{
 					"tinygo": "echo 'tinygo version 0.40.1'",
 					"pahole": "echo 'v1.27'",
 				})
@@ -260,8 +305,9 @@ func TestRun(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.setup != nil {
-				tt.setup(t)
+			lookup := noExternalTools()
+			if tt.lookup != nil {
+				lookup = tt.lookup(t)
 			}
 
 			var stdout, stderr bytes.Buffer
@@ -277,7 +323,7 @@ func TestRun(t *testing.T) {
 				cfg.Timeout = 0
 			}
 
-			err := Run(context.Background(), cfg)
+			err := runWith(context.Background(), cfg, lookup)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("expected error")
@@ -306,43 +352,134 @@ func TestRun(t *testing.T) {
 	}
 }
 
-func TestFirstNonEmptyLine(t *testing.T) {
+func TestRun(t *testing.T) {
+	tools := fakeToolOverrides(t, "echo ok")
+	err := Run(context.Background(), Config{
+		Tools:   tools,
+		Stdout:  io.Discard,
+		Stderr:  io.Discard,
+		Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPrintSummary(t *testing.T) {
 	tests := []struct {
-		input, want string
+		name        string
+		warnings    []string
+		wantContain []string
+		notContain  []string
 	}{
-		{"", ""},
-		{"\n\n", ""},
-		{"hello\nworld", "hello"},
-		{"\n  first  \nsecond", "first"},
+		{
+			name:        "no warnings",
+			warnings:    nil,
+			wantContain: []string{"all checks passed"},
+			notContain:  []string{"warnings:"},
+		},
+		{
+			name:        "one warning",
+			warnings:    []string{"something is wrong"},
+			wantContain: []string{"warnings:", "something is wrong", "1 warning(s); see above"},
+			notContain:  []string{"all checks passed"},
+		},
+		{
+			name:        "multiple warnings",
+			warnings:    []string{"first issue", "second issue"},
+			wantContain: []string{"warnings:", "first issue", "second issue", "2 warning(s); see above"},
+		},
 	}
 	for _, tt := range tests {
-		if got := firstNonEmptyLine(tt.input); got != tt.want {
-			t.Errorf("firstNonEmptyLine(%q) = %q, want %q", tt.input, got, tt.want)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			printSummary(&buf, tt.warnings)
+			out := buf.String()
+			for _, want := range tt.wantContain {
+				if !strings.Contains(out, want) {
+					t.Errorf("output missing %q, got:\n%s", want, out)
+				}
+			}
+			for _, absent := range tt.notContain {
+				if strings.Contains(out, absent) {
+					t.Errorf("output should not contain %q, got:\n%s", absent, out)
+				}
+			}
+		})
+	}
+}
+
+func TestLLVMVersionWarning(t *testing.T) {
+	tests := []struct {
+		name      string
+		major     int
+		wantEmpty bool
+		wantSub   string
+	}{
+		{"zero is no warning", 0, true, ""},
+		{"current version is no warning", 20, true, ""},
+		{"future version is no warning", 25, true, ""},
+		{"old version warns", 18, false, "LLVM 18"},
+		{"old version mentions minimum", 19, false, "LLVM 20+"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := llvmVersionWarning(tt.major)
+			if tt.wantEmpty && got != "" {
+				t.Fatalf("expected empty warning, got %q", got)
+			}
+			if !tt.wantEmpty && got == "" {
+				t.Fatal("expected non-empty warning")
+			}
+			if tt.wantSub != "" && !strings.Contains(got, tt.wantSub) {
+				t.Fatalf("warning missing %q, got %q", tt.wantSub, got)
+			}
+		})
 	}
 }
 
 func TestParseLLVMMajor(t *testing.T) {
 	tests := []struct {
+		name      string
 		input     string
 		wantMajor int
 		wantOK    bool
 	}{
-		{"Ubuntu LLVM version 20.1.1", 20, true},
-		{"LLVM version 18.1.8", 18, true},
-		{"LLVM version 21.0.0", 21, true},
-		{"LLVM version 20", 20, true},
-		{"fake-tool 1.0.0", 0, false},
-		{"", 0, false},
-		{"LLVM version ", 0, false},
-		{"LLVM version abc", 0, false},
+		{"Ubuntu prefix", "Ubuntu LLVM version 20.1.1", 20, true},
+		{"plain version", "LLVM version 18.1.8", 18, true},
+		{"future version", "LLVM version 21.0.0", 21, true},
+		{"major only", "LLVM version 20", 20, true},
+		{"unrelated tool", "fake-tool 1.0.0", 0, false},
+		{"empty string", "", 0, false},
+		{"no digits after prefix", "LLVM version ", 0, false},
+		{"non-numeric version", "LLVM version abc", 0, false},
 	}
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			major, ok := parseLLVMMajor(tt.input)
 			if major != tt.wantMajor || ok != tt.wantOK {
 				t.Fatalf("parseLLVMMajor(%q) = (%d, %v), want (%d, %v)",
 					tt.input, major, ok, tt.wantMajor, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestFirstNonEmptyLine(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"empty", "", ""},
+		{"only newlines", "\n\n", ""},
+		{"first line", "hello\nworld", "hello"},
+		{"leading whitespace", "\n  first  \nsecond", "first"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := firstNonEmptyLine(tt.input); got != tt.want {
+				t.Errorf("firstNonEmptyLine(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
