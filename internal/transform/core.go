@@ -58,8 +58,8 @@ func rewriteCoreAccess(lines []string) ([]string, error) {
 		fieldIdx := m[5]
 		trailing := m[6]
 
-		repl := fmt.Sprintf("%scall ptr %s(ptr %s, i32 %s, i32 %s)",
-			assign, coreIntrinsicName, base, fieldIdx, fieldIdx)
+		repl := fmt.Sprintf("%s%s",
+			assign, preserveStructAccessCall(base, typeName, fieldIdx, fieldIdx))
 		if metaID, ok := typeMeta[typeName]; ok {
 			repl += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
 		}
@@ -675,7 +675,7 @@ func rewriteFieldExists(
 	typeName := ctx.soleType()
 	if typeName == "" {
 		if idx, ok := ctx.fallbackIdx[0]; ok {
-			accessCall := fmt.Sprintf("call ptr %s(ptr %s, i32 %d, i32 %d)", coreIntrinsicName, ptrArg, idx, idx)
+			accessCall := preserveStructAccessCall(ptrArg, "i8", strconv.Itoa(idx), strconv.Itoa(idx))
 			repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)",
 				callPrefix, accessCall, bpfFieldExists)
 			lines[callLine] = line[:m[0]] + repl + line[m[1]:]
@@ -684,7 +684,7 @@ func rewriteFieldExists(
 		return fmt.Errorf("line %d: cannot determine bpfCore struct type for field-0 access via %s (found %d types)",
 			callLine+1, ptrArg, len(ctx.fieldOffsets))
 	}
-	accessCall := fmt.Sprintf("call ptr %s(ptr %s, i32 0, i32 0)", coreIntrinsicName, ptrArg)
+	accessCall := preserveStructAccessCall(ptrArg, typeName, "0", "0")
 	if metaID, ok := ctx.typeMeta[typeName]; ok {
 		accessCall += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
 	}
@@ -716,8 +716,12 @@ func rewriteFieldExistsGEP(
 		}
 	}
 
-	gepRepl := fmt.Sprintf("  %s = call ptr %s(ptr %s, i32 %d, i32 %d)",
-		ptrArg, coreIntrinsicName, base, fieldIdx, fieldIdx)
+	elemType := "i8"
+	if typeName != "" {
+		elemType = typeName
+	}
+	gepRepl := fmt.Sprintf("  %s = %s",
+		ptrArg, preserveStructAccessCall(base, elemType, strconv.Itoa(fieldIdx), strconv.Itoa(fieldIdx)))
 	if metaID, ok := ctx.typeMeta[typeName]; ok {
 		gepRepl += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
 	}
@@ -730,6 +734,13 @@ func rewriteFieldExistsGEP(
 		callPrefix, args, bpfFieldExists)
 	lines[callLine] = line[:m[0]] + repl + line[m[1]:]
 	return nil
+}
+
+// preserveStructAccessCall formats a call to llvm.preserve.struct.access.index
+// with an explicit elementtype(...) attribute required by LLVM 20+.
+func preserveStructAccessCall(base, elementType, gepIndex, diIndex string) string {
+	return fmt.Sprintf("call ptr %s(ptr elementtype(%s) %s, i32 %s, i32 %s)",
+		coreIntrinsicName, elementType, base, gepIndex, diIndex)
 }
 
 // findSSADef searches backward from startLine for the line that defines

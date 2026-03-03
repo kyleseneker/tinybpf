@@ -113,7 +113,7 @@ func TestRewriteCoreAccess(t *testing.T) {
 			name: "GEP replaced with preserve_access_index",
 			ir:   coreIRBasic,
 			wantContain: []string{
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %task, i32 0, i32 0)",
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr elementtype(%main.bpfCoreTaskStruct) %task, i32 0, i32 0)",
 				"!llvm.preserve.access.index !0",
 				coreIntrinsicDecl,
 			},
@@ -125,9 +125,9 @@ func TestRewriteCoreAccess(t *testing.T) {
 			name: "multiple field accesses rewritten",
 			ir:   coreIRMultipleFields,
 			wantContain: []string{
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %task, i32 0, i32 0)",
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %task, i32 1, i32 1)",
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %task, i32 2, i32 2)",
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr elementtype(%main.bpfCoreTaskStruct) %task, i32 0, i32 0)",
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr elementtype(%main.bpfCoreTaskStruct) %task, i32 1, i32 1)",
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr elementtype(%main.bpfCoreTaskStruct) %task, i32 2, i32 2)",
 			},
 			check: func(t *testing.T, text string) {
 				t.Helper()
@@ -157,7 +157,7 @@ func TestRewriteCoreAccess(t *testing.T) {
 			name: "works without DICompositeType metadata",
 			ir:   coreIRWithoutMeta,
 			wantContain: []string{
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %file, i32 0, i32 0)",
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr elementtype(%main.bpfCoreFileStruct) %file, i32 0, i32 0)",
 				coreIntrinsicDecl,
 			},
 			notContain: []string{
@@ -328,7 +328,7 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 				"}",
 			},
 			wantContain: []string{
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %core, i32 1, i32 1)",
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr elementtype(%main.bpfCoreTaskStruct) %core, i32 1, i32 1)",
 				"@llvm.bpf.preserve.field.info.p0(ptr nonnull %1, i64 2)",
 				"declare i32 @llvm.bpf.preserve.field.info.p0(ptr, i64 immarg)",
 				"declare ptr @llvm.preserve.struct.access.index.p0.p0(ptr, i32 immarg, i32 immarg)",
@@ -350,7 +350,7 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 				"}",
 			},
 			wantContain: []string{
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %core, i32 1, i32 1)",
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr elementtype(%main.bpfCoreTaskStruct) %core, i32 1, i32 1)",
 				"!dbg !10",
 				"i64 2)",
 			},
@@ -370,7 +370,7 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 				"}",
 			},
 			wantContain: []string{
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %core, i32 1, i32 1)",
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr elementtype(%main.bpfCoreTaskStruct) %core, i32 1, i32 1)",
 				"!dbg !10",
 				"@llvm.bpf.preserve.field.info.p0(ptr noundef nonnull %1, i64 2)",
 			},
@@ -390,7 +390,7 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 				"}",
 			},
 			wantContain: []string{
-				"preserve.struct.access.index.p0.p0(ptr %core, i32 0, i32 0)",
+				"preserve.struct.access.index.p0.p0(ptr elementtype(%main.bpfCoreTaskStruct) %core, i32 0, i32 0)",
 				"@llvm.bpf.preserve.field.info.p0(",
 				"i64 2)",
 			},
@@ -411,7 +411,7 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 				`!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", size: 192, elements: !{!1, !2, !3})`,
 			},
 			wantContain: []string{
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %core, i32 2, i32 2)",
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr elementtype(%main.bpfCoreTaskStruct) %core, i32 2, i32 2)",
 				"!llvm.preserve.access.index !0",
 			},
 		},
@@ -430,7 +430,7 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 				`!3 = !DIBasicType(name: "int32", size: 32, encoding: DW_ATE_signed)`,
 			},
 			wantContain: []string{
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %core, i32 1, i32 1)",
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr elementtype(%main.bpfCoreTaskStruct) %core, i32 1, i32 1)",
 				"!llvm.preserve.access.index !0",
 				"@llvm.bpf.preserve.field.info.p0(ptr %1, i64 2)",
 			},
@@ -454,7 +454,7 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 				`!3 = !DIBasicType(name: "int32", size: 32, encoding: DW_ATE_signed)`,
 			},
 			wantContain: []string{
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %core, i32 1, i32 1)",
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr elementtype(i8) %core, i32 1, i32 1)",
 				"@llvm.bpf.preserve.field.info.p0(ptr nonnull %1, i64 2)",
 				"!dbg !10",
 			},
@@ -476,7 +476,7 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 				"}",
 			},
 			wantContain: []string{
-				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %core, i32 1, i32 1)",
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr elementtype(%main.bpfCoreTaskStruct) %core, i32 1, i32 1)",
 				"@llvm.bpf.preserve.field.info.p0(ptr nonnull %1, i64 2)",
 			},
 			notContain: []string{
@@ -495,7 +495,7 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 				"}",
 			},
 			wantContain: []string{
-				"preserve.struct.access.index.p0.p0(ptr %core, i32 0, i32 0)",
+				"preserve.struct.access.index.p0.p0(ptr elementtype(%main.bpfCoreTaskStruct) %core, i32 0, i32 0)",
 				"@llvm.bpf.preserve.field.info.p0(",
 				"i64 2)",
 			},
