@@ -37,8 +37,12 @@ jobs:
           sudo apt-get install -y -qq llvm-20
           echo "/usr/lib/llvm-20/bin" >> "$GITHUB_PATH"
 
-      - name: Install virtme-ng
-        run: pip3 install --user virtme-ng
+      - name: Install virtme-ng and QEMU
+        run: |
+          pip3 install --user virtme-ng
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils
+          command -v qemu-system-x86_64
 
       - name: Build tinybpf
         run: go build -o tinybpf ./cmd/tinybpf

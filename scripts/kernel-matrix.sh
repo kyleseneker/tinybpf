@@ -72,6 +72,12 @@ if ! command -v vng >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
+  echo "FAIL: qemu-system-x86_64 not found in PATH."
+  echo "Install QEMU system emulator (Ubuntu): sudo apt-get install -y qemu-system-x86 qemu-utils"
+  exit 1
+fi
+
 INNER_SCRIPT="${BUILD_DIR}/inner-test.sh"
 cat > "${INNER_SCRIPT}" << 'INNEREOF'
 #!/bin/bash
