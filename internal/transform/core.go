@@ -689,7 +689,7 @@ func ensureFallbackCoreArtifacts(lines []string, ctx *coreExistsContext) ([]stri
 	)
 
 	memberRefs := make([]string, len(offsets))
-	for i := range len(offsets) {
+	for i := range offsets {
 		memberID := memberStart + i
 		memberRefs[i] = fmt.Sprintf("!%d", memberID)
 		sizeBytes := fallbackSegmentSize(offsets, i)
@@ -727,7 +727,7 @@ func maxMetadataID(lines []string) int {
 
 func fallbackTypeBody(offsets []int) string {
 	fields := make([]string, len(offsets))
-	for i := range len(offsets) {
+	for i := range offsets {
 		fields[i] = fmt.Sprintf("[%d x i8]", fallbackSegmentSize(offsets, i))
 	}
 	return strings.Join(fields, ", ")
