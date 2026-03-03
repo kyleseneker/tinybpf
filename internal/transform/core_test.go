@@ -359,6 +359,27 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 			},
 		},
 		{
+			name: "field_exists with nuw nsw byte GEP and noundef pointer arg",
+			lines: []string{
+				"%main.bpfCoreTaskStruct = type { i32, i32 }",
+				"declare i32 @main.bpfCoreFieldExists(ptr, ptr)",
+				"define void @main.prog(ptr %ctx) {",
+				"  %core = alloca %main.bpfCoreTaskStruct, align 4",
+				"  %1 = getelementptr inbounds nuw nsw i8, ptr %core, i64 4, !dbg !10",
+				"  %2 = call i32 @main.bpfCoreFieldExists(ptr noundef nonnull %1, ptr undef)",
+				"}",
+			},
+			wantContain: []string{
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %core, i32 1, i32 1)",
+				"!dbg !10",
+				"@llvm.bpf.preserve.field.info.p0(ptr noundef nonnull %1, i64 2)",
+			},
+			notContain: []string{
+				"getelementptr inbounds nuw nsw i8",
+				"@main.bpfCoreFieldExists",
+			},
+		},
+		{
 			name: "field_exists at offset 0 (direct alloca)",
 			lines: []string{
 				"%main.bpfCoreTaskStruct = type { i32, i32 }",

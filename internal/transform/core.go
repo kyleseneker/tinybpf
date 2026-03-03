@@ -9,7 +9,7 @@ import (
 
 // reCoreGEP matches getelementptr instructions on bpfCore-annotated struct types.
 var reCoreGEP = regexp.MustCompile(
-	`^(\s*(%[\w.]+)\s*=\s*)getelementptr\s+(?:inbounds\s+)?(%main\.bpfCore[\w.]*),\s*ptr\s+(%[\w.]+),\s*i32\s+0,\s*i32\s+(\d+)(.*)$`)
+	`^(\s*(%[\w.]+)\s*=\s*)getelementptr\s+(?:[A-Za-z0-9_().]+\s+)*(%main\.bpfCore[\w.]*),\s*ptr\s+(%[\w.]+),\s*i32\s+0,\s*i32\s+(\d+)(.*)$`)
 
 // reCoreExistsCall matches calls to bpfCoreFieldExists or bpfCoreTypeExists.
 var reCoreExistsCall = regexp.MustCompile(
@@ -275,10 +275,10 @@ func renameCoreField(line string) string {
 // reByteGEP matches byte-level getelementptr instructions that TinyGo emits
 // for field address computations like &core.Tgid.
 var reByteGEP = regexp.MustCompile(
-	`^\s*(%[\w.]+)\s*=\s*getelementptr\s+(?:inbounds\s+)?(?:nuw\s+)?i8,\s*ptr\s+(%[\w.]+),\s*i64\s+(\d+)`)
+	`^\s*(%[\w.]+)\s*=\s*getelementptr\s+(?:[A-Za-z0-9_().]+\s+)*i8,\s*ptr\s+(%[\w.]+),\s*i64\s+(\d+)`)
 
-// rePtrArg extracts an SSA value name from a pointer argument like "ptr nonnull %4".
-var rePtrArg = regexp.MustCompile(`ptr\s+(?:nonnull\s+)?(%[\w.]+)`)
+// reSSAValue extracts an SSA value token such as "%4" from IR operands.
+var reSSAValue = regexp.MustCompile(`(%[\w.]+)`)
 
 const bpfFieldExists = 2
 
@@ -394,7 +394,8 @@ func rewriteFieldExists(
 ) error {
 	line := lines[callLine]
 
-	ptrArgMatch := rePtrArg.FindStringSubmatch(args)
+	firstArg := strings.TrimSpace(strings.SplitN(args, ",", 2)[0])
+	ptrArgMatch := reSSAValue.FindStringSubmatch(firstArg)
 	if ptrArgMatch == nil {
 		return fmt.Errorf("line %d: cannot extract pointer arg from bpfCoreFieldExists args %q",
 			callLine+1, args)
