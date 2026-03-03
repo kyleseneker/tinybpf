@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kyleseneker/tinybpf/internal/testutil"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -77,7 +79,7 @@ func TestLoadConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var path string
 			if tt.noFile {
-				path = "/does/not/exist/linker-config.json"
+				path = testutil.BadPath("linker-config.json")
 			} else {
 				path = filepath.Join(t.TempDir(), "linker-config.json")
 				os.WriteFile(path, []byte(tt.json), 0o644)

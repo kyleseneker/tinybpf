@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/kyleseneker/tinybpf/internal/diag"
+	"github.com/kyleseneker/tinybpf/internal/testutil"
 )
 
 const (
@@ -306,9 +307,9 @@ func TestValidate(t *testing.T) {
 			name: "missing file",
 			path: func(t *testing.T) string {
 				t.Helper()
-				return "/does/not/exist.o"
+				return testutil.BadPath("input.o")
 			},
-			wantErr:  "no such file",
+			wantErr:  "input.o",
 			wantHint: "not a readable ELF object",
 		},
 	}

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kyleseneker/tinybpf/internal/testutil"
 )
 
 func TestRun(t *testing.T) {
@@ -100,7 +102,7 @@ func TestRun(t *testing.T) {
 		},
 		{
 			name:    "bad directory",
-			cfg:     func(_ string) Config { return Config{Dir: "/dev/null/impossible", Program: "test"} },
+			cfg:     func(_ string) Config { return Config{Dir: testutil.BadPath(), Program: "test"} },
 			wantErr: "creating bpf directory",
 		},
 		{

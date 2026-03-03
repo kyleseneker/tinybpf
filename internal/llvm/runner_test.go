@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kyleseneker/tinybpf/internal/testutil"
 )
 
 func makeTool(t *testing.T, dir, name string) string {
@@ -215,7 +217,7 @@ func TestDiscoverTools(t *testing.T) {
 			name: "missing llvm-link",
 			overrides: func(t *testing.T) ToolOverrides {
 				t.Helper()
-				return ToolOverrides{LLVMLink: "/does/not/exist/llvm-link"}
+				return ToolOverrides{LLVMLink: testutil.BadPath("llvm-link")}
 			},
 			wantErr: true,
 		},
@@ -225,7 +227,7 @@ func TestDiscoverTools(t *testing.T) {
 				t.Helper()
 				dir := t.TempDir()
 				link := makeTool(t, dir, "llvm-link")
-				return ToolOverrides{LLVMLink: link, Opt: "/does/not/exist/opt"}
+				return ToolOverrides{LLVMLink: link, Opt: testutil.BadPath("opt")}
 			},
 			wantErr: true,
 		},
@@ -236,7 +238,7 @@ func TestDiscoverTools(t *testing.T) {
 				dir := t.TempDir()
 				link := makeTool(t, dir, "llvm-link")
 				opt := makeTool(t, dir, "opt")
-				return ToolOverrides{LLVMLink: link, Opt: opt, LLC: "/does/not/exist/llc"}
+				return ToolOverrides{LLVMLink: link, Opt: opt, LLC: testutil.BadPath("llc")}
 			},
 			wantErr: true,
 		},
@@ -246,7 +248,7 @@ func TestDiscoverTools(t *testing.T) {
 				t.Helper()
 				dir := t.TempDir()
 				link, opt, llc := makeRequiredTools(t, dir)
-				return ToolOverrides{LLVMLink: link, Opt: opt, LLC: llc, LLVMAr: "/does/not/exist/llvm-ar"}
+				return ToolOverrides{LLVMLink: link, Opt: opt, LLC: llc, LLVMAr: testutil.BadPath("llvm-ar")}
 			},
 			wantErr: true,
 		},
@@ -256,7 +258,7 @@ func TestDiscoverTools(t *testing.T) {
 				t.Helper()
 				dir := t.TempDir()
 				link, opt, llc := makeRequiredTools(t, dir)
-				return ToolOverrides{LLVMLink: link, Opt: opt, LLC: llc, Objcopy: "/does/not/exist/llvm-objcopy"}
+				return ToolOverrides{LLVMLink: link, Opt: opt, LLC: llc, Objcopy: testutil.BadPath("llvm-objcopy")}
 			},
 			wantErr: true,
 		},
@@ -522,7 +524,7 @@ func TestFindRequired(t *testing.T) {
 		},
 		{
 			name:    "absolute missing",
-			setup:   func(t *testing.T) string { t.Helper(); return "/does/not/exist/tool" },
+			setup:   func(t *testing.T) string { t.Helper(); return testutil.BadPath("tool") },
 			wantErr: true,
 		},
 		{

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/kyleseneker/tinybpf/internal/llvm"
+	"github.com/kyleseneker/tinybpf/internal/testutil"
 )
 
 func fakeToolOverrides(t *testing.T, script string) llvm.ToolOverrides {
@@ -140,7 +141,7 @@ func TestRunWith(t *testing.T) {
 			name: "fails when required tool missing",
 			tools: func(t *testing.T) llvm.ToolOverrides {
 				t.Helper()
-				return llvm.ToolOverrides{LLVMLink: "/does/not/exist/llvm-link"}
+				return llvm.ToolOverrides{LLVMLink: testutil.BadPath("llvm-link")}
 			},
 			wantErr: true,
 		},

@@ -10,6 +10,7 @@ import (
 
 	"github.com/kyleseneker/tinybpf/internal/diag"
 	"github.com/kyleseneker/tinybpf/internal/llvm"
+	"github.com/kyleseneker/tinybpf/internal/testutil"
 )
 
 // fakeAr creates a fake llvm-ar script in dir.
@@ -317,7 +318,7 @@ func TestNormalizeArchive(t *testing.T) {
 			setup: func(t *testing.T, dir string) (llvm.Tools, string) {
 				t.Helper()
 				ar := fakeAr(t, dir, "member.bc\\n", "BC\\n")
-				return llvm.Tools{LLVMAr: ar}, "/does/not/exist/workdir"
+				return llvm.Tools{LLVMAr: ar}, testutil.BadPath("workdir")
 			},
 			wantErr: true,
 		},

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kyleseneker/tinybpf/internal/testutil"
 )
 
 func TestRunDoctor(t *testing.T) {
@@ -36,7 +38,7 @@ func TestRunDoctor(t *testing.T) {
 			name: "missing tool",
 			setup: func(t *testing.T) []string {
 				t.Helper()
-				return []string{"--llvm-link", "/does/not/exist/llvm-link"}
+				return []string{"--llvm-link", testutil.BadPath("llvm-link")}
 			},
 			wantCode: 1,
 			wantErr:  "llvm-link",

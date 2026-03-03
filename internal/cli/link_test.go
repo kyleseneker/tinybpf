@@ -9,6 +9,8 @@ import (
 	"runtime/pprof"
 	"strings"
 	"testing"
+
+	"github.com/kyleseneker/tinybpf/internal/testutil"
 )
 
 func TestRunLink(t *testing.T) {
@@ -25,7 +27,7 @@ func TestRunLink(t *testing.T) {
 				t.Helper()
 				return []string{
 					"link", "--input", "/dev/null", "--output", "/tmp/test-link.o",
-					"--llvm-link", "/does/not/exist/llvm-link",
+					"--llvm-link", testutil.BadPath("llvm-link"),
 				}
 			},
 			wantCode: 1,
@@ -50,8 +52,8 @@ func TestRunLink(t *testing.T) {
 				return []string{
 					"link", "--input", "/dev/null",
 					"--output", filepath.Join(t.TempDir(), "out.o"),
-					"--llvm-link", "/does/not/exist/llvm-link",
-					"--config", "/does/not/exist/linker-config.json",
+					"--llvm-link", testutil.BadPath("llvm-link"),
+					"--config", testutil.BadPath("linker-config.json"),
 				}
 			},
 			wantCode: 1,
@@ -67,7 +69,7 @@ func TestRunLink(t *testing.T) {
 				return []string{
 					"link", "--input", "/dev/null",
 					"--output", filepath.Join(tmp, "out.o"),
-					"--llvm-link", "/does/not/exist/llvm-link",
+					"--llvm-link", testutil.BadPath("llvm-link"),
 					"--config", cfgPath,
 				}
 			},
@@ -83,7 +85,7 @@ func TestRunLink(t *testing.T) {
 				return []string{
 					"link", "--input", "/dev/null",
 					"--output", filepath.Join(tmp, "out.o"),
-					"--llvm-link", "/does/not/exist/llvm-link",
+					"--llvm-link", testutil.BadPath("llvm-link"),
 					"--config", cfgPath,
 				}
 			},
@@ -139,7 +141,7 @@ func TestRunLinkProfile(t *testing.T) {
 				return []string{
 					"link", "--input", "/dev/null",
 					"--output", filepath.Join(tmp, "out.o"),
-					"--llvm-link", "/does/not/exist/llvm-link",
+					"--llvm-link", testutil.BadPath("llvm-link"),
 					"--profile", filepath.Join(tmp, "prof"),
 				}
 			},
@@ -156,7 +158,7 @@ func TestRunLinkProfile(t *testing.T) {
 				return []string{
 					"link", "--input", "/dev/null",
 					"--output", filepath.Join(tmp, "out.o"),
-					"--llvm-link", "/does/not/exist/llvm-link",
+					"--llvm-link", testutil.BadPath("llvm-link"),
 					"--profile", filepath.Join(tmp, "prof"),
 				}
 			},
@@ -194,7 +196,7 @@ func TestStartProfiling(t *testing.T) {
 		},
 		{
 			name:    "bad path",
-			setup:   func(t *testing.T) string { t.Helper(); return "/does/not/exist/prof" },
+			setup:   func(t *testing.T) string { t.Helper(); return testutil.BadPath("prof") },
 			wantErr: "creating CPU profile",
 		},
 		{

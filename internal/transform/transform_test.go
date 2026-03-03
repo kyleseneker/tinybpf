@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kyleseneker/tinybpf/internal/testutil"
 )
 
 func BenchmarkTransformLines(b *testing.B) {
@@ -84,7 +86,7 @@ func TestRun(t *testing.T) {
 			name: "read error",
 			setup: func(t *testing.T) (context.Context, string, string, Options) {
 				t.Helper()
-				return context.Background(), "/does/not/exist.ll", filepath.Join(t.TempDir(), "out.ll"), Options{}
+				return context.Background(), testutil.BadPath("input.ll"), filepath.Join(t.TempDir(), "out.ll"), Options{}
 			},
 			wantErr: "read input:",
 		},

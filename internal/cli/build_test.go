@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/kyleseneker/tinybpf/internal/testutil"
 )
 
 func runBuildCLI(t *testing.T, tg tinyGoRunner, args ...string) (stdout, stderr string, code int) {
@@ -48,7 +50,7 @@ func TestRunBuild(t *testing.T) {
 			name: "tinygo not found",
 			setup: func(t *testing.T) ([]string, tinyGoRunner) {
 				t.Helper()
-				return []string{"build", "--tinygo", "/does/not/exist/tinygo", "./bpf"}, nil
+				return []string{"build", "--tinygo", testutil.BadPath("tinygo"), "./bpf"}, nil
 			},
 			wantCode: 1,
 			wantErr:  "tinygo not found",
@@ -232,7 +234,7 @@ func TestBuildWorkDir(t *testing.T) {
 		},
 		{
 			name:      "explicit dir bad parent",
-			input:     func(t *testing.T) string { t.Helper(); return "/dev/null/impossible/sub" },
+			input:     func(t *testing.T) string { t.Helper(); return testutil.BadPath("sub") },
 			wantError: true,
 		},
 	}
@@ -291,7 +293,7 @@ func TestFindTinyGo(t *testing.T) {
 		},
 		{
 			name:    "explicit path missing",
-			setup:   func(t *testing.T) string { t.Helper(); return "/does/not/exist/tinygo" },
+			setup:   func(t *testing.T) string { t.Helper(); return testutil.BadPath("tinygo") },
 			wantErr: "tinygo not found at",
 		},
 		{
