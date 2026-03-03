@@ -288,6 +288,8 @@ type coreExistsContext struct {
 	fieldOffsets map[string][]int
 	typeMeta     map[string]int
 	fallbackIdx  map[int]int
+	fallbackType string
+	fallbackMeta int
 }
 
 // buildCoreExistsContext precomputes struct layouts and metadata needed for
@@ -597,6 +599,10 @@ func rewriteCoreExistsChecks(lines []string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	lines, err = ensureFallbackCoreArtifacts(lines, ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	needField := false
 	needType := false
@@ -649,6 +655,99 @@ func rewriteCoreExistsChecks(lines []string) ([]string, error) {
 	return lines, nil
 }
 
+// ensureFallbackCoreArtifacts injects a synthetic fallback core type and
+// matching DI metadata when no discoverable bpfCore type metadata exists.
+func ensureFallbackCoreArtifacts(lines []string, ctx *coreExistsContext) ([]string, error) {
+	if len(ctx.fieldOffsets) != 0 || len(ctx.fallbackIdx) == 0 {
+		return lines, nil
+	}
+
+	offsets := make([]int, 0, len(ctx.fallbackIdx))
+	for off := range ctx.fallbackIdx {
+		offsets = append(offsets, off)
+	}
+	slices.Sort(offsets)
+	if len(offsets) == 0 {
+		return lines, nil
+	}
+
+	typeName := "%main.__tinybpfCoreFallback"
+	typeDef := fmt.Sprintf("%s = type { %s }", typeName, fallbackTypeBody(offsets))
+	if !containsLine(lines, typeDef) {
+		lines = insertBeforeFunc(lines, typeDef)
+	}
+	ctx.fallbackType = typeName
+
+	maxID := maxMetadataID(lines)
+	baseID := maxID + 1
+	memberStart := baseID + 1
+	elemsID := memberStart + len(offsets)
+	compID := elemsID + 1
+
+	lines = append(lines,
+		fmt.Sprintf("!%d = !DIBasicType(name: \"uint8\", size: 8, encoding: DW_ATE_unsigned)", baseID),
+	)
+
+	memberRefs := make([]string, len(offsets))
+	for i := range len(offsets) {
+		memberID := memberStart + i
+		memberRefs[i] = fmt.Sprintf("!%d", memberID)
+		sizeBytes := fallbackSegmentSize(offsets, i)
+		lines = append(lines, fmt.Sprintf("!%d = !DIDerivedType(tag: DW_TAG_member, name: \"f%d\", baseType: !%d, size: %d, offset: %d)",
+			memberID, i, baseID, sizeBytes*8, offsets[i]*8))
+	}
+	lines = append(lines,
+		fmt.Sprintf("!%d = !{%s}", elemsID, strings.Join(memberRefs, ", ")),
+		fmt.Sprintf("!%d = !DICompositeType(tag: DW_TAG_structure_type, name: \"main.__tinybpfCoreFallback\", size: %d, elements: !%d)",
+			compID, fallbackTotalSize(offsets)*8, elemsID),
+	)
+	ctx.fallbackMeta = compID
+	return lines, nil
+}
+
+func containsLine(lines []string, want string) bool {
+	for _, line := range lines {
+		if strings.TrimSpace(line) == strings.TrimSpace(want) {
+			return true
+		}
+	}
+	return false
+}
+
+func maxMetadataID(lines []string) int {
+	maxID := -1
+	for _, line := range lines {
+		id := extractMetadataID(strings.TrimSpace(line))
+		if id > maxID {
+			maxID = id
+		}
+	}
+	return maxID
+}
+
+func fallbackTypeBody(offsets []int) string {
+	fields := make([]string, len(offsets))
+	for i := range len(offsets) {
+		fields[i] = fmt.Sprintf("[%d x i8]", fallbackSegmentSize(offsets, i))
+	}
+	return strings.Join(fields, ", ")
+}
+
+func fallbackSegmentSize(offsets []int, idx int) int {
+	if idx+1 < len(offsets) {
+		delta := offsets[idx+1] - offsets[idx]
+		if delta > 0 {
+			return delta
+		}
+	}
+	return 1
+}
+
+func fallbackTotalSize(offsets []int) int {
+	last := len(offsets) - 1
+	return offsets[last] + fallbackSegmentSize(offsets, last)
+}
+
 // rewriteFieldExists handles a single bpfCoreFieldExists call: traces back
 // to the byte-level GEP, determines the struct type and field index, replaces
 // the GEP with preserve_struct_access_index, and emits preserve_field_info
@@ -677,10 +776,14 @@ func rewriteFieldExists(
 
 	typeName := ctx.soleType()
 	if typeName == "" {
+		accessCall := preserveStructAccessCall(ptrArg, ctx.fallbackType, strconv.Itoa(ctx.fallbackIdx[0]), strconv.Itoa(ctx.fallbackIdx[0]))
+		if ctx.fallbackMeta > 0 {
+			accessCall += fmt.Sprintf(", !llvm.preserve.access.index !%d", ctx.fallbackMeta)
+		}
 		repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)",
-			callPrefix, args, bpfFieldExists)
+			callPrefix, accessCall, bpfFieldExists)
 		lines[callLine] = line[:m[0]] + repl + line[m[1]:]
-		return false, nil
+		return true, nil
 	}
 	accessCall := preserveStructAccessCall(ptrArg, typeName, "0", "0")
 	if metaID, ok := ctx.typeMeta[typeName]; ok {
@@ -726,12 +829,22 @@ func rewriteFieldExistsGEP(
 			gepRepl += ", " + dbg
 		}
 		lines[gepLine] = gepRepl
+	} else {
+		gepRepl := fmt.Sprintf("  %s = %s",
+			ptrArg, preserveStructAccessCall(base, ctx.fallbackType, strconv.Itoa(fieldIdx), strconv.Itoa(fieldIdx)))
+		if ctx.fallbackMeta > 0 {
+			gepRepl += fmt.Sprintf(", !llvm.preserve.access.index !%d", ctx.fallbackMeta)
+		}
+		if dbg := extractDBG(lines[gepLine]); dbg != "" {
+			gepRepl += ", " + dbg
+		}
+		lines[gepLine] = gepRepl
 	}
 
 	repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)",
 		callPrefix, args, bpfFieldExists)
 	lines[callLine] = line[:m[0]] + repl + line[m[1]:]
-	return !usedFallback, nil
+	return true, nil
 }
 
 // preserveStructAccessCall formats a call to llvm.preserve.struct.access.index
