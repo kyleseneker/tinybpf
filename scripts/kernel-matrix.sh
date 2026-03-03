@@ -114,8 +114,20 @@ echo "[3/4] Booting kernel ${KERNEL_VERSION} via virtme-ng..."
 resolve_kernel
 echo "  resolved: ${KERNEL_VERSION} -> ${RESOLVED_KERNEL}"
 
+BPFTOOL=""
+if command -v bpftool >/dev/null 2>&1; then
+  BPFTOOL="$(realpath "$(command -v bpftool)" 2>/dev/null || true)"
+fi
+if [[ -z "${BPFTOOL}" || ! -x "${BPFTOOL}" ]]; then
+  # shellcheck disable=SC2012
+  BPFTOOL="$(ls /usr/lib/linux-tools/*/bpftool 2>/dev/null | head -1 || true)"
+fi
+if [[ -z "${BPFTOOL}" || ! -x "${BPFTOOL}" ]]; then
+  echo "  WARNING: bpftool not found on host; guest will skip verifier load"
+fi
+
 vng --run "${RESOLVED_KERNEL}" -- \
-  bash "${SCRIPT_DIR}/inner-test.sh" "${OBJ}" \
+  bash "${SCRIPT_DIR}/inner-test.sh" "${OBJ}" "${BPFTOOL}" \
   2>&1 | tee "${LOG_DIR}/vng.log"
 VNG_RC=${PIPESTATUS[0]}
 
