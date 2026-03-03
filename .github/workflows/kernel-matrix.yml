@@ -41,7 +41,7 @@ jobs:
         run: |
           pip3 install --user virtme-ng
           sudo apt-get update -qq
-          sudo apt-get install -y -qq qemu-system-x86 qemu-utils
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils bpftool
           command -v qemu-system-x86_64
 
       - name: Build tinybpf

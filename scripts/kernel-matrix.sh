@@ -79,18 +79,7 @@ if ! command -v qemu-system-x86_64 >/dev/null 2>&1; then
 fi
 
 RESOLVED_KERNEL="${KERNEL_VERSION}"
-KERNEL_CANDIDATES=("${RESOLVED_KERNEL}")
-append_unique_candidate() {
-  local c="$1"
-  for existing in "${KERNEL_CANDIDATES[@]}"; do
-    if [[ "${existing}" == "${c}" ]]; then
-      return 0
-    fi
-  done
-  KERNEL_CANDIDATES+=("${c}")
-}
 if [[ "${KERNEL_VERSION}" =~ ^[0-9]+\.[0-9]+$ ]]; then
-  KERNEL_CANDIDATES=()
   latest_patch=""
   if latest_patch="$(python3 - "${KERNEL_VERSION}" <<'PY'
 import json
@@ -112,16 +101,16 @@ if versions:
 PY
 )"; then
     if [[ -n "${latest_patch}" ]]; then
-      append_unique_candidate "v${latest_patch}"
+      RESOLVED_KERNEL="v${latest_patch}"
+    else
+      RESOLVED_KERNEL="v${KERNEL_VERSION}.0"
     fi
+  else
+    RESOLVED_KERNEL="v${KERNEL_VERSION}.0"
   fi
-  append_unique_candidate "v${KERNEL_VERSION}"
-  append_unique_candidate "v${KERNEL_VERSION}.0"
-  RESOLVED_KERNEL="${KERNEL_CANDIDATES[0]}"
-  echo "  resolved kernel ${KERNEL_VERSION} candidates: ${KERNEL_CANDIDATES[*]}"
+  echo "  resolved kernel ${KERNEL_VERSION} -> ${RESOLVED_KERNEL}"
 elif [[ "${KERNEL_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   RESOLVED_KERNEL="v${KERNEL_VERSION}"
-  KERNEL_CANDIDATES=("${RESOLVED_KERNEL}")
   echo "  resolved kernel ${KERNEL_VERSION} -> ${RESOLVED_KERNEL}"
 fi
 
@@ -135,7 +124,7 @@ PIN="/sys/fs/bpf/tinybpf_core_test"
 echo "  inner: kernel $(uname -r)"
 echo "  inner: loading ${OBJ}..."
 
-if ! command -v bpftool >/dev/null 2>&1; then
+if ! command -v bpftool >/dev/null 2>&1 || ! bpftool version >/dev/null 2>&1; then
   echo "  inner: bpftool not found, skipping verifier load"
   exit 0
 fi
@@ -152,20 +141,11 @@ fi
 INNEREOF
 chmod +x "${INNER_SCRIPT}"
 
-VNG_RC=1
-for candidate in "${KERNEL_CANDIDATES[@]}"; do
-  echo "  trying kernel candidate: ${candidate}"
-  if vng --run "${candidate}" -- \
-    bash "${INNER_SCRIPT}" "${OBJ}" \
-    2>&1 | tee "${LOG_DIR}/vng-${candidate//\//_}.log"; then
-    VNG_RC=0
-    RESOLVED_KERNEL="${candidate}"
-    break
-  fi
-done
-if [[ ${VNG_RC} -ne 0 ]]; then
-  echo "  tried kernel candidates: ${KERNEL_CANDIDATES[*]}"
-fi
+echo "  trying kernel candidate: ${RESOLVED_KERNEL}"
+vng --run "${RESOLVED_KERNEL}" -- \
+  bash "${INNER_SCRIPT}" "${OBJ}" \
+  2>&1 | tee "${LOG_DIR}/vng.log"
+VNG_RC=${PIPESTATUS[0]}
 
 # --- Step 4: Summary ---
 echo ""
