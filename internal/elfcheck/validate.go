@@ -14,50 +14,68 @@ import (
 func Validate(path string) error {
 	f, err := elf.Open(path)
 	if err != nil {
-		return &diag.Error{Stage: diag.StageValidate, Err: err,
-			Hint: "output is not a readable ELF object"}
+		return validationErr(err, "output is not a readable ELF object")
 	}
 	defer func() { _ = f.Close() }()
 
+	if err := validateClassAndMachine(f); err != nil {
+		return err
+	}
+	if err := validateProgramSections(f); err != nil {
+		return err
+	}
+	if err := validateMapsSection(f); err != nil {
+		return err
+	}
+	return validateSymbols(f)
+}
+
+func validationErr(err error, hint string) *diag.Error {
+	return &diag.Error{Stage: diag.StageValidate, Err: err, Hint: hint}
+}
+
+func validateClassAndMachine(f *elf.File) error {
 	if f.Class != elf.ELFCLASS64 {
-		return &diag.Error{Stage: diag.StageValidate,
-			Err:  fmt.Errorf("expected ELFCLASS64, got %s", f.Class),
-			Hint: "use llc with BPF target"}
+		return validationErr(
+			fmt.Errorf("expected ELFCLASS64, got %s", f.Class),
+			"use llc with BPF target")
 	}
-
 	if f.Machine != elf.EM_BPF {
-		return &diag.Error{Stage: diag.StageValidate,
-			Err:  fmt.Errorf("expected machine %s, got %s", elf.EM_BPF, f.Machine),
-			Hint: "ensure llc uses -march=bpf"}
+		return validationErr(
+			fmt.Errorf("expected machine %s, got %s", elf.EM_BPF, f.Machine),
+			"ensure llc uses -march=bpf")
 	}
+	return nil
+}
 
-	hasCode := false
+func validateProgramSections(f *elf.File) error {
 	for _, s := range f.Sections {
 		if s.Type == elf.SHT_PROGBITS && (s.Flags&elf.SHF_EXECINSTR) != 0 {
-			hasCode = true
-			break
+			return nil
 		}
 	}
-	if !hasCode {
-		return &diag.Error{Stage: diag.StageValidate,
-			Err:  fmt.Errorf("missing executable program section"),
-			Hint: "verify input IR contains at least one BPF program function section"}
-	}
+	return validationErr(
+		fmt.Errorf("missing executable program section"),
+		"verify input IR contains at least one BPF program function section")
+}
 
+func validateMapsSection(f *elf.File) error {
 	for _, s := range f.Sections {
 		if s.Name == ".maps" && (s.Flags&elf.SHF_EXECINSTR) != 0 {
-			return &diag.Error{Stage: diag.StageValidate,
-				Err:  fmt.Errorf(".maps section has executable flag"),
-				Hint: "map definitions should be data sections, not executable code"}
+			return validationErr(
+				fmt.Errorf(".maps section has executable flag"),
+				"map definitions should be data sections, not executable code")
 		}
 	}
+	return nil
+}
 
+func validateSymbols(f *elf.File) error {
 	syms, err := f.Symbols()
 	if err == nil && len(syms) == 0 {
-		return &diag.Error{Stage: diag.StageValidate,
-			Err:  fmt.Errorf("object contains no symbols"),
-			Hint: "expected at least one global function symbol for a BPF program"}
+		return validationErr(
+			fmt.Errorf("object contains no symbols"),
+			"expected at least one global function symbol for a BPF program")
 	}
-
 	return nil
 }

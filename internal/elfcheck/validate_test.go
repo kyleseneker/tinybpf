@@ -2,10 +2,21 @@ package elfcheck
 
 import (
 	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/kyleseneker/tinybpf/internal/diag"
+)
+
+const (
+	elfClass32 = 1
+	elfClass64 = 2
+
+	machBPF = 0x00F7
+	machX86 = 0x003E
 )
 
 type symMode int
@@ -206,75 +217,90 @@ func writeELF(t *testing.T, name string, data []byte) string {
 	return path
 }
 
+func validBPFObject(t *testing.T) string {
+	t.Helper()
+	return writeELF(t, "valid.o", buildELF(elfClass64, machBPF, true, symOne))
+}
+
+func validBPFObjectWithMaps(t *testing.T) string {
+	t.Helper()
+	return writeELF(t, "goodmaps.o", buildELFWithMaps(elfClass64, machBPF, true, symOne, false))
+}
+
+func nonELFFile(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "not-elf.o")
+	if err := os.WriteFile(p, []byte("not an elf"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
 func TestValidate(t *testing.T) {
 	tests := []struct {
-		name    string
-		path    func(t *testing.T) string
-		wantErr string // empty = expect success
+		name     string
+		path     func(t *testing.T) string
+		wantErr  string // substring in error message; empty = expect success
+		wantHint string // substring in diag.Error.Hint
 	}{
 		{
 			name: "valid BPF ELF",
-			path: func(t *testing.T) string {
-				t.Helper()
-				return writeELF(t, "valid.o", buildELF(2, 0x00F7, true, symOne))
-			},
+			path: validBPFObject,
 		},
 		{
-			name: "non-ELF file",
-			path: func(t *testing.T) string {
-				t.Helper()
-				p := filepath.Join(t.TempDir(), "not-elf.o")
-				os.WriteFile(p, []byte("not an elf"), 0o644)
-				return p
-			},
-			wantErr: "ELF",
+			name:     "non-ELF file",
+			path:     nonELFFile,
+			wantErr:  "ELF",
+			wantHint: "not a readable ELF object",
 		},
 		{
 			name: "wrong class (32-bit)",
 			path: func(t *testing.T) string {
 				t.Helper()
-				return writeELF(t, "class32.o", buildELF(1, 0x00F7, true, symOne))
+				return writeELF(t, "class32.o", buildELF(elfClass32, machBPF, true, symOne))
 			},
-			wantErr: "ELFCLASS64",
+			wantErr:  "ELFCLASS64",
+			wantHint: "use llc with BPF target",
 		},
 		{
 			name: "wrong machine (x86_64)",
 			path: func(t *testing.T) string {
 				t.Helper()
-				return writeELF(t, "x86.o", buildELF(2, 0x003E, true, symOne))
+				return writeELF(t, "x86.o", buildELF(elfClass64, machX86, true, symOne))
 			},
-			wantErr: "EM_BPF",
+			wantErr:  "EM_BPF",
+			wantHint: "-march=bpf",
 		},
 		{
 			name: "missing code section",
 			path: func(t *testing.T) string {
 				t.Helper()
-				return writeELF(t, "nocode.o", buildELF(2, 0x00F7, false, symOne))
+				return writeELF(t, "nocode.o", buildELF(elfClass64, machBPF, false, symOne))
 			},
-			wantErr: "executable program section",
+			wantErr:  "executable program section",
+			wantHint: "BPF program function section",
 		},
 		{
 			name: "empty symbol table",
 			path: func(t *testing.T) string {
 				t.Helper()
-				return writeELF(t, "emptysym.o", buildELF(2, 0x00F7, true, symEmpty))
+				return writeELF(t, "emptysym.o", buildELF(elfClass64, machBPF, true, symEmpty))
 			},
-			wantErr: "no symbols",
+			wantErr:  "no symbols",
+			wantHint: "global function symbol",
 		},
 		{
 			name: "executable maps section",
 			path: func(t *testing.T) string {
 				t.Helper()
-				return writeELF(t, "execmaps.o", buildELFWithMaps(2, 0x00F7, true, symOne, true))
+				return writeELF(t, "execmaps.o", buildELFWithMaps(elfClass64, machBPF, true, symOne, true))
 			},
-			wantErr: ".maps section has executable flag",
+			wantErr:  ".maps section has executable flag",
+			wantHint: "data sections, not executable code",
 		},
 		{
 			name: "valid with non-exec maps section",
-			path: func(t *testing.T) string {
-				t.Helper()
-				return writeELF(t, "goodmaps.o", buildELFWithMaps(2, 0x00F7, true, symOne, false))
-			},
+			path: validBPFObjectWithMaps,
 		},
 		{
 			name: "missing file",
@@ -282,7 +308,8 @@ func TestValidate(t *testing.T) {
 				t.Helper()
 				return "/does/not/exist.o"
 			},
-			wantErr: "no such file",
+			wantErr:  "no such file",
+			wantHint: "not a readable ELF object",
 		},
 	}
 	for _, tt := range tests {
@@ -299,6 +326,15 @@ func TestValidate(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("error %q does not contain %q", err, tt.wantErr)
+			}
+			if !diag.IsStage(err, diag.StageValidate) {
+				t.Fatalf("expected stage %q, got different stage in: %v", diag.StageValidate, err)
+			}
+			var derr *diag.Error
+			if errors.As(err, &derr) && tt.wantHint != "" {
+				if !strings.Contains(derr.Hint, tt.wantHint) {
+					t.Fatalf("hint %q does not contain %q", derr.Hint, tt.wantHint)
+				}
 			}
 		})
 	}
