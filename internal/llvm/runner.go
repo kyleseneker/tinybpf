@@ -170,7 +170,7 @@ func DiscoverTools(o ToolOverrides) (Tools, error) {
 			if s.required {
 				hint = "install LLVM tools or pass " + s.flag + " explicitly"
 			}
-			return Tools{}, &diag.Error{Stage: diag.StageDiscover, Err: err, Command: s.name, Hint: hint}
+			return Tools{}, diag.WrapCmd(diag.StageDiscover, err, s.name, "", hint)
 		}
 		paths[i] = path
 	}

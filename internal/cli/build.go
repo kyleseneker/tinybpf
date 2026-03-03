@@ -91,9 +91,8 @@ func compileTinyGo(ctx context.Context, tg tinyGoRunner, cfg pipeline.Config, ti
 	}
 	if tgErr != nil {
 		cmd := tinygo + " " + strings.Join(tinygoArgs, " ")
-		diagErr := &diag.Error{Stage: diag.StageCompile, Err: tgErr,
-			Command: cmd, Stderr: tgRes.stderr,
-			Hint: "ensure TinyGo is installed and the package compiles with: tinygo build -gc=none -scheduler=none -panic=trap -opt=1 " + pkg}
+		diagErr := diag.WrapCmd(diag.StageCompile, tgErr, cmd, tgRes.stderr,
+			"ensure TinyGo is installed and the package compiles with: tinygo build -gc=none -scheduler=none -panic=trap -opt=1 "+pkg)
 		fmt.Fprintln(stderr, diagErr.Error())
 		return "", tgErr
 	}

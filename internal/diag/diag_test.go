@@ -93,6 +93,38 @@ func TestIsStage(t *testing.T) {
 	}
 }
 
+func TestWrap(t *testing.T) {
+	inner := errors.New("underlying")
+	got := Wrap(StageInput, inner, "try something")
+	literal := &Error{Stage: StageInput, Err: inner, Hint: "try something"}
+
+	if got.Error() != literal.Error() {
+		t.Fatalf("Wrap output mismatch:\ngot:    %s\nwant:   %s", got.Error(), literal.Error())
+	}
+	if !IsStage(got, StageInput) {
+		t.Fatal("expected StageInput")
+	}
+	if !errors.Is(got, inner) {
+		t.Fatal("Unwrap should expose inner error")
+	}
+}
+
+func TestWrapCmd(t *testing.T) {
+	inner := errors.New("exit 1")
+	got := WrapCmd(StageLink, inner, "llvm-link a.ll", "link error", "check IR")
+	literal := &Error{Stage: StageLink, Err: inner, Command: "llvm-link a.ll", Stderr: "link error", Hint: "check IR"}
+
+	if got.Error() != literal.Error() {
+		t.Fatalf("WrapCmd output mismatch:\ngot:    %s\nwant:   %s", got.Error(), literal.Error())
+	}
+	if !IsStage(got, StageLink) {
+		t.Fatal("expected StageLink")
+	}
+	if !errors.Is(got, inner) {
+		t.Fatal("Unwrap should expose inner error")
+	}
+}
+
 func TestTrimLong(t *testing.T) {
 	tests := []struct {
 		name      string

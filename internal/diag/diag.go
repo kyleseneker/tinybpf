@@ -79,6 +79,17 @@ func IsStage(err error, stage Stage) bool {
 	return derr.Stage == stage
 }
 
+// Wrap creates a stage-attributed error with a user-facing hint.
+func Wrap(stage Stage, err error, hint string) *Error {
+	return &Error{Stage: stage, Err: err, Hint: hint}
+}
+
+// WrapCmd creates a stage-attributed error for a failed command invocation,
+// including the command string and captured stderr.
+func WrapCmd(stage Stage, err error, command, stderr, hint string) *Error {
+	return &Error{Stage: stage, Err: err, Command: command, Stderr: stderr, Hint: hint}
+}
+
 func trimLong(s string, maxLines int) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	if len(lines) <= maxLines {

@@ -31,7 +31,7 @@ func Validate(path string) error {
 }
 
 func validationErr(err error, hint string) *diag.Error {
-	return &diag.Error{Stage: diag.StageValidate, Err: err, Hint: hint}
+	return diag.Wrap(diag.StageValidate, err, hint)
 }
 
 func validateClassAndMachine(f *elf.File) error {

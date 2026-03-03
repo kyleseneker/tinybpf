@@ -99,7 +99,7 @@ func prepareRunContext(ctx context.Context, cfg Config) (*runContext, func(), er
 
 	workDir, cleanup, err := makeWorkDir(cfg.TempDir, cfg.KeepTemp)
 	if err != nil {
-		return nil, noop, &diag.Error{Stage: diag.StageInput, Err: err, Hint: "failed to create temporary workspace"}
+		return nil, noop, diag.Wrap(diag.StageInput, err, "failed to create temporary workspace")
 	}
 
 	rc := &runContext{
@@ -148,13 +148,12 @@ func (rc *runContext) transformAndOptimize() error {
 		DumpDir:  dumpDir,
 	}
 	if err := transform.Run(rc.ctx, rc.artifacts.LinkedBC, rc.artifacts.TransformedLL, transformOpts); err != nil {
-		return &diag.Error{Stage: diag.StageTransform, Err: err,
-			Hint: "check that the input IR was produced by TinyGo with --gc=none --scheduler=none"}
+		return diag.Wrap(diag.StageTransform, err,
+			"check that the input IR was produced by TinyGo with --gc=none --scheduler=none")
 	}
 
 	if err := stripHostPaths(rc.artifacts.TransformedLL, rc.workDir); err != nil {
-		return &diag.Error{Stage: diag.StageOpt, Err: err,
-			Hint: "failed to sanitize paths in intermediate IR"}
+		return diag.Wrap(diag.StageOpt, err, "failed to sanitize paths in intermediate IR")
 	}
 
 	return rc.runOptStage()
@@ -175,8 +174,7 @@ func (rc *runContext) runOptStage() error {
 	if len(rc.cfg.CustomPasses) > 0 {
 		validated, vErr := llvm.AppendCustomPasses(optArgs, rc.cfg.CustomPasses)
 		if vErr != nil {
-			return &diag.Error{Stage: diag.StageOpt, Err: vErr,
-				Hint: "custom pass validation failed; check linker-config.json"}
+			return diag.Wrap(diag.StageOpt, vErr, "custom pass validation failed; check linker-config.json")
 		}
 		optArgs = validated
 	}
@@ -193,11 +191,10 @@ func (rc *runContext) runCodegenAndFinalize() error {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(rc.cfg.Output), 0o755); err != nil {
-		return &diag.Error{Stage: diag.StageFinalize, Err: err, Hint: "failed to create output directory"}
+		return diag.Wrap(diag.StageFinalize, err, "failed to create output directory")
 	}
 	if err := copyFile(rc.artifacts.CodegenObj, rc.cfg.Output); err != nil {
-		return &diag.Error{Stage: diag.StageFinalize, Err: err,
-			Hint: "failed to produce final output object"}
+		return diag.Wrap(diag.StageFinalize, err, "failed to produce final output object")
 	}
 	if rc.cfg.EnableBTF {
 		if err := injectBTF(rc.ctx, rc.cfg, rc.tools); err != nil {
@@ -215,8 +212,7 @@ func setupDumpIR(cfg Config, workDir string) (string, error) {
 	}
 	dir := filepath.Join(workDir, "dump-ir")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", &diag.Error{Stage: diag.StageTransform, Err: err,
-			Hint: "failed to create dump-ir directory"}
+		return "", diag.Wrap(diag.StageTransform, err, "failed to create dump-ir directory")
 	}
 	if cfg.Verbose {
 		fmt.Fprintf(cfg.Stdout, "[dump-ir] writing stage snapshots to %s\n", dir)
@@ -237,12 +233,12 @@ func validateConfig(cfg *Config) error {
 // containing unsupported file types and inconsistent program-type flags.
 func validateRequiredFields(cfg *Config) error {
 	if len(cfg.Inputs) == 0 {
-		return &diag.Error{Stage: diag.StageInput, Err: fmt.Errorf("no inputs provided"),
-			Hint: "provide at least one --input file"}
+		return diag.Wrap(diag.StageInput, fmt.Errorf("no inputs provided"),
+			"provide at least one --input file")
 	}
 	if strings.TrimSpace(cfg.Output) == "" {
-		return &diag.Error{Stage: diag.StageInput, Err: fmt.Errorf("no output path provided"),
-			Hint: "provide --output path"}
+		return diag.Wrap(diag.StageInput, fmt.Errorf("no output path provided"),
+			"provide --output path")
 	}
 
 	for _, input := range cfg.Inputs {
@@ -252,8 +248,7 @@ func validateRequiredFields(cfg *Config) error {
 	}
 
 	if err := ValidateProgramType(cfg.ProgramType, cfg.Sections); err != nil {
-		return &diag.Error{Stage: diag.StageInput, Err: err,
-			Hint: "check --program-type and --section flags are consistent"}
+		return diag.Wrap(diag.StageInput, err, "check --program-type and --section flags are consistent")
 	}
 	return nil
 }
@@ -284,9 +279,8 @@ func ensureInputSupported(path string) error {
 	case ".ll", ".bc", ".o", ".a":
 		return nil
 	default:
-		return &diag.Error{Stage: diag.StageInput,
-			Err:  fmt.Errorf("unsupported input format %q", path),
-			Hint: "supported inputs are .ll, .bc, .o, and .a"}
+		return diag.Wrap(diag.StageInput, fmt.Errorf("unsupported input format %q", path),
+			"supported inputs are .ll, .bc, .o, and .a")
 	}
 }
 
@@ -303,7 +297,7 @@ func runStage(ctx context.Context, cfg Config, stage diag.Stage, bin string, arg
 		}
 	}
 	if err != nil {
-		return &diag.Error{Stage: stage, Err: err, Command: res.Command, Stderr: res.Stderr, Hint: hint}
+		return diag.WrapCmd(stage, err, res.Command, res.Stderr, hint)
 	}
 	return nil
 }
