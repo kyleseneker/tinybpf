@@ -54,114 +54,153 @@ type Artifacts struct {
 	DumpIRDir     string
 }
 
-// Run executes the full linking pipeline: normalize → llvm-link →
-// IR transform → opt → llc → finalize → optional BTF → ELF validation.
+// runContext holds the resolved state for a single pipeline execution.
+type runContext struct {
+	ctx       context.Context
+	cfg       Config
+	tools     llvm.Tools
+	workDir   string
+	artifacts *Artifacts
+}
+
+// Run executes the full linking pipeline: normalize -> llvm-link ->
+// IR transform -> opt -> llc -> finalize -> optional BTF -> ELF validation.
 func Run(ctx context.Context, cfg Config) (*Artifacts, error) {
-	if err := validateConfig(&cfg); err != nil {
+	rc, cleanup, err := prepareRunContext(ctx, cfg)
+	if err != nil {
 		return nil, err
+	}
+	defer cleanup()
+
+	if err := rc.linkInputs(); err != nil {
+		return nil, err
+	}
+	if err := rc.transformAndOptimize(); err != nil {
+		return nil, err
+	}
+	if err := rc.finalizeAndValidate(); err != nil {
+		return nil, err
+	}
+	return rc.artifacts, nil
+}
+
+// prepareRunContext validates the config, discovers tools, creates the work
+// directory, and initializes artifact paths.
+func prepareRunContext(ctx context.Context, cfg Config) (*runContext, func(), error) {
+	noop := func() {}
+	if err := validateConfig(&cfg); err != nil {
+		return nil, noop, err
 	}
 
 	tools, err := llvm.DiscoverTools(cfg.Tools)
 	if err != nil {
-		return nil, err
+		return nil, noop, err
 	}
 
 	workDir, cleanup, err := makeWorkDir(cfg.TempDir, cfg.KeepTemp)
 	if err != nil {
-		return nil, &diag.Error{Stage: diag.StageInput, Err: err, Hint: "failed to create temporary workspace"}
-	}
-	defer cleanup()
-
-	artifacts := &Artifacts{
-		TempDir:       workDir,
-		LinkedBC:      filepath.Join(workDir, "01-linked.ll"),
-		TransformedLL: filepath.Join(workDir, "02-transformed.ll"),
-		OptimizedLL:   filepath.Join(workDir, "03-optimized.ll"),
-		CodegenObj:    filepath.Join(workDir, "04-codegen.o"),
-		OutputObj:     cfg.Output,
+		return nil, noop, &diag.Error{Stage: diag.StageInput, Err: err, Hint: "failed to create temporary workspace"}
 	}
 
-	inputs, err := normalizeInputs(ctx, cfg, tools, workDir)
+	rc := &runContext{
+		ctx:   ctx,
+		cfg:   cfg,
+		tools: tools,
+		workDir: workDir,
+		artifacts: &Artifacts{
+			TempDir:       workDir,
+			LinkedBC:      filepath.Join(workDir, "01-linked.ll"),
+			TransformedLL: filepath.Join(workDir, "02-transformed.ll"),
+			OptimizedLL:   filepath.Join(workDir, "03-optimized.ll"),
+			CodegenObj:    filepath.Join(workDir, "04-codegen.o"),
+			OutputObj:     cfg.Output,
+		},
+	}
+	return rc, cleanup, nil
+}
+
+// linkInputs normalizes input files and links them into a single IR module.
+func (rc *runContext) linkInputs() error {
+	inputs, err := normalizeInputs(rc.ctx, rc.cfg, rc.tools, rc.workDir)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	linkArgs := append(append([]string{}, inputs...), "-S", "-o", artifacts.LinkedBC)
-	if err := runStage(ctx, cfg, diag.StageLink, tools.LLVMLink, linkArgs,
-		"validate your IR files and ensure they are LLVM .ll/.bc modules"); err != nil {
-		return nil, err
-	}
+	linkArgs := append(append([]string{}, inputs...), "-S", "-o", rc.artifacts.LinkedBC)
+	return runStage(rc.ctx, rc.cfg, diag.StageLink, rc.tools.LLVMLink, linkArgs,
+		"validate your IR files and ensure they are LLVM .ll/.bc modules")
+}
 
-	dumpDir, err := setupDumpIR(cfg, workDir)
+// transformAndOptimize runs the IR transform pass, strips host paths, and
+// invokes the opt stage.
+func (rc *runContext) transformAndOptimize() error {
+	dumpDir, err := setupDumpIR(rc.cfg, rc.workDir)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	artifacts.DumpIRDir = dumpDir
+	rc.artifacts.DumpIRDir = dumpDir
 
 	transformOpts := transform.Options{
-		Programs: cfg.Programs,
-		Sections: cfg.Sections,
-		Verbose:  cfg.Verbose,
-		Stdout:   cfg.Stdout,
+		Programs: rc.cfg.Programs,
+		Sections: rc.cfg.Sections,
+		Verbose:  rc.cfg.Verbose,
+		Stdout:   rc.cfg.Stdout,
 		DumpDir:  dumpDir,
 	}
-	if err := transform.Run(ctx, artifacts.LinkedBC, artifacts.TransformedLL, transformOpts); err != nil {
-		return nil, &diag.Error{Stage: diag.StageTransform, Err: err,
+	if err := transform.Run(rc.ctx, rc.artifacts.LinkedBC, rc.artifacts.TransformedLL, transformOpts); err != nil {
+		return &diag.Error{Stage: diag.StageTransform, Err: err,
 			Hint: "check that the input IR was produced by TinyGo with --gc=none --scheduler=none"}
 	}
 
-	if err := stripHostPaths(artifacts.TransformedLL, workDir); err != nil {
-		return nil, &diag.Error{Stage: diag.StageOpt, Err: err,
+	if err := stripHostPaths(rc.artifacts.TransformedLL, rc.workDir); err != nil {
+		return &diag.Error{Stage: diag.StageOpt, Err: err,
 			Hint: "failed to sanitize paths in intermediate IR"}
 	}
 
-	if err := runOptStage(ctx, cfg, tools, artifacts); err != nil {
-		return nil, err
-	}
+	return rc.runOptStage()
+}
 
-	if err := runCodegenAndFinalize(ctx, cfg, tools, artifacts); err != nil {
-		return nil, err
+// finalizeAndValidate runs code generation, copies the output, optionally
+// injects BTF, and validates the final ELF.
+func (rc *runContext) finalizeAndValidate() error {
+	if err := rc.runCodegenAndFinalize(); err != nil {
+		return err
 	}
-
-	if err := cfg.ValidateELF(cfg.Output); err != nil {
-		return nil, err
-	}
-
-	return artifacts, nil
+	return rc.cfg.ValidateELF(rc.cfg.Output)
 }
 
 // runOptStage runs the opt pass with optional custom passes.
-func runOptStage(ctx context.Context, cfg Config, tools llvm.Tools, a *Artifacts) error {
-	optArgs := llvm.BuildOptArgs(a.TransformedLL, a.OptimizedLL, cfg.PassPipeline, cfg.OptProfile)
-	if len(cfg.CustomPasses) > 0 {
-		validated, vErr := llvm.AppendCustomPasses(optArgs, cfg.CustomPasses)
+func (rc *runContext) runOptStage() error {
+	optArgs := llvm.BuildOptArgs(rc.artifacts.TransformedLL, rc.artifacts.OptimizedLL, rc.cfg.PassPipeline, rc.cfg.OptProfile)
+	if len(rc.cfg.CustomPasses) > 0 {
+		validated, vErr := llvm.AppendCustomPasses(optArgs, rc.cfg.CustomPasses)
 		if vErr != nil {
 			return &diag.Error{Stage: diag.StageOpt, Err: vErr,
 				Hint: "custom pass validation failed; check linker-config.json"}
 		}
 		optArgs = validated
 	}
-	return runStage(ctx, cfg, diag.StageOpt, tools.Opt, optArgs,
+	return runStage(rc.ctx, rc.cfg, diag.StageOpt, rc.tools.Opt, optArgs,
 		"try a less aggressive --pass-pipeline or inspect linked IR")
 }
 
 // runCodegenAndFinalize runs llc code generation, copies the output, and
 // optionally injects BTF.
-func runCodegenAndFinalize(ctx context.Context, cfg Config, tools llvm.Tools, a *Artifacts) error {
-	llcArgs := buildLLCArgs(cfg.CPU, a.OptimizedLL, a.CodegenObj)
-	if err := runStage(ctx, cfg, diag.StageCodegen, tools.LLC, llcArgs,
+func (rc *runContext) runCodegenAndFinalize() error {
+	llcArgs := buildLLCArgs(rc.cfg.CPU, rc.artifacts.OptimizedLL, rc.artifacts.CodegenObj)
+	if err := runStage(rc.ctx, rc.cfg, diag.StageCodegen, rc.tools.LLC, llcArgs,
 		"ensure llc supports BPF target and input IR is valid"); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(cfg.Output), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(rc.cfg.Output), 0o755); err != nil {
 		return &diag.Error{Stage: diag.StageFinalize, Err: err, Hint: "failed to create output directory"}
 	}
-	if err := copyFile(a.CodegenObj, cfg.Output); err != nil {
+	if err := copyFile(rc.artifacts.CodegenObj, rc.cfg.Output); err != nil {
 		return &diag.Error{Stage: diag.StageFinalize, Err: err,
 			Hint: "failed to produce final output object"}
 	}
-	if cfg.EnableBTF {
-		if err := injectBTF(ctx, cfg, tools); err != nil {
+	if rc.cfg.EnableBTF {
+		if err := injectBTF(rc.ctx, rc.cfg, rc.tools); err != nil {
 			return err
 		}
 	}
@@ -185,8 +224,18 @@ func setupDumpIR(cfg Config, workDir string) (string, error) {
 	return dir, nil
 }
 
-// validateConfig applies defaults and checks required fields.
+// validateConfig checks required fields and applies defaults.
 func validateConfig(cfg *Config) error {
+	if err := validateRequiredFields(cfg); err != nil {
+		return err
+	}
+	applyConfigDefaults(cfg)
+	return nil
+}
+
+// validateRequiredFields rejects configs missing mandatory inputs/output or
+// containing unsupported file types and inconsistent program-type flags.
+func validateRequiredFields(cfg *Config) error {
 	if len(cfg.Inputs) == 0 {
 		return &diag.Error{Stage: diag.StageInput, Err: fmt.Errorf("no inputs provided"),
 			Hint: "provide at least one --input file"}
@@ -206,7 +255,12 @@ func validateConfig(cfg *Config) error {
 		return &diag.Error{Stage: diag.StageInput, Err: err,
 			Hint: "check --program-type and --section flags are consistent"}
 	}
+	return nil
+}
 
+// applyConfigDefaults fills in zero-valued optional fields with sensible
+// production defaults.
+func applyConfigDefaults(cfg *Config) {
 	if cfg.CPU == "" {
 		cfg.CPU = "v3"
 	}
@@ -222,7 +276,6 @@ func validateConfig(cfg *Config) error {
 	if cfg.ValidateELF == nil {
 		cfg.ValidateELF = elfcheck.Validate
 	}
-	return nil
 }
 
 // ensureInputSupported validates the file extension is one we can process.

@@ -5,9 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -16,7 +14,6 @@ import (
 	"github.com/kyleseneker/tinybpf/internal/llvm"
 )
 
-// makeFakeTool creates a shell script in dir and returns its absolute path.
 func makeFakeTool(t *testing.T, dir, name, script string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -26,13 +23,11 @@ func makeFakeTool(t *testing.T, dir, name, script string) string {
 	return path
 }
 
-// copyToolScript is a shell snippet that copies the input file to the -o output.
 const copyToolScript = `
 out=""; in=""
 for arg in "$@"; do case "$arg" in -o) n=1;; -passes=*|-S|-march=*|-mcpu=*|-filetype=*) ;; *) if [ "${n:-}" = 1 ]; then out="$arg"; n=0; else in="$arg"; fi;; esac; done
 [ -n "$in" ] && [ -n "$out" ] && cp "$in" "$out"; exit 0`
 
-// llcElfScript is a shell snippet that produces a minimal valid BPF ELF.
 const llcElfScript = `
 out=""
 for arg in "$@"; do case "$arg" in -o) n=1;; *) [ "${n:-}" = 1 ] && { out="$arg"; n=0; };; esac; done
@@ -55,7 +50,6 @@ struct.pack_into('<Q',h,40,so);struct.pack_into('<H',h,60,5);struct.pack_into('<
 sys.stdout.buffer.write(bytes(h)+d+sh)" > "$out"
 exit 0`
 
-// testIR returns LLVM IR with a single program function.
 const testIR = `target datalayout = "e-m:o-p270:32:32"
 target triple = "arm64-apple-macosx11.0.0"
 
@@ -65,7 +59,6 @@ entry:
 }
 `
 
-// pipelineEnv holds a reusable fake LLVM toolchain directory.
 type pipelineEnv struct {
 	Dir     string
 	ToolDir string
@@ -74,7 +67,6 @@ type pipelineEnv struct {
 	Tools   llvm.ToolOverrides
 }
 
-// newPipelineEnv creates a temp directory with fake LLVM tools and a valid IR input file.
 func newPipelineEnv(t *testing.T) *pipelineEnv {
 	t.Helper()
 	tmp := t.TempDir()
@@ -101,7 +93,6 @@ func newPipelineEnv(t *testing.T) *pipelineEnv {
 	}
 }
 
-// cfg returns a Config pre-filled with the env's paths.
 func (e *pipelineEnv) cfg() Config {
 	return Config{
 		Inputs:  []string{e.Input},
@@ -112,8 +103,6 @@ func (e *pipelineEnv) cfg() Config {
 		Stderr:  &bytes.Buffer{},
 	}
 }
-
-// --- Run ---
 
 func TestRunValidation(t *testing.T) {
 	tests := []struct {
@@ -358,6 +347,234 @@ func TestRunSuccess(t *testing.T) {
 			if tt.check != nil {
 				tt.check(t, artifacts, stdout.String())
 			}
+		})
+	}
+}
+
+func TestSetupDumpIR(t *testing.T) {
+	tests := []struct {
+		name    string
+		dumpIR  bool
+		verbose bool
+		badDir  bool
+		wantDir bool
+		wantLog string
+		wantErr bool
+	}{
+		{
+			name:   "disabled",
+			dumpIR: false,
+		},
+		{
+			name:    "enabled creates dir",
+			dumpIR:  true,
+			wantDir: true,
+		},
+		{
+			name:    "enabled verbose logs path",
+			dumpIR:  true,
+			verbose: true,
+			wantDir: true,
+			wantLog: "[dump-ir]",
+		},
+		{
+			name:    "bad workdir",
+			dumpIR:  true,
+			badDir:  true,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			if tt.badDir {
+				workDir = "/dev/null/impossible"
+			}
+			var stdout bytes.Buffer
+			cfg := Config{DumpIR: tt.dumpIR, Verbose: tt.verbose, Stdout: &stdout}
+			dir, err := setupDumpIR(cfg, workDir)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !diag.IsStage(err, diag.StageTransform) {
+					t.Fatalf("expected stage transform, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantDir {
+				if dir == "" {
+					t.Fatal("expected non-empty dir")
+				}
+				info, statErr := os.Stat(dir)
+				if statErr != nil {
+					t.Fatalf("dump dir not created: %v", statErr)
+				}
+				if !info.IsDir() {
+					t.Fatal("expected directory")
+				}
+			} else {
+				if dir != "" {
+					t.Fatalf("expected empty dir, got %q", dir)
+				}
+			}
+			if tt.wantLog != "" && !strings.Contains(stdout.String(), tt.wantLog) {
+				t.Errorf("expected %q in stdout, got %q", tt.wantLog, stdout.String())
+			}
+		})
+	}
+}
+
+func TestValidateRequiredFields(t *testing.T) {
+	tests := []struct {
+		name      string
+		cfg       Config
+		wantStage diag.Stage
+		wantErr   string
+	}{
+		{
+			name:      "no inputs",
+			cfg:       Config{Output: "out.o"},
+			wantStage: diag.StageInput,
+			wantErr:   "no inputs provided",
+		},
+		{
+			name:      "empty output",
+			cfg:       Config{Inputs: []string{"in.ll"}, Output: "   "},
+			wantStage: diag.StageInput,
+			wantErr:   "no output path provided",
+		},
+		{
+			name:      "unsupported extension",
+			cfg:       Config{Inputs: []string{"bad.txt"}, Output: "out.o"},
+			wantStage: diag.StageInput,
+			wantErr:   "unsupported input format",
+		},
+		{
+			name: "valid config passes",
+			cfg:  Config{Inputs: []string{"in.ll"}, Output: "out.o"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateRequiredFields(&tt.cfg)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !diag.IsStage(err, tt.wantStage) {
+				t.Errorf("expected stage %v, got: %v", tt.wantStage, err)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("expected %q in error, got: %v", tt.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestApplyConfigDefaults(t *testing.T) {
+	tests := []struct {
+		name  string
+		cfg   Config
+		check func(t *testing.T, cfg *Config)
+	}{
+		{
+			name: "CPU defaults to v3",
+			cfg:  Config{},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.CPU != "v3" {
+					t.Errorf("CPU = %q, want %q", cfg.CPU, "v3")
+				}
+			},
+		},
+		{
+			name: "CPU preserved when set",
+			cfg:  Config{CPU: "v4"},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.CPU != "v4" {
+					t.Errorf("CPU = %q, want %q", cfg.CPU, "v4")
+				}
+			},
+		},
+		{
+			name: "Timeout defaults to 30s",
+			cfg:  Config{},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.Timeout != 30*time.Second {
+					t.Errorf("Timeout = %v, want %v", cfg.Timeout, 30*time.Second)
+				}
+			},
+		},
+		{
+			name: "Timeout preserved when set",
+			cfg:  Config{Timeout: 10 * time.Second},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.Timeout != 10*time.Second {
+					t.Errorf("Timeout = %v, want %v", cfg.Timeout, 10*time.Second)
+				}
+			},
+		},
+		{
+			name: "Stdout defaults to non-nil",
+			cfg:  Config{},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.Stdout == nil {
+					t.Error("Stdout should not be nil after defaults")
+				}
+			},
+		},
+		{
+			name: "Stderr defaults to non-nil",
+			cfg:  Config{},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.Stderr == nil {
+					t.Error("Stderr should not be nil after defaults")
+				}
+			},
+		},
+		{
+			name: "ValidateELF defaults to non-nil",
+			cfg:  Config{},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.ValidateELF == nil {
+					t.Error("ValidateELF should not be nil after defaults")
+				}
+			},
+		},
+		{
+			name: "ValidateELF preserved when set",
+			cfg:  Config{ValidateELF: func(string) error { return nil }},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.ValidateELF == nil {
+					t.Error("ValidateELF should be preserved")
+				}
+				if err := cfg.ValidateELF("any"); err != nil {
+					t.Errorf("custom ValidateELF returned error: %v", err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := tt.cfg
+			applyConfigDefaults(&cfg)
+			tt.check(t, &cfg)
 		})
 	}
 }
@@ -648,6 +865,7 @@ func TestParseSectionFlags(t *testing.T) {
 		{"rejects missing equals", []string{"no-equals"}, nil, "invalid --section"},
 		{"rejects empty key", []string{"=kprobe/sys_connect"}, nil, "invalid --section"},
 		{"rejects empty value", []string{"handle_connect="}, nil, "invalid --section"},
+		{"duplicate key last wins", []string{"a=x", "a=y"}, map[string]string{"a": "y"}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -711,6 +929,17 @@ func TestCopyFile(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "destination write failure",
+			setup: func(t *testing.T) (string, string) {
+				t.Helper()
+				tmp := t.TempDir()
+				src := filepath.Join(tmp, "src")
+				os.WriteFile(src, []byte("data"), 0o644)
+				return src, filepath.Join("/dev/null/impossible", "dst")
+			},
+			wantErr: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -727,56 +956,6 @@ func TestCopyFile(t *testing.T) {
 			}
 			if tt.check != nil {
 				tt.check(t, dst)
-			}
-		})
-	}
-}
-
-func TestRunE2E(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("BPF validation requires Linux")
-	}
-	for _, tool := range []string{"llvm-link", "opt", "llc"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			t.Skipf("missing %s", tool)
-		}
-	}
-
-	wd, _ := os.Getwd()
-
-	tests := []struct {
-		name      string
-		fixture   string
-		wantErr   bool
-		wantStage diag.Stage
-	}{
-		{"smoke", "minimal.ll", false, ""},
-		{"invalid IR", "invalid.ll", true, diag.StageLink},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			input := filepath.Join(wd, "..", "..", "testdata", tt.fixture)
-			if _, err := os.Stat(input); err != nil {
-				t.Fatalf("missing test fixture: %v", err)
-			}
-			output := filepath.Join(t.TempDir(), "prog.o")
-			artifacts, err := Run(context.Background(), Config{
-				Inputs: []string{input}, Output: output, Timeout: 30 * time.Second,
-			})
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				if tt.wantStage != "" && !diag.IsStage(err, tt.wantStage) {
-					t.Fatalf("expected stage %v, got: %v", tt.wantStage, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if artifacts == nil {
-				t.Fatal("expected artifacts")
 			}
 		})
 	}

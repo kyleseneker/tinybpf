@@ -127,8 +127,6 @@ func TestRun(t *testing.T) {
 	}
 }
 
-// --- Integration tests (require fixtures + LLVM tools) ---
-
 func TestFullTransform(t *testing.T) {
 	fixture := filepath.Join("..", "..", "testdata", "tinygo_probe.ll")
 	if _, err := os.Stat(fixture); err != nil {
