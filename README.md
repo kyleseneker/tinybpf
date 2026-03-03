@@ -118,20 +118,78 @@ Generates a BPF source file, stub file for IDE compatibility, and a Makefile.
 
 ## CLI reference
 
-Run `tinybpf --help` or `tinybpf <command> --help`.
+Run `tinybpf --help` or `tinybpf <command> --help` for details.
 
 ### Subcommands
 
-| Subcommand | Description |
-|------------|-------------|
-| `build [flags] <package>` | Compile Go source to BPF ELF in one step |
-| `link --input <file> [flags]` | Link pre-compiled LLVM IR into a BPF ELF |
-| `init <name>` | Scaffold a new BPF project |
-| `verify --input <file>` | Validate a BPF ELF object offline |
+| Command | Description |
+|---------|-------------|
+| `build` | Compile Go source to a BPF ELF object in one step |
+| `link` | Link pre-compiled LLVM IR into a BPF ELF object |
+| `init` | Scaffold a new BPF project |
+| `verify` | Validate a BPF ELF object offline |
 | `doctor` | Check toolchain installation |
-| `version` | Print version |
+| `version` | Print version information |
 
-### Shared flags (build and link)
+### build
+
+```bash
+tinybpf build [flags] <package>
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--tinygo` | *(PATH)* | Path to tinygo binary |
+
+Also accepts all [shared pipeline flags](#shared-pipeline-flags) and [tool path overrides](#tool-path-overrides).
+
+### link
+
+```bash
+tinybpf link --input <file> [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--input`, `-i` | *(required)* | Input file `.ll`, `.bc`, `.o`, `.a` (repeatable) |
+| `--config` | | Path to `linker-config.json` for custom passes |
+| `--jobs`, `-j` | `1` | Parallel input normalization workers |
+
+Also accepts all [shared pipeline flags](#shared-pipeline-flags) and [tool path overrides](#tool-path-overrides).
+
+### verify
+
+```bash
+tinybpf verify --input <file>
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--input`, `-i` | *(required)* | Path to the BPF ELF object to validate |
+
+### doctor
+
+```bash
+tinybpf doctor [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--timeout` | `10s` | Timeout for each version check |
+
+Also accepts [tool path overrides](#tool-path-overrides).
+
+### init
+
+```bash
+tinybpf init <name>
+```
+
+Takes a single project name argument. No additional flags.
+
+### Shared pipeline flags
+
+These flags are accepted by both `build` and `link`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -149,36 +207,18 @@ Run `tinybpf --help` or `tinybpf <command> --help`.
 | `--keep-temp` | `false` | Preserve intermediate files |
 | `--tmpdir` | | Directory for intermediate files |
 
-### build flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tinygo` | *(PATH)* | Path to tinygo binary |
-
-### link flags
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--input`, `-i` | *(required)* | Input file `.ll`, `.bc`, `.o`, `.a` (repeatable) |
-| `--config` | | Path to `linker-config.json` for custom passes |
-| `--jobs`, `-j` | `1` | Parallel input normalization workers |
-
-### verify flags
-
-| Flag | Description |
-|------|-------------|
-| `--input`, `-i` | *(required)* Path to the BPF ELF object to validate |
-
 ### Tool path overrides
 
-| Flag | Description |
-|------|-------------|
-| `--llvm-link` | Override `llvm-link` |
-| `--opt` | Override `opt` |
-| `--llc` | Override `llc` |
-| `--llvm-ar` | Override `llvm-ar` |
-| `--llvm-objcopy` | Override `llvm-objcopy` |
-| `--pahole` | Override `pahole` |
+These flags are accepted by `build`, `link`, and `doctor`.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--llvm-link` | | Path to `llvm-link` binary |
+| `--opt` | | Path to `opt` binary |
+| `--llc` | | Path to `llc` binary |
+| `--llvm-ar` | | Path to `llvm-ar` binary |
+| `--llvm-objcopy` | | Path to `llvm-objcopy` binary |
+| `--pahole` | | Path to `pahole` binary |
 
 ## Documentation
 
