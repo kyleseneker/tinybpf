@@ -3,6 +3,7 @@ package transform
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -286,6 +287,7 @@ const bpfFieldExists = 2
 type coreExistsContext struct {
 	fieldOffsets map[string][]int
 	typeMeta     map[string]int
+	fallbackIdx  map[int]int
 }
 
 // buildCoreExistsContext precomputes struct layouts and metadata needed for
@@ -295,10 +297,66 @@ func buildCoreExistsContext(lines []string) (*coreExistsContext, error) {
 	if err != nil {
 		return nil, err
 	}
+	fallbackIdx, fallbackErr := discoverFallbackFieldIndices(lines)
+	if fallbackErr != nil {
+		return nil, fallbackErr
+	}
 	return &coreExistsContext{
 		fieldOffsets: fieldOffsets,
 		typeMeta:     typeMeta,
+		fallbackIdx:  fallbackIdx,
 	}, nil
+}
+
+// discoverFallbackFieldIndices builds a deterministic offset->field-index map
+// directly from bpfCoreFieldExists callsites when type metadata is unavailable.
+// It assumes lower byte offsets correspond to earlier fields.
+func discoverFallbackFieldIndices(lines []string) (map[int]int, error) {
+	offsetSet := map[int]bool{0: true}
+
+	for i, line := range lines {
+		if !strings.Contains(line, "@main.bpfCoreFieldExists(") {
+			continue
+		}
+		m := reCoreExistsCall.FindStringSubmatchIndex(line)
+		if m == nil {
+			continue
+		}
+		args := stripTrailingUndef(strings.TrimSpace(line[m[6]:m[7]]))
+		firstArg := strings.TrimSpace(strings.SplitN(args, ",", 2)[0])
+		ptrArgMatch := reSSAValue.FindStringSubmatch(firstArg)
+		if ptrArgMatch == nil {
+			continue
+		}
+		ptrArg := ptrArgMatch[1]
+
+		gepLine := findSSADef(lines, ptrArg, i)
+		if gepLine < 0 {
+			continue
+		}
+		gepMatch := reByteGEP.FindStringSubmatch(lines[gepLine])
+		if gepMatch == nil {
+			continue
+		}
+		byteOffset, convErr := strconv.Atoi(gepMatch[3])
+		if convErr != nil {
+			return nil, fmt.Errorf("line %d: invalid byte offset %q in bpfCoreFieldExists GEP",
+				gepLine+1, gepMatch[3])
+		}
+		offsetSet[byteOffset] = true
+	}
+
+	offsets := make([]int, 0, len(offsetSet))
+	for off := range offsetSet {
+		offsets = append(offsets, off)
+	}
+	slices.Sort(offsets)
+
+	idxByOffset := make(map[int]int, len(offsets))
+	for idx, off := range offsets {
+		idxByOffset[off] = idx
+	}
+	return idxByOffset, nil
 }
 
 // discoverCoreFieldOffsets finds bpfCore struct types and their field byte
@@ -616,6 +674,13 @@ func rewriteFieldExists(
 
 	typeName := ctx.soleType()
 	if typeName == "" {
+		if idx, ok := ctx.fallbackIdx[0]; ok {
+			accessCall := fmt.Sprintf("call ptr %s(ptr %s, i32 %d, i32 %d)", coreIntrinsicName, ptrArg, idx, idx)
+			repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)",
+				callPrefix, accessCall, bpfFieldExists)
+			lines[callLine] = line[:m[0]] + repl + line[m[1]:]
+			return nil
+		}
 		return fmt.Errorf("line %d: cannot determine bpfCore struct type for field-0 access via %s (found %d types)",
 			callLine+1, ptrArg, len(ctx.fieldOffsets))
 	}
@@ -643,8 +708,12 @@ func rewriteFieldExistsGEP(
 
 	typeName, fieldIdx := ctx.resolveField(byteOffset)
 	if typeName == "" {
-		return fmt.Errorf("line %d: byte offset %d does not match any bpfCore struct field (known types: %v)",
-			gepLine+1, byteOffset, ctx.typeNames())
+		if idx, ok := ctx.fallbackIdx[byteOffset]; ok {
+			fieldIdx = idx
+		} else {
+			return fmt.Errorf("line %d: byte offset %d does not match any bpfCore struct field (known types: %v)",
+				gepLine+1, byteOffset, ctx.typeNames())
+		}
 	}
 
 	gepRepl := fmt.Sprintf("  %s = call ptr %s(ptr %s, i32 %d, i32 %d)",

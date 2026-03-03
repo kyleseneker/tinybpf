@@ -440,6 +440,31 @@ func TestRewriteCoreExistsChecks(t *testing.T) {
 			},
 		},
 		{
+			name: "field_exists falls back to deterministic offset index when no core type info",
+			lines: []string{
+				"declare i32 @main.bpfCoreFieldExists(ptr, ptr)",
+				"define void @main.prog(ptr %ctx) {",
+				"  %core = alloca [8 x i8], align 4",
+				"  %1 = getelementptr inbounds nuw i8, ptr %core, i64 4, !dbg !10",
+				"  %2 = call i32 @main.bpfCoreFieldExists(ptr nonnull %1, ptr undef)",
+				"}",
+				`!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "runtime.someStruct", size: 64, elements: !{!1, !2})`,
+				`!1 = !DIDerivedType(tag: DW_TAG_member, name: "A", baseType: !3, size: 32, offset: 0)`,
+				`!2 = !DIDerivedType(tag: DW_TAG_member, name: "B", baseType: !3, size: 32, offset: 32)`,
+				`!3 = !DIBasicType(name: "int32", size: 32, encoding: DW_ATE_signed)`,
+			},
+			wantContain: []string{
+				"call ptr @llvm.preserve.struct.access.index.p0.p0(ptr %core, i32 1, i32 1)",
+				"@llvm.bpf.preserve.field.info.p0(ptr nonnull %1, i64 2)",
+				"!dbg !10",
+			},
+			notContain: []string{
+				"@main.bpfCoreFieldExists",
+				"getelementptr inbounds nuw i8",
+				"!llvm.preserve.access.index",
+			},
+		},
+		{
 			name: "field_exists with byte-array alloca (replaceAlloc output)",
 			lines: []string{
 				"%main.bpfCoreTaskStruct = type { i32, i32 }",
