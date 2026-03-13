@@ -1,6 +1,7 @@
 // Package transform converts TinyGo-emitted host-targeted LLVM IR into
-// BPF-compatible IR suitable for llc -march=bpf. All transformations operate
-// on text lines — no CGo or libLLVM dependency required.
+// BPF-compatible IR suitable for llc -march=bpf. Transformations operate on
+// a structured AST (internal/ir) with line-based fallbacks for complex stages
+// that have not yet been fully migrated.
 package transform
 
 import (
@@ -9,6 +10,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/kyleseneker/tinybpf/internal/ir"
 )
 
 // Run reads a .ll file, applies all transformations, and writes the result.
@@ -17,57 +20,70 @@ func Run(ctx context.Context, inputLL, outputLL string, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("read input: %w", err)
 	}
-	lines, err := TransformLines(ctx, strings.Split(string(data), "\n"), opts)
+	module, err := ir.Parse(string(data))
 	if err != nil {
+		return fmt.Errorf("parse IR: %w", err)
+	}
+	if err := TransformModule(ctx, module, opts); err != nil {
 		return err
 	}
-	return os.WriteFile(outputLL, []byte(strings.Join(lines, "\n")), 0o600)
+	return os.WriteFile(outputLL, []byte(ir.Serialize(module)), 0o600)
 }
 
-// TransformLines applies the full IR transformation pipeline.
-func TransformLines(ctx context.Context, lines []string, opts Options) ([]string, error) {
+// TransformModule applies the full IR transformation pipeline to a parsed module.
+func TransformModule(ctx context.Context, m *ir.Module, opts Options) error {
 	if opts.Stdout == nil {
 		opts.Stdout = io.Discard
 	}
 
-	dumper := newStageDumper(opts.DumpDir, opts.Verbose, opts.Stdout)
-	stages := buildStages(opts)
+	dumper := newModuleDumper(opts.DumpDir, opts.Verbose, opts.Stdout)
+	stages := buildModuleStages(opts)
 
-	var err error
 	for _, s := range stages {
-		lines, err = s.fn(lines)
-		if err != nil {
-			return nil, err
+		if err := s.fn(m); err != nil {
+			return err
 		}
-		if err = ctx.Err(); err != nil {
-			return nil, err
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		dumper.dump(s.name, lines)
+		dumper.dump(s.name, m)
 	}
-
-	return lines, nil
+	return nil
 }
 
-// stageDumper writes numbered IR snapshots to a directory for debugging.
-type stageDumper struct {
+// TransformLines applies the full IR transformation pipeline to text lines.
+// This is a compatibility wrapper that routes through the AST-based pipeline.
+func TransformLines(ctx context.Context, lines []string, opts Options) ([]string, error) {
+	module, err := ir.Parse(strings.Join(lines, "\n"))
+	if err != nil {
+		return nil, fmt.Errorf("parse IR: %w", err)
+	}
+	if err := TransformModule(ctx, module, opts); err != nil {
+		return nil, err
+	}
+	return strings.Split(ir.Serialize(module), "\n"), nil
+}
+
+// moduleDumper writes numbered IR snapshots to a directory for debugging.
+type moduleDumper struct {
 	dir     string
 	verbose bool
 	out     io.Writer
 	seq     int
 }
 
-func newStageDumper(dir string, verbose bool, out io.Writer) *stageDumper {
-	return &stageDumper{dir: dir, verbose: verbose, out: out}
+func newModuleDumper(dir string, verbose bool, out io.Writer) *moduleDumper {
+	return &moduleDumper{dir: dir, verbose: verbose, out: out}
 }
 
-func (d *stageDumper) dump(stage string, lines []string) {
+func (d *moduleDumper) dump(stage string, m *ir.Module) {
 	if d.dir == "" {
 		return
 	}
 	d.seq++
 	name := fmt.Sprintf("%02d-%s.ll", d.seq, stage)
 	path := d.dir + "/" + name
-	data := strings.Join(lines, "\n")
+	data := ir.Serialize(m)
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		if d.verbose {
 			fmt.Fprintf(d.out, "[dump-ir] failed to write %s: %v\n", path, err)
@@ -75,6 +91,7 @@ func (d *stageDumper) dump(stage string, lines []string) {
 		return
 	}
 	if d.verbose {
+		lines := strings.Split(data, "\n")
 		fmt.Fprintf(d.out, "[dump-ir] %s (%d lines)\n", name, len(lines))
 	}
 }
