@@ -163,12 +163,121 @@ func markGlobalRemoved(m *ir.Module, g *ir.Global) {
 }
 
 func replaceAllocModule(m *ir.Module) error {
-	result, err := runLineStage(m, replaceAlloc)
-	if err != nil {
-		return err
+	needMemset := false
+
+	for _, fn := range m.Functions {
+		if fn.Removed {
+			continue
+		}
+		type allocSite struct {
+			bodyIdx int
+			varName string
+			size    string
+			indent  string
+		}
+		var sites []allocSite
+		entryIdx := -1
+
+		for i, bline := range fn.BodyRaw {
+			trimmed := strings.TrimSpace(bline)
+			if trimmed == "entry:" && entryIdx < 0 {
+				entryIdx = i
+			}
+			if !strings.Contains(bline, "@runtime.alloc") {
+				continue
+			}
+			match := reAllocCall.FindStringSubmatch(bline)
+			if match == nil {
+				if strings.Contains(bline, "@runtime.alloc") {
+					return fmt.Errorf("line references @runtime.alloc but does not match expected call pattern: %s", trimmed)
+				}
+				continue
+			}
+			sites = append(sites, allocSite{
+				bodyIdx: i,
+				varName: match[2],
+				size:    match[3],
+				indent:  match[1],
+			})
+		}
+
+		if len(sites) == 0 {
+			continue
+		}
+		needMemset = true
+
+		for _, a := range sites {
+			fn.BodyRaw[a.bodyIdx] = fmt.Sprintf(
+				"%scall void @llvm.memset.p0.i64(ptr align 4 %s, i8 0, i64 %s, i1 false)",
+				a.indent, a.varName, a.size)
+		}
+
+		insertAt := 0
+		if entryIdx >= 0 {
+			insertAt = entryIdx + 1
+		}
+		allocas := make([]string, len(sites))
+		for j, a := range sites {
+			allocas[j] = fmt.Sprintf("  %s = alloca [%s x i8], align 4", a.varName, a.size)
+		}
+
+		newBody := make([]string, 0, len(fn.BodyRaw)+len(allocas))
+		newBody = append(newBody, fn.BodyRaw[:insertAt]...)
+		newBody = append(newBody, allocas...)
+		newBody = append(newBody, fn.BodyRaw[insertAt:]...)
+		fn.BodyRaw = newBody
 	}
-	*m = *result
+
+	if needMemset {
+		hasMemset := false
+		for _, d := range m.Declares {
+			if d.Name == "llvm.memset.p0.i64" && !d.Removed {
+				hasMemset = true
+				break
+			}
+		}
+		if !hasMemset {
+			for _, e := range m.Entries {
+				if !e.Removed && strings.Contains(e.Raw, "@llvm.memset.p0.i64") {
+					hasMemset = true
+					break
+				}
+			}
+		}
+		if !hasMemset {
+			insertMemsetDeclInModule(m)
+		}
+	}
 	return nil
+}
+
+func insertMemsetDeclInModule(m *ir.Module) {
+	decl := &ir.Declare{
+		Name:    "llvm.memset.p0.i64",
+		RetType: "void",
+		Params:  "ptr, i8, i64, i1",
+		Raw:     memsetDecl,
+	}
+	m.Declares = append(m.Declares, decl)
+
+	insertIdx := -1
+	for i, e := range m.Entries {
+		if !e.Removed && (e.Kind == ir.TopDeclare || e.Kind == ir.TopFunction) {
+			insertIdx = i
+			break
+		}
+	}
+
+	entry := ir.TopLevelEntry{Kind: ir.TopDeclare, Raw: memsetDecl, Declare: decl}
+	blankEntry := ir.TopLevelEntry{Kind: ir.TopBlank, Raw: ""}
+
+	if insertIdx >= 0 {
+		m.Entries = append(m.Entries[:insertIdx+2], m.Entries[insertIdx:]...)
+		m.Entries[insertIdx] = entry
+		m.Entries[insertIdx+1] = blankEntry
+	} else {
+		m.Entries = append(m.Entries, entry, blankEntry)
+	}
 }
 
 func rewriteHelpersModule(m *ir.Module) error {
@@ -206,11 +315,77 @@ func rewriteHelpersModule(m *ir.Module) error {
 }
 
 func rewriteCoreAccessModule(m *ir.Module) error {
-	result, err := runLineStage(m, rewriteCoreAccess)
-	if err != nil {
-		return err
+	coreTypes := make(map[string]bool)
+	for _, td := range m.TypeDefs {
+		if strings.Contains(td.Name, "bpfCore") && len(td.Fields) > 0 {
+			coreTypes[td.Name] = true
+		}
 	}
-	*m = *result
+	if len(coreTypes) == 0 {
+		return nil
+	}
+
+	typeMeta := make(map[string]int)
+	for _, mn := range m.MetadataNodes {
+		if mn.Kind != "DICompositeType" {
+			continue
+		}
+		if mn.Fields["tag"] != "DW_TAG_structure_type" {
+			continue
+		}
+		name := mn.Fields["name"]
+		if !strings.Contains(name, "bpfCore") {
+			continue
+		}
+		for typeName := range coreTypes {
+			goName := strings.TrimPrefix(typeName, "%")
+			if name == goName {
+				typeMeta[typeName] = mn.ID
+				break
+			}
+		}
+	}
+
+	modified := false
+	for _, fn := range m.Functions {
+		if fn.Removed {
+			continue
+		}
+		for i, bline := range fn.BodyRaw {
+			if !strings.Contains(bline, "getelementptr") || !strings.Contains(bline, "bpfCore") {
+				continue
+			}
+			match := reCoreGEP.FindStringSubmatch(bline)
+			if match == nil {
+				return fmt.Errorf("getelementptr on bpfCore type does not match expected GEP pattern: %s",
+					strings.TrimSpace(bline))
+			}
+			typeName := match[3]
+			if !coreTypes[typeName] {
+				continue
+			}
+			assign := match[1]
+			base := match[4]
+			fieldIdx := match[5]
+			trailing := match[6]
+
+			repl := fmt.Sprintf("%s%s", assign, preserveStructAccessCall(base, typeName, fieldIdx, fieldIdx))
+			if metaID, ok := typeMeta[typeName]; ok {
+				repl += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
+			}
+			if dbg := extractDBG(trailing); dbg != "" {
+				repl += ", " + dbg
+			}
+			fn.BodyRaw[i] = repl
+			modified = true
+		}
+	}
+
+	if !modified {
+		return nil
+	}
+
+	addIntrinsicDeclToModule(m, "llvm.preserve.struct.access.index", coreIntrinsicDecl)
 	return nil
 }
 
@@ -221,6 +396,38 @@ func rewriteCoreExistsModule(m *ir.Module) error {
 	}
 	*m = *result
 	return nil
+}
+
+func addIntrinsicDeclToModule(m *ir.Module, name, decl string) {
+	for _, d := range m.Declares {
+		if !d.Removed && strings.Contains(d.Name, name) {
+			return
+		}
+	}
+	for _, e := range m.Entries {
+		if !e.Removed && strings.Contains(e.Raw, name) {
+			return
+		}
+	}
+
+	newDecl := &ir.Declare{Name: name, Raw: decl}
+	m.Declares = append(m.Declares, newDecl)
+
+	insertIdx := -1
+	for i, e := range m.Entries {
+		if !e.Removed && (e.Kind == ir.TopDeclare || e.Kind == ir.TopFunction) {
+			insertIdx = i
+			break
+		}
+	}
+
+	entry := ir.TopLevelEntry{Kind: ir.TopDeclare, Raw: decl, Declare: newDecl}
+	if insertIdx >= 0 {
+		m.Entries = append(m.Entries[:insertIdx+1], m.Entries[insertIdx:]...)
+		m.Entries[insertIdx] = entry
+	} else {
+		m.Entries = append(m.Entries, entry)
+	}
 }
 
 func assignDataSectionsModule(m *ir.Module) error {
