@@ -13,21 +13,14 @@ func TestBuildModuleStagesOrder(t *testing.T) {
 		idx  int
 		name string
 	}{
-		{0, "retarget"},
-		{1, "strip-attributes"},
-		{2, "extract-programs"},
-		{3, "replace-alloc"},
-		{4, "rewrite-helpers"},
-		{5, "rewrite-core-access"},
-		{6, "rewrite-core-exists"},
-		{7, "assign-data-sections"},
-		{8, "assign-program-sections"},
-		{9, "strip-map-prefix"},
-		{10, "rewrite-map-btf"},
-		{11, "sanitize-btf-names"},
-		{12, "sanitize-core-fields"},
-		{13, "add-license"},
-		{14, "cleanup"},
+		{0, "module-rewrite"},
+		{1, "extract-programs"},
+		{2, "replace-alloc"},
+		{3, "rewrite-helpers"},
+		{4, "core"},
+		{5, "sections"},
+		{6, "map-btf"},
+		{7, "finalize"},
 	}
 
 	stages := buildModuleStages(Options{Stdout: io.Discard})
@@ -39,6 +32,31 @@ func TestBuildModuleStagesOrder(t *testing.T) {
 		if stages[tt.idx].name != tt.name {
 			t.Errorf("stage %d: expected %q, got %q", tt.idx, tt.name, stages[tt.idx].name)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// moduleRewriteModule
+// ---------------------------------------------------------------------------
+
+func TestModuleRewriteModule(t *testing.T) {
+	ag := &ir.AttrGroup{
+		ID:   "0",
+		Body: `{ "target-cpu"="generic" nounwind }`,
+	}
+	m := &ir.Module{
+		Triple:     "x86_64-unknown-linux-gnu",
+		DataLayout: "e-m:o",
+		AttrGroups: []*ir.AttrGroup{ag},
+	}
+	if err := moduleRewriteModule(m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Triple != "bpf" {
+		t.Errorf("triple = %q, want %q", m.Triple, "bpf")
+	}
+	if strings.Contains(ag.Body, "target-cpu") {
+		t.Error("target-cpu not stripped")
 	}
 }
 
@@ -252,6 +270,91 @@ func TestStripCoreExistsDeclsFromModule(t *testing.T) {
 	}
 	if m.Entries[2].Removed {
 		t.Error("unrelated declare should not be removed")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// corePassModule
+// ---------------------------------------------------------------------------
+
+func TestCorePassModule(t *testing.T) {
+	m := &ir.Module{}
+	if err := corePassModule(m); err != nil {
+		t.Fatalf("corePassModule on empty module: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// sectionsPassModule
+// ---------------------------------------------------------------------------
+
+func TestSectionsPassModule(t *testing.T) {
+	fn := &ir.Function{Name: "probe_connect", Raw: "define i32 @probe_connect() {"}
+	g := &ir.Global{Name: "counter", Linkage: "global", Initializer: "0", Raw: "@counter = global i32 0"}
+	m := &ir.Module{
+		Globals:   []*ir.Global{g},
+		Functions: []*ir.Function{fn},
+		Entries: []ir.TopLevelEntry{
+			{Kind: ir.TopGlobal, Global: g, Raw: g.Raw},
+			{Kind: ir.TopFunction, Function: fn, Raw: fn.Raw},
+		},
+	}
+	sections := map[string]string{"probe_connect": "tracepoint/tcp/tcp_connect"}
+	if err := sectionsPassModule(m, sections); err != nil {
+		t.Fatal(err)
+	}
+	if g.Section != ".data" {
+		t.Errorf("global section = %q, want %q", g.Section, ".data")
+	}
+	if !strings.Contains(fn.Raw, "section") {
+		t.Error("function should have a section after sectionsPassModule")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// mapBTFPassModule
+// ---------------------------------------------------------------------------
+
+func TestMapBTFPassModule(t *testing.T) {
+	m := &ir.Module{}
+	if err := mapBTFPassModule(m); err != nil {
+		t.Fatalf("mapBTFPassModule on empty module: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// finalizeModule
+// ---------------------------------------------------------------------------
+
+func TestFinalizeModule(t *testing.T) {
+	fn := &ir.Function{Name: "my_func", Raw: "define i32 @my_func() {"}
+	orphanDecl := &ir.Declare{Name: "unused_func", Raw: "declare void @unused_func()"}
+	m := &ir.Module{
+		Functions: []*ir.Function{fn},
+		Declares:  []*ir.Declare{orphanDecl},
+		Entries: []ir.TopLevelEntry{
+			{Kind: ir.TopDeclare, Declare: orphanDecl, Raw: orphanDecl.Raw},
+			{Kind: ir.TopBlank, Raw: ""},
+			{Kind: ir.TopFunction, Function: fn, Raw: fn.Raw},
+			{Kind: ir.TopBlank, Raw: ""},
+		},
+	}
+	if err := finalizeModule(m); err != nil {
+		t.Fatal(err)
+	}
+	hasLicense := false
+	for _, g := range m.Globals {
+		if g.Section == "license" {
+			hasLicense = true
+		}
+	}
+	if !hasLicense {
+		t.Error("expected license global after finalizeModule")
+	}
+	for _, e := range m.Entries {
+		if e.Kind == ir.TopDeclare && !e.Removed && e.Declare != nil && e.Declare.Name == "unused_func" {
+			t.Error("unreferenced declare should be cleaned up")
+		}
 	}
 }
 

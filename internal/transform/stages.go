@@ -20,25 +20,18 @@ type moduleStage struct {
 // buildModuleStages returns the ordered pipeline of AST-based IR transforms.
 func buildModuleStages(opts Options) []moduleStage {
 	return []moduleStage{
-		{"retarget", retargetModule},
-		{"strip-attributes", stripAttributesModule},
+		{"module-rewrite", moduleRewriteModule},
 		{"extract-programs", func(m *ir.Module) error {
 			return extractProgramsModule(m, opts.Programs, opts.Verbose, opts.Stdout)
 		}},
 		{"replace-alloc", replaceAllocModule},
 		{"rewrite-helpers", rewriteHelpersModule},
-		{"rewrite-core-access", rewriteCoreAccessModule},
-		{"rewrite-core-exists", rewriteCoreExistsModule},
-		{"assign-data-sections", assignDataSectionsModule},
-		{"assign-program-sections", func(m *ir.Module) error {
-			return assignProgramSectionsModule(m, opts.Sections)
+		{"core", corePassModule},
+		{"sections", func(m *ir.Module) error {
+			return sectionsPassModule(m, opts.Sections)
 		}},
-		{"strip-map-prefix", stripMapPrefixModule},
-		{"rewrite-map-btf", rewriteMapForBTFModule},
-		{"sanitize-btf-names", sanitizeBTFNamesModule},
-		{"sanitize-core-fields", sanitizeCoreFieldNamesModule},
-		{"add-license", addLicenseModule},
-		{"cleanup", cleanupModule},
+		{"map-btf", mapBTFPassModule},
+		{"finalize", finalizeModule},
 	}
 }
 
@@ -46,6 +39,14 @@ const (
 	bpfDatalayoutValue = "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128"
 	bpfTripleValue     = "bpf"
 )
+
+// moduleRewriteModule sets BPF target properties and strips invalid attributes in a single pass.
+func moduleRewriteModule(m *ir.Module) error {
+	if err := retargetModule(m); err != nil {
+		return err
+	}
+	return stripAttributesModule(m)
+}
 
 // retargetModule sets the module's data layout and triple to BPF targets.
 func retargetModule(m *ir.Module) error {
@@ -299,6 +300,17 @@ func rewriteHelpersModule(m *ir.Module) error {
 		}
 	}
 	return nil
+}
+
+// corePassModule runs all CO-RE transforms: struct access rewriting, exists intrinsics, and field name sanitization.
+func corePassModule(m *ir.Module) error {
+	if err := rewriteCoreAccessModule(m); err != nil {
+		return err
+	}
+	if err := rewriteCoreExistsModule(m); err != nil {
+		return err
+	}
+	return sanitizeCoreFieldNamesModule(m)
 }
 
 // rewriteCoreAccessModule converts bpfCore GEP instructions to llvm.preserve.struct.access.index calls.
@@ -851,6 +863,14 @@ func addIntrinsicDeclToModule(m *ir.Module, name, decl string) {
 	}
 }
 
+// sectionsPassModule assigns ELF sections to globals and program functions in a single pass.
+func sectionsPassModule(m *ir.Module, sections map[string]string) error {
+	if err := assignDataSectionsModule(m); err != nil {
+		return err
+	}
+	return assignProgramSectionsModule(m, sections)
+}
+
 // assignDataSectionsModule assigns .data, .bss, or .rodata sections to globals that lack one.
 func assignDataSectionsModule(m *ir.Module) error {
 	for _, g := range m.Globals {
@@ -915,6 +935,17 @@ func assignProgramSectionsModule(m *ir.Module, sections map[string]string) error
 		}
 	}
 	return nil
+}
+
+// mapBTFPassModule strips map name prefixes, rewrites map definitions for BTF, and sanitizes DI names.
+func mapBTFPassModule(m *ir.Module) error {
+	if err := stripMapPrefixModule(m); err != nil {
+		return err
+	}
+	if err := rewriteMapForBTFModule(m); err != nil {
+		return err
+	}
+	return sanitizeBTFNamesModule(m)
 }
 
 // stripMapPrefixModule removes the "main." prefix from map global names and updates all references.
@@ -1240,6 +1271,14 @@ func sanitizeCoreFieldNamesModule(m *ir.Module) error {
 		}
 	}
 	return nil
+}
+
+// finalizeModule adds a GPL license if missing and removes unreferenced definitions.
+func finalizeModule(m *ir.Module) error {
+	if err := addLicenseModule(m); err != nil {
+		return err
+	}
+	return cleanupModule(m)
 }
 
 // addLicenseModule inserts a GPL license global if one is not already present.
