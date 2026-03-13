@@ -125,7 +125,7 @@ type Instruction struct {
 	SSAName  string       // "%4" if this is an SSA assignment (empty otherwise)
 	Kind     InstKind     // determines which sub-struct is populated
 	Call     *CallInst    // non-nil when Kind == InstCall
-	GEP      *GEPInst    // non-nil when Kind == InstGEP
+	GEP      *GEPInst     // non-nil when Kind == InstGEP
 	Alloca   *AllocaInst  // non-nil when Kind == InstAlloca
 	Metadata []MetaAttach // trailing !dbg !N, !llvm.preserve.access.index !N
 	Raw      string       // always preserved
@@ -134,10 +134,10 @@ type Instruction struct {
 
 // CallInst holds parsed fields for a call instruction.
 type CallInst struct {
-	RetType string   // return type, e.g. "i64", "ptr", "void"
-	Callee  string   // e.g. "@main.bpfGetCurrentPidTgid", "inttoptr (i64 35 to ptr)"
-	Args    string   // raw argument list text
-	Tail    string   // calling convention, attributes before the callee
+	RetType string // return type, e.g. "i64", "ptr", "void"
+	Callee  string // e.g. "@main.bpfGetCurrentPidTgid", "inttoptr (i64 35 to ptr)"
+	Args    string // raw argument list text
+	Tail    string // calling convention, attributes before the callee
 }
 
 // GEPInst holds parsed fields for a getelementptr instruction.
@@ -172,11 +172,11 @@ type AttrGroup struct {
 
 // MetadataNode represents a numbered metadata definition: !N = ...
 type MetadataNode struct {
-	ID     int               // numeric ID
-	Kind   string            // "DICompositeType", "DIDerivedType", "DIBasicType", "" (for tuples)
-	Fields map[string]string // parsed key-value fields: "name" -> "main.bpfCoreTaskStruct"
-	Tuple  []string          // for "!N = !{!1, !2}" nodes, the raw references
-	Raw    string
+	ID       int               // numeric ID
+	Kind     string            // "DICompositeType", "DIDerivedType", "DIBasicType", "" (for tuples)
+	Fields   map[string]string // parsed key-value fields: "name" -> "main.bpfCoreTaskStruct"
+	Tuple    []string          // for "!N = !{!1, !2}" nodes, the raw references
+	Raw      string
 	Modified bool
 }
 

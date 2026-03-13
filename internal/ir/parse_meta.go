@@ -2,11 +2,7 @@ package ir
 
 import "strings"
 
-// parseMetadataNode parses a numbered metadata definition like:
-//
-//	!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfMapDef", ...)
-//	!1 = !{!2, !3}
-//	!2 = distinct !DISubprogram(...)
+// parseMetadataNode parses a numbered metadata definition into a MetadataNode.
 func parseMetadataNode(line, trimmed string, id int) *MetadataNode {
 	mn := &MetadataNode{
 		ID:  id,
@@ -19,7 +15,6 @@ func parseMetadataNode(line, trimmed string, id int) *MetadataNode {
 	}
 	rhs := strings.TrimSpace(trimmed[eqIdx+1:])
 
-	// Skip "distinct" prefix
 	if strings.HasPrefix(rhs, "distinct ") {
 		rhs = strings.TrimSpace(rhs[9:])
 	}
@@ -40,10 +35,7 @@ func parseMetadataNode(line, trimmed string, id int) *MetadataNode {
 	return mn
 }
 
-// parseNamedMetadata parses a named metadata node like:
-//
-//	!llvm.dbg.cu = !{!0}
-//	!llvm.module.flags = !{!1, !2}
+// parseNamedMetadata parses a named metadata node into a NamedMetadata.
 func parseNamedMetadata(line, trimmed string) *NamedMetadata {
 	nm := &NamedMetadata{Raw: line}
 	eqIdx := strings.IndexByte(trimmed, '=')
@@ -53,7 +45,7 @@ func parseNamedMetadata(line, trimmed string) *NamedMetadata {
 	nm.Name = strings.TrimSpace(trimmed[1:eqIdx])
 	rhs := strings.TrimSpace(trimmed[eqIdx+1:])
 	if strings.HasPrefix(rhs, "!{") {
-		nm.Refs = parseTupleRefsRaw(rhs)
+		nm.Refs = parseTupleRefs(rhs)
 	}
 	return nm
 }
@@ -75,12 +67,7 @@ func parseTupleRefs(s string) []string {
 	return refs
 }
 
-func parseTupleRefsRaw(s string) []string {
-	return parseTupleRefs(s)
-}
-
-// parseDIFields extracts key-value pairs from a DI metadata node.
-// e.g. !DICompositeType(tag: DW_TAG_structure_type, name: "foo", size: 64)
+// parseDIFields extracts key-value pairs from a DI metadata node's parenthesized body.
 func parseDIFields(s string) map[string]string {
 	parenIdx := strings.IndexByte(s, '(')
 	if parenIdx < 0 {
@@ -94,8 +81,7 @@ func parseDIFields(s string) map[string]string {
 	return splitDIKeyValues(body)
 }
 
-// splitDIKeyValues splits "tag: DW_TAG_member, name: \"foo\", size: 32"
-// into a key-value map, respecting nested quotes and metadata refs.
+// splitDIKeyValues splits comma-separated "key: value" pairs into a map.
 func splitDIKeyValues(body string) map[string]string {
 	fields := make(map[string]string)
 	kvPairs := splitDIPairs(body)
@@ -114,14 +100,13 @@ func splitDIKeyValues(body string) map[string]string {
 	return fields
 }
 
-// splitDIPairs splits on commas, respecting nested structures like !{...}
-// and quoted strings.
+// splitDIPairs splits on commas, respecting nested delimiters and quoted strings.
 func splitDIPairs(body string) []string {
 	var pairs []string
 	depth := 0
 	inQuote := false
 	start := 0
-	for i := 0; i < len(body); i++ {
+	for i := range len(body) {
 		c := body[i]
 		if c == '"' && (i == 0 || body[i-1] != '\\') {
 			inQuote = !inQuote
@@ -148,6 +133,7 @@ func splitDIPairs(body string) []string {
 	return pairs
 }
 
+// extractBraced returns the content between the first open and last close delimiter in s.
 func extractBraced(s string, open, close byte) string {
 	openIdx := strings.IndexByte(s, open)
 	if openIdx < 0 {

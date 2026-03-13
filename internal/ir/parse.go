@@ -6,10 +6,7 @@ import (
 	"strings"
 )
 
-// Parse reads LLVM IR text and returns a structured Module. It recognizes
-// the subset of IR that TinyGo emits: module header, type definitions,
-// globals, declares, defines (with basic blocks and instructions), attribute
-// groups, and metadata. Unrecognized constructs are preserved as-is.
+// Parse reads LLVM IR text and returns a structured Module.
 func Parse(input string) (*Module, error) {
 	lines := strings.Split(input, "\n")
 	m := &Module{}
@@ -26,10 +23,12 @@ type parser struct {
 	mod   *Module
 }
 
+// atEnd reports whether all input lines have been consumed.
 func (p *parser) atEnd() bool {
 	return p.pos >= len(p.lines)
 }
 
+// peek returns the current line without advancing.
 func (p *parser) peek() string {
 	if p.atEnd() {
 		return ""
@@ -37,12 +36,14 @@ func (p *parser) peek() string {
 	return p.lines[p.pos]
 }
 
+// advance returns the current line and moves to the next.
 func (p *parser) advance() string {
 	line := p.lines[p.pos]
 	p.pos++
 	return line
 }
 
+// parseModule iterates over all lines and dispatches each to the appropriate parser.
 func (p *parser) parseModule() error {
 	for !p.atEnd() {
 		line := p.peek()
@@ -58,17 +59,17 @@ func (p *parser) parseModule() error {
 			p.advance()
 
 		case strings.HasPrefix(trimmed, "source_filename"):
-			p.mod.SourceFilename = extractQuoted(trimmed, "source_filename")
+			p.mod.SourceFilename = extractQuoted(trimmed)
 			p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopSourceFilename, Raw: line})
 			p.advance()
 
 		case strings.HasPrefix(trimmed, "target datalayout"):
-			p.mod.DataLayout = extractQuoted(trimmed, "target datalayout")
+			p.mod.DataLayout = extractQuoted(trimmed)
 			p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopDataLayout, Raw: line})
 			p.advance()
 
 		case strings.HasPrefix(trimmed, "target triple"):
-			p.mod.Triple = extractQuoted(trimmed, "target triple")
+			p.mod.Triple = extractQuoted(trimmed)
 			p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopTriple, Raw: line})
 			p.advance()
 
@@ -78,14 +79,8 @@ func (p *parser) parseModule() error {
 			p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopTypeDef, Raw: line, TypeDef: td})
 			p.advance()
 
-		case strings.HasPrefix(trimmed, "@") && strings.Contains(trimmed, "=") && !strings.HasPrefix(trimmed, "@llvm."):
-			g := parseGlobal(line, trimmed)
-			if g != nil {
-				p.mod.Globals = append(p.mod.Globals, g)
-				p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopGlobal, Raw: line, Global: g})
-			} else {
-				p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopComment, Raw: line})
-			}
+		case strings.HasPrefix(trimmed, "@"):
+			p.handleGlobalLine(line, trimmed)
 			p.advance()
 
 		case strings.HasPrefix(trimmed, "declare "):
@@ -108,21 +103,8 @@ func (p *parser) parseModule() error {
 			p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopAttrGroup, Raw: line, AttrGroup: ag})
 			p.advance()
 
-		case strings.HasPrefix(trimmed, "!") && strings.Contains(trimmed, "="):
-			id := extractMetadataID(trimmed)
-			if id >= 0 {
-				mn := parseMetadataNode(line, trimmed, id)
-				p.mod.MetadataNodes = append(p.mod.MetadataNodes, mn)
-				p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopMetadata, Raw: line, Metadata: mn})
-			} else {
-				nm := parseNamedMetadata(line, trimmed)
-				p.mod.NamedMetadata = append(p.mod.NamedMetadata, nm)
-				p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopNamedMetadata, Raw: line, NamedMetadata: nm})
-			}
-			p.advance()
-
-		case strings.HasPrefix(trimmed, "#dbg_"):
-			p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopComment, Raw: line})
+		case strings.HasPrefix(trimmed, "!"):
+			p.handleMetadataLine(line, trimmed)
 			p.advance()
 
 		default:
@@ -133,6 +115,40 @@ func (p *parser) parseModule() error {
 	return nil
 }
 
+// handleGlobalLine processes a line starting with "@" as a global variable or comment.
+func (p *parser) handleGlobalLine(line, trimmed string) {
+	if !strings.Contains(trimmed, "=") || strings.HasPrefix(trimmed, "@llvm.") {
+		p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopComment, Raw: line})
+		return
+	}
+	g := parseGlobal(line, trimmed)
+	if g != nil {
+		p.mod.Globals = append(p.mod.Globals, g)
+		p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopGlobal, Raw: line, Global: g})
+	} else {
+		p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopComment, Raw: line})
+	}
+}
+
+// handleMetadataLine processes a line starting with "!" as metadata or a comment.
+func (p *parser) handleMetadataLine(line, trimmed string) {
+	if !strings.Contains(trimmed, "=") {
+		p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopComment, Raw: line})
+		return
+	}
+	id := extractMetadataID(trimmed)
+	if id >= 0 {
+		mn := parseMetadataNode(line, trimmed, id)
+		p.mod.MetadataNodes = append(p.mod.MetadataNodes, mn)
+		p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopMetadata, Raw: line, Metadata: mn})
+	} else {
+		nm := parseNamedMetadata(line, trimmed)
+		p.mod.NamedMetadata = append(p.mod.NamedMetadata, nm)
+		p.mod.Entries = append(p.mod.Entries, TopLevelEntry{Kind: TopNamedMetadata, Raw: line, NamedMetadata: nm})
+	}
+}
+
+// parseTypeDef parses a named struct type definition into a TypeDef node.
 func (p *parser) parseTypeDef(line, trimmed string) *TypeDef {
 	td := &TypeDef{Raw: line}
 	eqIdx := strings.Index(trimmed, " = type")
@@ -148,6 +164,7 @@ func (p *parser) parseTypeDef(line, trimmed string) *TypeDef {
 	return td
 }
 
+// parseGlobal parses a module-level global definition, returning nil if the line is not a valid global.
 func parseGlobal(line, trimmed string) *Global {
 	if len(trimmed) < 2 || trimmed[0] != '@' {
 		return nil
@@ -169,13 +186,14 @@ func parseGlobal(line, trimmed string) *Global {
 
 	g := &Global{Name: name, Raw: line}
 
-	g.Linkage, g.Type, g.Initializer, rest = parseGlobalBody(rest)
+	g.Linkage, g.Type, g.Initializer, _ = parseGlobalBody(rest)
 	g.Section = extractSection(line)
 	g.Align = extractAlign(line)
 	g.Metadata = extractMetaAttachments(line)
 	return g
 }
 
+// parseGlobalBody extracts the linkage, type, and initializer from the right-hand side of a global definition.
 func parseGlobalBody(rest string) (linkage, typeName, init, remaining string) {
 	linkage, rest = consumeLinkage(rest)
 
@@ -189,28 +207,29 @@ func parseGlobalBody(rest string) (linkage, typeName, init, remaining string) {
 		rest = strings.TrimSpace(rest[typeEnd:])
 	}
 
-	if strings.HasPrefix(rest, "{") {
+	switch {
+	case strings.HasPrefix(rest, "{"):
 		braceEnd := findMatchingBrace(rest, '{', '}')
 		if braceEnd > 0 {
 			init = rest[:braceEnd+1]
 			rest = rest[braceEnd+1:]
 		}
-	} else if strings.HasPrefix(rest, "[") {
+	case strings.HasPrefix(rest, "["):
 		bracketEnd := findMatchingBrace(rest, '[', ']')
 		if bracketEnd > 0 {
 			init = rest[:bracketEnd+1]
 			rest = rest[bracketEnd+1:]
 		}
-	} else if strings.HasPrefix(rest, "zeroinitializer") {
+	case strings.HasPrefix(rest, "zeroinitializer"):
 		init = "zeroinitializer"
 		rest = rest[len("zeroinitializer"):]
-	} else if strings.HasPrefix(rest, `c"`) {
+	case strings.HasPrefix(rest, `c"`):
 		qEnd := strings.Index(rest[2:], `"`)
 		if qEnd >= 0 {
 			init = rest[:qEnd+3]
 			rest = rest[qEnd+3:]
 		}
-	} else {
+	default:
 		commaIdx := strings.IndexByte(rest, ',')
 		if commaIdx > 0 {
 			init = strings.TrimSpace(rest[:commaIdx])
@@ -224,6 +243,7 @@ func parseGlobalBody(rest string) (linkage, typeName, init, remaining string) {
 	return linkage, typeName, init, rest
 }
 
+// consumeLinkage strips a recognized linkage prefix from s, returning the linkage and the remainder.
 func consumeLinkage(s string) (string, string) {
 	linkages := []string{
 		"private unnamed_addr global ",
@@ -245,6 +265,7 @@ func consumeLinkage(s string) (string, string) {
 	return "", s
 }
 
+// findTypeEnd returns the byte offset where the leading type token in s ends.
 func findTypeEnd(s string) int {
 	if len(s) == 0 {
 		return 0
@@ -271,15 +292,17 @@ func findTypeEnd(s string) int {
 	return 0
 }
 
+// findMatchingBrace returns the index of the closing delimiter that matches s[0], or -1.
 func findMatchingBrace(s string, open, close byte) int {
 	if len(s) == 0 || s[0] != open {
 		return -1
 	}
 	depth := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == open {
+	for i := range len(s) {
+		switch s[i] {
+		case open:
 			depth++
-		} else if s[i] == close {
+		case close:
 			depth--
 			if depth == 0 {
 				return i
@@ -289,6 +312,7 @@ func findMatchingBrace(s string, open, close byte) int {
 	return -1
 }
 
+// parseDeclare parses a function declaration line into a Declare node.
 func parseDeclare(line, trimmed string) *Declare {
 	d := &Declare{Raw: line}
 	atIdx := strings.IndexByte(trimmed, '@')
@@ -312,6 +336,7 @@ func parseDeclare(line, trimmed string) *Declare {
 	return d
 }
 
+// parseFunction parses a function definition and its body into a Function node.
 func (p *parser) parseFunction() (*Function, error) {
 	line := p.advance()
 	trimmed := strings.TrimSpace(line)
@@ -342,10 +367,15 @@ func (p *parser) parseFunction() (*Function, error) {
 	fn.Metadata = extractMetaAttachments(trimmed)
 
 	depth := strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
-	if depth <= 0 {
-		return fn, nil
+	if depth > 0 {
+		p.parseFunctionBody(fn, depth)
 	}
 
+	return fn, nil
+}
+
+// parseFunctionBody parses the body lines of a function definition into basic blocks.
+func (p *parser) parseFunctionBody(fn *Function, depth int) {
 	var curBlock *BasicBlock
 	for !p.atEnd() && depth > 0 {
 		bline := p.advance()
@@ -382,10 +412,9 @@ func (p *parser) parseFunction() (*Function, error) {
 		}
 		curBlock.Instructions = append(curBlock.Instructions, inst)
 	}
-
-	return fn, nil
 }
 
+// parseAttrGroup parses an attribute group definition into an AttrGroup node.
 func parseAttrGroup(line, trimmed string) *AttrGroup {
 	ag := &AttrGroup{Raw: line}
 	rest := strings.TrimPrefix(trimmed, "attributes #")
@@ -402,7 +431,8 @@ func parseAttrGroup(line, trimmed string) *AttrGroup {
 	return ag
 }
 
-func extractQuoted(line, prefix string) string {
+// extractQuoted returns the first double-quoted value found in line.
+func extractQuoted(line string) string {
 	idx := strings.Index(line, `"`)
 	if idx < 0 {
 		return ""
@@ -414,6 +444,7 @@ func extractQuoted(line, prefix string) string {
 	return line[idx+1 : idx+1+end]
 }
 
+// extractSection returns the section name from a 'section "name"' clause, or empty.
 func extractSection(line string) string {
 	const marker = `section "`
 	idx := strings.Index(line, marker)
@@ -428,6 +459,7 @@ func extractSection(line string) string {
 	return line[start : start+end]
 }
 
+// extractAlign returns the alignment value from an 'align N' clause, or 0.
 func extractAlign(line string) int {
 	const marker = "align "
 	idx := strings.LastIndex(line, marker)
@@ -446,6 +478,7 @@ func extractAlign(line string) int {
 	return n
 }
 
+// extractMetaAttachments scans a line for !key !N metadata attachments and returns them.
 func extractMetaAttachments(line string) []MetaAttach {
 	var attachments []MetaAttach
 	pos := 0
@@ -466,33 +499,43 @@ func extractMetaAttachments(line string) []MetaAttach {
 		if absIdx+1 >= len(line) {
 			break
 		}
-		keyStart := absIdx + 1
-		keyEnd := keyStart
-		for keyEnd < len(line) && (isIdentChar(line[keyEnd]) || line[keyEnd] == '.') {
-			keyEnd++
-		}
-		if keyEnd >= len(line) || keyEnd == keyStart {
-			pos = keyEnd
-			continue
-		}
-		key := line[keyStart:keyEnd]
-		rest := strings.TrimSpace(line[keyEnd:])
-		if strings.HasPrefix(rest, "!") {
-			valEnd := 1
-			for valEnd < len(rest) && rest[valEnd] >= '0' && rest[valEnd] <= '9' {
-				valEnd++
-			}
-			if valEnd > 1 {
-				attachments = append(attachments, MetaAttach{Key: key, Value: rest[:valEnd]})
-			}
+		ma, keyEnd, ok := tryParseMetaAttach(line, absIdx)
+		if ok {
+			attachments = append(attachments, ma)
 		}
 		pos = keyEnd
 	}
 	return attachments
 }
 
+// tryParseMetaAttach attempts to parse a "!key !N" metadata attachment starting at absIdx.
+func tryParseMetaAttach(line string, absIdx int) (MetaAttach, int, bool) {
+	keyStart := absIdx + 1
+	keyEnd := keyStart
+	for keyEnd < len(line) && (isIdentChar(line[keyEnd]) || line[keyEnd] == '.') {
+		keyEnd++
+	}
+	if keyEnd >= len(line) || keyEnd == keyStart {
+		return MetaAttach{}, keyEnd, false
+	}
+	key := line[keyStart:keyEnd]
+	rest := strings.TrimSpace(line[keyEnd:])
+	if !strings.HasPrefix(rest, "!") {
+		return MetaAttach{}, keyEnd, false
+	}
+	valEnd := 1
+	for valEnd < len(rest) && rest[valEnd] >= '0' && rest[valEnd] <= '9' {
+		valEnd++
+	}
+	if valEnd <= 1 {
+		return MetaAttach{}, keyEnd, false
+	}
+	return MetaAttach{Key: key, Value: rest[:valEnd]}, keyEnd, true
+}
+
+// extractAttrRef returns the first #N attribute group reference found in attrs, or empty.
 func extractAttrRef(attrs string) string {
-	for i := 0; i < len(attrs); i++ {
+	for i := range len(attrs) {
 		if attrs[i] == '#' {
 			end := i + 1
 			for end < len(attrs) && attrs[end] >= '0' && attrs[end] <= '9' {
@@ -506,6 +549,7 @@ func extractAttrRef(attrs string) string {
 	return ""
 }
 
+// extractDefineRetType extracts the return type from a define line, skipping linkage keywords.
 func extractDefineRetType(line string) string {
 	atIdx := strings.IndexByte(line, '@')
 	if atIdx < 0 {
@@ -526,12 +570,14 @@ func extractDefineRetType(line string) string {
 	return ""
 }
 
+// findCloseParen returns the index of the closing ')' matching s[openIdx], or -1.
 func findCloseParen(s string, openIdx int) int {
 	depth := 0
 	for i := openIdx; i < len(s); i++ {
-		if s[i] == '(' {
+		switch s[i] {
+		case '(':
 			depth++
-		} else if s[i] == ')' {
+		case ')':
 			depth--
 			if depth == 0 {
 				return i
@@ -541,6 +587,7 @@ func findCloseParen(s string, openIdx int) int {
 	return -1
 }
 
+// isLabel reports whether trimmed is a basic block label (e.g. "entry:").
 func isLabel(trimmed string) bool {
 	if len(trimmed) < 2 || trimmed[len(trimmed)-1] != ':' {
 		return false
@@ -550,19 +597,21 @@ func isLabel(trimmed string) bool {
 		return false
 	}
 	for _, r := range name {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') || r == '_' || r == '.' || r == '-') {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') &&
+			(r < '0' || r > '9') && r != '_' && r != '.' && r != '-' {
 			return false
 		}
 	}
 	return true
 }
 
+// isIdentChar reports whether c is a valid LLVM identifier character.
 func isIdentChar(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
 		(c >= '0' && c <= '9') || c == '_' || c == '.'
 }
 
+// extractMetadataID returns the numeric ID from "!N = ..." or -1 if the line is not a numbered metadata definition.
 func extractMetadataID(line string) int {
 	if len(line) < 2 || line[0] != '!' || line[1] < '0' || line[1] > '9' {
 		return -1
@@ -582,11 +631,12 @@ func extractMetadataID(line string) int {
 	return -1
 }
 
+// splitStructFields splits the body of a struct type into individual field type strings.
 func splitStructFields(body string) []string {
 	var fields []string
 	depth := 0
 	start := 0
-	for i := 0; i < len(body); i++ {
+	for i := range len(body) {
 		switch body[i] {
 		case '[', '{', '(':
 			depth++

@@ -2,10 +2,10 @@ package ir
 
 // ModuleIndex provides fast lookups over a parsed Module's contents.
 type ModuleIndex struct {
-	SSADefs    map[string]*Instruction // SSA name -> defining instruction
-	MetaByID   map[int]*MetadataNode   // metadata ID -> node
-	IdentRefs  map[string][]IdentRef   // @name -> list of references
-	MaxMetaID  int                     // highest metadata ID seen
+	SSADefs   map[string]*Instruction // SSA name -> defining instruction
+	MetaByID  map[int]*MetadataNode   // metadata ID -> node
+	IdentRefs map[string][]IdentRef   // @name -> list of references
+	MaxMetaID int                     // highest metadata ID seen
 }
 
 // IdentRef records where an @-identifier appears.
@@ -21,7 +21,7 @@ type IdentRef struct {
 type IdentRefKind int
 
 const (
-	RefInGlobal  IdentRefKind = iota
+	RefInGlobal IdentRefKind = iota
 	RefInDeclare
 	RefInFunction
 	RefInOther
@@ -63,7 +63,7 @@ func BuildIndex(m *Module) *ModuleIndex {
 					EntryIdx: i,
 					Global:   entry.Global,
 				})
-				addRawIdentRefs(idx, entry.Raw, i, entry.Global, nil, nil)
+				scanIdentRefs(idx, entry.Raw, i, nil)
 			}
 		case TopDeclare:
 			if entry.Declare != nil {
@@ -92,10 +92,7 @@ func BuildIndex(m *Module) *ModuleIndex {
 	return idx
 }
 
-func addRawIdentRefs(idx *ModuleIndex, line string, entryIdx int, g *Global, d *Declare, fn *Function) {
-	scanIdentRefs(idx, line, entryIdx, nil)
-}
-
+// scanIdentRefs scans a line for @-identifiers and appends IdentRef entries to the index.
 func scanIdentRefs(idx *ModuleIndex, line string, entryIdx int, fn *Function) {
 	for pos := 0; pos < len(line); pos++ {
 		if line[pos] != '@' {
@@ -126,8 +123,7 @@ func (idx *ModuleIndex) NextMetaID() int {
 	return idx.MaxMetaID + 1
 }
 
-// IsReferencedElsewhere reports whether @name appears in any entry other
-// than the one at defEntryIdx.
+// IsReferencedElsewhere reports whether @name appears in any entry other than defEntryIdx.
 func (idx *ModuleIndex) IsReferencedElsewhere(name string, defEntryIdx int) bool {
 	for _, ref := range idx.IdentRefs[name] {
 		if ref.EntryIdx != defEntryIdx {

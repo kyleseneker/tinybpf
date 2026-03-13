@@ -5,9 +5,7 @@ import (
 	"strings"
 )
 
-// parseInstruction classifies a single IR instruction line and extracts
-// structured fields for call, getelementptr, and alloca instructions.
-// All other instructions are preserved as InstOther with only SSAName and Raw.
+// parseInstruction classifies and parses a single IR instruction line.
 func parseInstruction(line, trimmed string) *Instruction {
 	inst := &Instruction{Raw: line}
 	inst.Metadata = extractMetaAttachments(line)
@@ -45,37 +43,41 @@ func parseInstruction(line, trimmed string) *Instruction {
 	return inst
 }
 
+// extractSSAAssign splits "%name = rest" into the SSA name and the right-hand side.
 func extractSSAAssign(trimmed string) (string, string) {
 	if len(trimmed) < 2 || trimmed[0] != '%' {
-		if len(trimmed) > 2 && trimmed[0] == ' ' && trimmed[1] == ' ' {
-			inner := strings.TrimSpace(trimmed)
-			if len(inner) > 0 && inner[0] == '%' {
-				return extractSSAAssign(inner)
-			}
-		}
 		return "", ""
 	}
 	eqIdx := strings.Index(trimmed, " = ")
 	if eqIdx < 0 {
 		return "", ""
 	}
-	name := strings.TrimSpace(trimmed[:eqIdx])
-	if !strings.HasPrefix(name, "%") {
+	name := trimmed[:eqIdx]
+	if !isValidSSAName(name) {
 		return "", ""
-	}
-	for _, c := range name[1:] {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-			(c >= '0' && c <= '9') || c == '_' || c == '.') {
-			return "", ""
-		}
 	}
 	return name, strings.TrimSpace(trimmed[eqIdx+3:])
 }
 
-func containsCallKeyword(s string) bool {
-	return strings.Contains(s, "call ") || strings.HasPrefix(strings.TrimSpace(s), "call ")
+// isValidSSAName reports whether name is a valid SSA name (e.g. "%foo").
+func isValidSSAName(name string) bool {
+	if len(name) < 2 || name[0] != '%' {
+		return false
+	}
+	for i := 1; i < len(name); i++ {
+		if !isIdentChar(name[i]) {
+			return false
+		}
+	}
+	return true
 }
 
+// containsCallKeyword reports whether s contains a "call " keyword.
+func containsCallKeyword(s string) bool {
+	return strings.Contains(s, "call ")
+}
+
+// tryParseCall attempts to parse a call instruction, returning nil on failure.
 func tryParseCall(work string) *CallInst {
 	callIdx := strings.Index(work, "call ")
 	if callIdx < 0 {
@@ -94,15 +96,16 @@ func tryParseCall(work string) *CallInst {
 	}
 
 	var calleeStart int
-	if intIdx >= 0 && (atIdx < 0 || intIdx < atIdx) {
+	switch {
+	case intIdx >= 0 && (atIdx < 0 || intIdx < atIdx):
 		ci.RetType = strings.TrimSpace(afterCall[:intIdx])
-		parenEnd := findClosingParen(afterCall, intIdx)
+		parenEnd := findCloseParen(afterCall, intIdx)
 		if parenEnd < 0 {
 			return nil
 		}
 		ci.Callee = strings.TrimSpace(afterCall[intIdx : parenEnd+1])
 		calleeStart = parenEnd + 1
-	} else if atIdx >= 0 {
+	case atIdx >= 0:
 		ci.RetType = strings.TrimSpace(afterCall[:atIdx])
 		nameEnd := atIdx + 1
 		for nameEnd < len(afterCall) && isIdentChar(afterCall[nameEnd]) {
@@ -110,7 +113,7 @@ func tryParseCall(work string) *CallInst {
 		}
 		ci.Callee = afterCall[atIdx:nameEnd]
 		calleeStart = nameEnd
-	} else {
+	default:
 		return nil
 	}
 
@@ -119,7 +122,7 @@ func tryParseCall(work string) *CallInst {
 	if openParen < 0 {
 		return ci
 	}
-	closeParen := findClosingParen(rest, openParen)
+	closeParen := findCloseParen(rest, openParen)
 	if closeParen < 0 {
 		ci.Args = rest[openParen+1:]
 		return ci
@@ -128,6 +131,7 @@ func tryParseCall(work string) *CallInst {
 	return ci
 }
 
+// tryParseGEP attempts to parse a getelementptr instruction, returning nil on failure.
 func tryParseGEP(work string) *GEPInst {
 	gepIdx := strings.Index(work, "getelementptr")
 	if gepIdx < 0 {
@@ -179,6 +183,7 @@ func tryParseGEP(work string) *GEPInst {
 	return gi
 }
 
+// tryParseAlloca attempts to parse an alloca instruction, returning nil on failure.
 func tryParseAlloca(work string) *AllocaInst {
 	allocaIdx := strings.Index(work, "alloca ")
 	if allocaIdx < 0 {
@@ -212,6 +217,7 @@ func tryParseAlloca(work string) *AllocaInst {
 	return ai
 }
 
+// parseAlignFromRest extracts an alignment value from a trailing "align N" clause.
 func parseAlignFromRest(rest string) int {
 	idx := strings.Index(rest, "align ")
 	if idx < 0 {
@@ -229,11 +235,12 @@ func parseAlignFromRest(rest string) int {
 	return n
 }
 
+// splitGEPOperands splits a GEP operand list on commas, respecting nested delimiters.
 func splitGEPOperands(s string) []string {
 	var parts []string
 	depth := 0
 	start := 0
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		switch s[i] {
 		case '(', '[', '{':
 			depth++
@@ -250,19 +257,4 @@ func splitGEPOperands(s string) []string {
 		parts = append(parts, f)
 	}
 	return parts
-}
-
-func findClosingParen(s string, openIdx int) int {
-	depth := 0
-	for i := openIdx; i < len(s); i++ {
-		if s[i] == '(' {
-			depth++
-		} else if s[i] == ')' {
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
 }

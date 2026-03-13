@@ -5,9 +5,7 @@ import (
 	"strings"
 )
 
-// Serialize converts a Module back to LLVM IR text. For unmodified nodes it
-// emits the original Raw text. For modified nodes it regenerates from the
-// structured fields.
+// Serialize converts a Module back to LLVM IR text.
 func Serialize(m *Module) string {
 	var b strings.Builder
 	b.Grow(estimateSize(m))
@@ -24,6 +22,7 @@ func Serialize(m *Module) string {
 	return b.String()
 }
 
+// estimateSize returns a rough byte count for pre-allocating the output buffer.
 func estimateSize(m *Module) int {
 	n := 0
 	for _, e := range m.Entries {
@@ -37,55 +36,31 @@ func estimateSize(m *Module) int {
 	return n
 }
 
+// serializeEntry writes a single top-level entry, regenerating modified nodes.
 func serializeEntry(b *strings.Builder, m *Module, entry *TopLevelEntry) {
 	switch entry.Kind {
 	case TopDataLayout:
-		if m.DataLayout != extractQuoted(entry.Raw, "target datalayout") {
+		if m.DataLayout != extractQuoted(entry.Raw) {
 			fmt.Fprintf(b, `target datalayout = "%s"`, m.DataLayout)
 			return
 		}
 		b.WriteString(entry.Raw)
 
 	case TopTriple:
-		if m.Triple != extractQuoted(entry.Raw, "target triple") {
+		if m.Triple != extractQuoted(entry.Raw) {
 			fmt.Fprintf(b, `target triple = "%s"`, m.Triple)
 			return
 		}
 		b.WriteString(entry.Raw)
 
 	case TopTypeDef:
-		if entry.TypeDef != nil && entry.TypeDef.Modified {
-			serializeTypeDef(b, entry.TypeDef)
-			return
-		}
-		b.WriteString(entry.Raw)
-
+		serializeTypeDefEntry(b, entry)
 	case TopGlobal:
-		if entry.Global != nil && entry.Global.Modified {
-			serializeGlobal(b, entry.Global)
-			return
-		}
-		b.WriteString(entry.Raw)
-
+		serializeGlobalEntry(b, entry)
 	case TopDeclare:
-		if entry.Declare != nil && entry.Declare.Removed {
-			return
-		}
-		if entry.Declare != nil && entry.Declare.Modified {
-			serializeDeclare(b, entry.Declare)
-			return
-		}
-		b.WriteString(entry.Raw)
-
+		serializeDeclareEntry(b, entry)
 	case TopFunction:
-		if entry.Function != nil {
-			if entry.Function.Removed {
-				return
-			}
-			serializeFunction(b, entry.Function)
-			return
-		}
-		b.WriteString(entry.Raw)
+		serializeFunctionEntry(b, entry)
 
 	case TopAttrGroup:
 		if entry.AttrGroup != nil && entry.AttrGroup.Modified {
@@ -106,10 +81,54 @@ func serializeEntry(b *strings.Builder, m *Module, entry *TopLevelEntry) {
 	}
 }
 
+// serializeTypeDefEntry writes a type definition entry, regenerating if modified.
+func serializeTypeDefEntry(b *strings.Builder, entry *TopLevelEntry) {
+	if entry.TypeDef != nil && entry.TypeDef.Modified {
+		serializeTypeDef(b, entry.TypeDef)
+		return
+	}
+	b.WriteString(entry.Raw)
+}
+
+// serializeGlobalEntry writes a global variable entry, regenerating if modified.
+func serializeGlobalEntry(b *strings.Builder, entry *TopLevelEntry) {
+	if entry.Global != nil && entry.Global.Modified {
+		serializeGlobal(b, entry.Global)
+		return
+	}
+	b.WriteString(entry.Raw)
+}
+
+// serializeDeclareEntry writes a declare entry, skipping if removed or regenerating if modified.
+func serializeDeclareEntry(b *strings.Builder, entry *TopLevelEntry) {
+	if entry.Declare != nil && entry.Declare.Removed {
+		return
+	}
+	if entry.Declare != nil && entry.Declare.Modified {
+		serializeDeclare(b, entry.Declare)
+		return
+	}
+	b.WriteString(entry.Raw)
+}
+
+// serializeFunctionEntry writes a function entry, skipping if removed or serializing the parsed form.
+func serializeFunctionEntry(b *strings.Builder, entry *TopLevelEntry) {
+	if entry.Function != nil {
+		if entry.Function.Removed {
+			return
+		}
+		serializeFunction(b, entry.Function)
+		return
+	}
+	b.WriteString(entry.Raw)
+}
+
+// serializeTypeDef writes a modified type definition.
 func serializeTypeDef(b *strings.Builder, td *TypeDef) {
 	fmt.Fprintf(b, "%s = type { %s }", td.Name, strings.Join(td.Fields, ", "))
 }
 
+// serializeGlobal writes a modified global definition.
 func serializeGlobal(b *strings.Builder, g *Global) {
 	fmt.Fprintf(b, "@%s = %s", g.Name, g.Linkage)
 	if g.Type != "" {
@@ -131,10 +150,12 @@ func serializeGlobal(b *strings.Builder, g *Global) {
 	}
 }
 
+// serializeDeclare writes a modified function declaration.
 func serializeDeclare(b *strings.Builder, d *Declare) {
 	fmt.Fprintf(b, "declare %s @%s(%s)", d.RetType, d.Name, d.Params)
 }
 
+// serializeFunction writes a function definition, dispatching to the modified path if needed.
 func serializeFunction(b *strings.Builder, fn *Function) {
 	if fn.Modified {
 		serializeFunctionModified(b, fn)
@@ -147,6 +168,7 @@ func serializeFunction(b *strings.Builder, fn *Function) {
 	}
 }
 
+// serializeFunctionModified regenerates a function body from its parsed blocks and instructions.
 func serializeFunctionModified(b *strings.Builder, fn *Function) {
 	b.WriteString(fn.Raw)
 	for _, block := range fn.Blocks {
@@ -166,6 +188,7 @@ func serializeFunctionModified(b *strings.Builder, fn *Function) {
 	b.WriteString("\n}")
 }
 
+// serializeInstruction dispatches to the appropriate instruction serializer by kind.
 func serializeInstruction(b *strings.Builder, inst *Instruction) {
 	switch inst.Kind {
 	case InstCall:
@@ -179,6 +202,7 @@ func serializeInstruction(b *strings.Builder, inst *Instruction) {
 	}
 }
 
+// serializeCallInst writes a modified call instruction.
 func serializeCallInst(b *strings.Builder, inst *Instruction) {
 	ci := inst.Call
 	b.WriteString("  ")
@@ -193,6 +217,7 @@ func serializeCallInst(b *strings.Builder, inst *Instruction) {
 	serializeMetaAttachments(b, inst.Metadata)
 }
 
+// serializeGEPInst writes a modified getelementptr instruction.
 func serializeGEPInst(b *strings.Builder, inst *Instruction) {
 	gi := inst.GEP
 	b.WriteString("  ")
@@ -222,6 +247,7 @@ func serializeGEPInst(b *strings.Builder, inst *Instruction) {
 	serializeMetaAttachments(b, inst.Metadata)
 }
 
+// serializeAllocaInst writes a modified alloca instruction.
 func serializeAllocaInst(b *strings.Builder, inst *Instruction) {
 	ai := inst.Alloca
 	b.WriteString("  ")
@@ -235,10 +261,12 @@ func serializeAllocaInst(b *strings.Builder, inst *Instruction) {
 	serializeMetaAttachments(b, inst.Metadata)
 }
 
+// serializeAttrGroup writes a modified attribute group definition.
 func serializeAttrGroup(b *strings.Builder, ag *AttrGroup) {
 	fmt.Fprintf(b, "attributes #%s = { %s }", ag.ID, strings.TrimSpace(ag.Body))
 }
 
+// serializeMetadata writes a modified metadata node as either a tuple or DI definition.
 func serializeMetadata(b *strings.Builder, mn *MetadataNode) {
 	if mn.Kind == "" && len(mn.Tuple) > 0 {
 		fmt.Fprintf(b, "!%d = !{%s}", mn.ID, strings.Join(mn.Tuple, ", "))
@@ -264,12 +292,14 @@ func serializeMetadata(b *strings.Builder, mn *MetadataNode) {
 	b.WriteString(mn.Raw)
 }
 
+// serializeMetaAttachments appends ", !key !N" metadata attachments to the builder.
 func serializeMetaAttachments(b *strings.Builder, attachments []MetaAttach) {
 	for _, ma := range attachments {
 		fmt.Fprintf(b, ", !%s %s", ma.Key, ma.Value)
 	}
 }
 
+// needsQuoting reports whether a metadata field value requires double quotes.
 func needsQuoting(v string) bool {
 	if strings.HasPrefix(v, "!") || strings.HasPrefix(v, "DW_") {
 		return false
