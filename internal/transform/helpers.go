@@ -1,15 +1,11 @@
 package transform
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
-
-	"github.com/kyleseneker/tinybpf/internal/diag"
 )
 
-// kernelHelpers lists all 211 BPF helper names from the kernel's
-// ___BPF_FUNC_MAPPER enum, indexed by helper ID.
+// kernelHelpers lists all BPF helper names from the kernel's ___BPF_FUNC_MAPPER enum, indexed by ID.
 var kernelHelpers = [212]string{
 	1:   "map_lookup_elem",
 	2:   "map_update_elem",
@@ -227,7 +223,7 @@ var kernelHelpers = [212]string{
 // knownHelpers maps BPF helper names to kernel helper IDs.
 var knownHelpers map[string]int64
 
-// init initializes the knownHelpers map.
+// init populates knownHelpers by converting kernel snake_case names to Go camelCase.
 func init() {
 	knownHelpers = make(map[string]int64, len(kernelHelpers))
 	for id, name := range kernelHelpers {
@@ -254,51 +250,8 @@ func snakeToCamel(s string) string {
 	return b.String()
 }
 
+// reHelperCall matches call instructions targeting main.bpf* helper wrappers.
 var reHelperCall = regexp.MustCompile(`call\s+(\w+)\s+@(main\.bpf\w+)\(([^)]*)\)`)
-
-// rewriteHelpers replaces Go-mangled BPF helper calls with
-// inttoptr(i64 HELPER_ID to ptr) calls and strips the trailing context pointer.
-func rewriteHelpers(lines []string) ([]string, error) {
-	for i, line := range lines {
-		if !strings.Contains(line, "@main.bpf") {
-			continue
-		}
-		loc := reHelperCall.FindStringSubmatchIndex(line)
-		if loc == nil {
-			if strings.Contains(line, "call") {
-				return nil, &diag.Error{
-					Stage:     diag.StageTransform,
-					Err:       fmt.Errorf("line references @main.bpf* but does not match expected call pattern"),
-					IRLine:    i + 1,
-					IRSnippet: irSnippet(lines, i, 2),
-					Hint:      "the IR call syntax may have changed; check LLVM/TinyGo version compatibility",
-				}
-			}
-			continue
-		}
-
-		retType := line[loc[2]:loc[3]]
-		funcName := line[loc[4]:loc[5]]
-		if strings.HasPrefix(funcName, "main.bpfCore") {
-			continue
-		}
-		helperID, ok := knownHelpers[funcName]
-		if !ok {
-			return nil, &diag.Error{
-				Stage:     diag.StageTransform,
-				Err:       fmt.Errorf("unknown BPF helper %q", funcName),
-				IRLine:    i + 1,
-				IRSnippet: irSnippet(lines, i, 2),
-				Hint:      "check spelling against the kernel's ___BPF_FUNC_MAPPER enum names",
-			}
-		}
-
-		args := stripTrailingUndef(strings.TrimSpace(line[loc[6]:loc[7]]))
-		replacement := fmt.Sprintf("call %s inttoptr (i64 %d to ptr)(%s)", retType, helperID, args)
-		lines[i] = line[:loc[0]] + replacement + line[loc[1]:]
-	}
-	return lines, nil
-}
 
 // stripTrailingUndef removes the TinyGo context pointer from a helper argument list.
 func stripTrailingUndef(args string) string {

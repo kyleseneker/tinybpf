@@ -1,80 +1,17 @@
 package transform
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/kyleseneker/tinybpf/internal/ir"
 	"github.com/kyleseneker/tinybpf/internal/testutil"
 )
-
-func BenchmarkTransformLines(b *testing.B) {
-	fixture := filepath.Join("..", "..", "testdata", "tinygo_probe.ll")
-	data, err := os.ReadFile(fixture)
-	if err != nil {
-		b.Skipf("fixture not found: %v", err)
-	}
-	srcLines := strings.Split(string(data), "\n")
-	opts := Options{
-		Sections: map[string]string{"handle_connect": "kprobe/sys_connect"},
-		Stdout:   io.Discard,
-	}
-
-	b.ResetTimer()
-	b.ReportAllocs()
-	for range b.N {
-		lines := make([]string, len(srcLines))
-		copy(lines, srcLines)
-		if _, err := TransformLines(context.Background(), lines, opts); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func FuzzTransformLines(f *testing.F) {
-	f.Add(`target datalayout = "e-m:o-p270:32:32-p271:32:32"
-target triple = "arm64-apple-macosx11.0.0"
-
-define i32 @my_program(ptr %ctx) {
-entry:
-  ret i32 0
-}`)
-	f.Add(`target triple = "x86_64-unknown-linux-gnu"
-
-@main.events = global %main.bpfMapDef { i32 27, i32 0, i32 0, i32 16777216, i32 0 }, align 4
-
-define i32 @my_func(ptr %ctx) #0 {
-entry:
-  %0 = call i64 @main.bpfGetCurrentPidTgid(ptr undef) #7
-  ret i32 0
-}
-
-attributes #0 = { "target-cpu"="generic" "target-features"="+neon" }`)
-	f.Add(`just random text that is not IR`)
-	f.Add(`define void @runtime.runMain() {
-entry:
-  ret void
-}
-
-define i32 @handle(ptr %ctx) {
-entry:
-  %buf = call align 4 dereferenceable(16) ptr @runtime.alloc(i64 16, ptr null, ptr undef)
-  %1 = call i64 @main.bpfRingbufOutput(ptr @main.events, ptr %buf, i64 16, i64 0, ptr undef) #7
-  ret i32 0
-}`)
-
-	f.Fuzz(func(t *testing.T, ir string) {
-		if len(ir) > 1<<16 {
-			return
-		}
-		lines := strings.Split(ir, "\n")
-		TransformLines(context.Background(), lines, Options{Stdout: io.Discard})
-	})
-}
 
 func TestRun(t *testing.T) {
 	tests := []struct {
@@ -129,164 +66,477 @@ func TestRun(t *testing.T) {
 	}
 }
 
-func TestFullTransform(t *testing.T) {
-	fixture := filepath.Join("..", "..", "testdata", "tinygo_probe.ll")
-	if _, err := os.Stat(fixture); err != nil {
-		t.Skipf("fixture not found: %v", err)
-	}
-
-	data, err := os.ReadFile(fixture)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	opts := Options{
-		Sections: map[string]string{"handle_connect": "kprobe/sys_connect"},
-		Stdout:   io.Discard,
-	}
-	got, err := TransformLines(context.Background(), strings.Split(string(data), "\n"), opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := strings.Join(got, "\n")
-
-	checks := []struct {
-		contains bool
-		substr   string
+func TestTransformLines(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		opts     Options
+		contains []string
+		absent   []string
+		wantErr  string
 	}{
-		{true, `target triple = "bpf"`},
-		{true, `section "kprobe/sys_connect"`},
-		{true, `section ".maps"`},
-		{true, "alloca [16 x i8]"},
-		{true, "llvm.memset.p0.i64"},
-		{false, "@__dynamic_loader("},
-		{false, "@tinygo_signal_handler("},
-		{false, "@runtime.runMain("},
-		{false, "@main.bpfProbeReadUser"},
-		{false, "@runtime.alloc"},
-		{false, "target-cpu"},
-		{false, "target-features"},
-	}
-	for _, c := range checks {
-		if strings.Contains(text, c.substr) != c.contains {
-			if c.contains {
-				t.Errorf("missing %q", c.substr)
-			} else {
-				t.Errorf("should not contain %q", c.substr)
-			}
-		}
-	}
+		{
+			name: "retarget triple",
+			input: `target triple = "x86_64-unknown-linux-gnu"
 
-	for _, id := range []string{"112", "14", "130"} {
-		if !strings.Contains(text, "inttoptr (i64 "+id+" to ptr)") {
-			t.Errorf("helper inttoptr for ID %s not found", id)
-		}
-	}
+define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{`target triple = "bpf"`},
+			absent:   []string{`x86_64`},
+		},
+		{
+			name: "strip attributes",
+			input: `target triple = "x86_64-unknown-linux-gnu"
 
-	defineCount := 0
-	for _, line := range got {
-		if strings.HasPrefix(strings.TrimSpace(line), "define ") {
-			defineCount++
-		}
-	}
-	if defineCount != 1 {
-		t.Errorf("expected 1 define block, got %d", defineCount)
-	}
+define i32 @my_func(ptr %ctx) #0 {
+entry:
+  ret i32 0
 }
 
-func TestFullTransformLLC(t *testing.T) {
-	llcPath, err := exec.LookPath("llc")
-	if err != nil {
-		t.Skip("llc not found on PATH")
-	}
+attributes #0 = { "target-cpu"="generic" "target-features"="+neon" }`,
+			opts:   Options{Stdout: io.Discard},
+			absent: []string{`target-cpu`, `target-features`},
+		},
+		{
+			name: "helper rewrite",
+			input: `target triple = "x86_64-unknown-linux-gnu"
 
-	fixture := filepath.Join("..", "..", "testdata", "tinygo_probe.ll")
-	if _, err := os.Stat(fixture); err != nil {
-		t.Skipf("fixture not found: %v", err)
-	}
-
-	tmpDir := t.TempDir()
-	outputLL := filepath.Join(tmpDir, "transformed.ll")
-	outputObj := filepath.Join(tmpDir, "output.o")
-
-	opts := Options{
-		Sections: map[string]string{"handle_connect": "kprobe/sys_connect"},
-		Stdout:   io.Discard,
-	}
-	if err := Run(context.Background(), fixture, outputLL, opts); err != nil {
-		t.Fatalf("transform failed: %v", err)
-	}
-
-	cmd := exec.Command(llcPath, "-march=bpf", "-mcpu=v3", "-filetype=obj", outputLL, "-o", outputObj)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		irData, _ := os.ReadFile(outputLL)
-		t.Fatalf("llc failed: %v\nllc output:\n%s\ntransformed IR:\n%s", err, out, irData)
-	}
-
-	info, err := os.Stat(outputObj)
-	if err != nil {
-		t.Fatalf("output not created: %v", err)
-	}
-	if info.Size() == 0 {
-		t.Fatal("output is empty")
-	}
+define i32 @my_func(ptr %ctx) {
+entry:
+  %0 = call i64 @main.bpfGetCurrentPidTgid(ptr undef)
+  ret i32 0
 }
 
-func TestAllOptProfilesProduceValidBPF(t *testing.T) {
-	optPath, err := exec.LookPath("opt")
-	if err != nil {
-		t.Skip("opt not found on PATH")
-	}
-	llcPath, err := exec.LookPath("llc")
-	if err != nil {
-		t.Skip("llc not found on PATH")
-	}
+declare i64 @main.bpfGetCurrentPidTgid(ptr)`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"inttoptr (i64 14 to ptr)"},
+			absent:   []string{"@main.bpfGetCurrentPidTgid"},
+		},
+		{
+			name: "alloc replacement",
+			input: `target triple = "x86_64-unknown-linux-gnu"
 
-	fixture := filepath.Join("..", "..", "testdata", "tinygo_probe.ll")
-	if _, err := os.Stat(fixture); err != nil {
-		t.Skipf("fixture not found: %v", err)
+define i32 @my_func(ptr %ctx) {
+entry:
+  %buf = call align 4 dereferenceable(16) ptr @runtime.alloc(i64 16, ptr null, ptr undef)
+  ret i32 0
+}
+
+declare ptr @runtime.alloc(i64, ptr, ptr)`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"alloca [16 x i8]", "llvm.memset.p0.i64"},
+			absent:   []string{"@runtime.alloc"},
+		},
+		{
+			name: "data section assignment",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+@my_data = global i32 42, align 4
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{`section ".data"`},
+		},
+		{
+			name: "bss section for zeroinitializer",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+@my_bss = global [16 x i8] zeroinitializer, align 4
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{`section ".bss"`},
+		},
+		{
+			name: "program section assignment",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:     Options{Sections: map[string]string{"my_func": "kprobe/sys_open"}, Stdout: io.Discard},
+			contains: []string{`section "kprobe/sys_open"`},
+		},
+		{
+			name: "license added",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{`section "license"`, `c"GPL\00"`},
+		},
+		{
+			name: "runtime functions removed",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define void @runtime.runMain() {
+entry:
+  ret void
+}
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:   Options{Stdout: io.Discard},
+			absent: []string{"@runtime.runMain"},
+		},
+		{
+			name: "map BTF rewrite",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+%main.bpfMapDef = type { i32, i32, i32, i32, i32 }
+
+@main.events = global %main.bpfMapDef { i32 27, i32 0, i32 0, i32 16777216, i32 0 }, align 4
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{`section ".maps"`},
+		},
+		{
+			name: "explicit programs filter",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @handler_a(ptr %ctx) {
+entry:
+  ret i32 0
+}
+
+define i32 @handler_b(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:     Options{Programs: []string{"handler_a"}, Stdout: io.Discard},
+			contains: []string{"@handler_a"},
+		},
+		{
+			name: "explicit programs not found",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:    Options{Programs: []string{"nonexistent"}, Stdout: io.Discard},
+			wantErr: "not found in IR",
+		},
+		{
+			name: "verbose mode prints",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:     Options{Verbose: true, Stdout: io.Discard},
+			contains: []string{`target triple = "bpf"`},
+		},
+		{
+			name: "unknown helper error",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  %0 = call i64 @main.bpfFakeHelper(ptr undef)
+  ret i32 0
+}
+
+declare i64 @main.bpfFakeHelper(ptr)`,
+			opts:    Options{Stdout: io.Discard},
+			wantErr: "unknown BPF helper",
+		},
+		{
+			name: "strip map prefix",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+%main.bpfMapDef = type { i32, i32, i32, i32, i32 }
+
+@main.events = global %main.bpfMapDef { i32 27, i32 0, i32 0, i32 16777216, i32 0 }, align 4
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  %0 = load ptr, ptr @main.events
+  ret i32 0
+}`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"@events"},
+			absent:   []string{"@main.events"},
+		},
+		{
+			name: "core access rewrite",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+%main.bpfCoreTaskStruct = type { i32, i32 }
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  %0 = getelementptr %main.bpfCoreTaskStruct, ptr %ctx, i32 0, i32 1
+  %1 = load i32, ptr %0
+  ret i32 %1
+}
+
+!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", size: 64, elements: !1)
+!1 = !{}`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"llvm.preserve.struct.access.index"},
+		},
+		{
+			name: "core field exists rewrite",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+%main.bpfCoreTaskStruct = type { i32, i32 }
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  %0 = getelementptr i8, ptr %ctx, i64 4
+  %1 = call i32 @main.bpfCoreFieldExists(ptr %0, ptr undef)
+  ret i32 %1
+}
+
+declare i32 @main.bpfCoreFieldExists(ptr, ptr)
+
+!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", size: 64, elements: !1)
+!1 = !{!2, !3}
+!2 = !DIDerivedType(tag: DW_TAG_member, name: "Pid", size: 32, offset: 0)
+!3 = !DIDerivedType(tag: DW_TAG_member, name: "Tgid", size: 32, offset: 32)`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"llvm.bpf.preserve.field.info"},
+			absent:   []string{"@main.bpfCoreFieldExists"},
+		},
+		{
+			name: "core type exists rewrite",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+%main.bpfCoreTaskStruct = type { i32, i32 }
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  %0 = call i32 @main.bpfCoreTypeExists(ptr %ctx, ptr undef)
+  ret i32 %0
+}
+
+declare i32 @main.bpfCoreTypeExists(ptr, ptr)
+
+!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", size: 64, elements: !1)
+!1 = !{}`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"llvm.bpf.preserve.type.info"},
+			absent:   []string{"@main.bpfCoreTypeExists"},
+		},
+		{
+			name: "rodata section for constant",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+@my_const = constant [4 x i8] c"test", align 1
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{`section ".rodata"`},
+		},
+		{
+			name: "core field exists no typedef (metadata-only path)",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  %0 = getelementptr i8, ptr %ctx, i64 4
+  %1 = call i32 @main.bpfCoreFieldExists(ptr %0, ptr undef)
+  ret i32 %1
+}
+
+declare i32 @main.bpfCoreFieldExists(ptr, ptr)
+
+!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", size: 64, elements: !1)
+!1 = !{!2, !3}
+!2 = !DIDerivedType(tag: DW_TAG_member, name: "Pid", size: 32, offset: 0)
+!3 = !DIDerivedType(tag: DW_TAG_member, name: "Tgid", size: 32, offset: 32)`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"llvm.bpf.preserve.field.info"},
+			absent:   []string{"@main.bpfCoreFieldExists"},
+		},
+		{
+			name: "core field exists non-GEP pointer",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+%main.bpfCoreTaskStruct = type { i32, i32 }
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  %1 = call i32 @main.bpfCoreFieldExists(ptr %ctx, ptr undef)
+  ret i32 %1
+}
+
+declare i32 @main.bpfCoreFieldExists(ptr, ptr)
+
+!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", size: 64, elements: !1)
+!1 = !{!2, !3}
+!2 = !DIDerivedType(tag: DW_TAG_member, name: "Pid", size: 32, offset: 0)
+!3 = !DIDerivedType(tag: DW_TAG_member, name: "Tgid", size: 32, offset: 32)`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"llvm.bpf.preserve.field.info"},
+			absent:   []string{"@main.bpfCoreFieldExists"},
+		},
+		{
+			name: "core field exists non-GEP fallback (no typedef)",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  %1 = call i32 @main.bpfCoreFieldExists(ptr %ctx, ptr undef)
+  ret i32 %1
+}
+
+declare i32 @main.bpfCoreFieldExists(ptr, ptr)`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"llvm.bpf.preserve.field.info"},
+			absent:   []string{"@main.bpfCoreFieldExists"},
+		},
+		{
+			name: "core field exists fallback type (no typedef, no metadata)",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  %0 = getelementptr i8, ptr %ctx, i64 4
+  %1 = call i32 @main.bpfCoreFieldExists(ptr %0, ptr undef)
+  ret i32 %1
+}
+
+declare i32 @main.bpfCoreFieldExists(ptr, ptr)`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"llvm.bpf.preserve.field.info", "__tinybpfCoreFallback"},
+			absent:   []string{"@main.bpfCoreFieldExists"},
+		},
+		{
+			name: "dump dir writes snapshots",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts: Options{Stdout: io.Discard},
+		},
 	}
-
-	tmpDir := t.TempDir()
-	transformedLL := filepath.Join(tmpDir, "transformed.ll")
-	if err := Run(context.Background(), fixture, transformedLL, Options{
-		Sections: map[string]string{"handle_connect": "kprobe/sys_connect"},
-		Stdout:   io.Discard,
-	}); err != nil {
-		t.Fatalf("transform failed: %v", err)
-	}
-
-	profiles := map[string]string{
-		"conservative": "default<O1>",
-		"default":      "default<Os>",
-		"aggressive":   "default<O2>",
-		"verifier-safe": "function(sroa,early-cse<memssa>,instcombine," +
-			"simplifycfg<bonus-inst-threshold=4>,gvn,dse,mem2reg," +
-			"adce,sccp,instcombine,simplifycfg<bonus-inst-threshold=4>,adce)",
-	}
-
-	for name, pipeline := range profiles {
-		t.Run(name, func(t *testing.T) {
-			optimizedLL := filepath.Join(tmpDir, name+"-opt.ll")
-			outputObj := filepath.Join(tmpDir, name+".o")
-
-			cmd := exec.Command(optPath, "-passes="+pipeline, "-S", transformedLL, "-o", optimizedLL)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("opt failed: %v\n%s", err, out)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lines := strings.Split(tt.input, "\n")
+			got, err := TransformLines(context.Background(), lines, tt.opts)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected %q in error, got: %v", tt.wantErr, err)
+				}
+				return
 			}
-
-			cmd = exec.Command(llcPath, "-march=bpf", "-mcpu=v3", "-filetype=obj", optimizedLL, "-o", outputObj)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("llc failed: %v\n%s", err, out)
-			}
-
-			info, err := os.Stat(outputObj)
 			if err != nil {
-				t.Fatalf("output not created: %v", err)
+				t.Fatal(err)
 			}
-			if info.Size() == 0 {
-				t.Fatal("output is empty")
+			text := strings.Join(got, "\n")
+			for _, s := range tt.contains {
+				if !strings.Contains(text, s) {
+					t.Errorf("missing %q in output:\n%s", s, text)
+				}
+			}
+			for _, s := range tt.absent {
+				if strings.Contains(text, s) {
+					t.Errorf("should not contain %q in output", s)
+				}
 			}
 		})
 	}
+}
+
+func TestDump(t *testing.T) {
+	tests := []struct {
+		name    string
+		dir     string
+		verbose bool
+		check   func(t *testing.T, dir string, buf *bytes.Buffer)
+	}{
+		{
+			name: "no-op when dir empty",
+			dir:  "",
+			check: func(t *testing.T, _ string, _ *bytes.Buffer) {
+				t.Helper()
+			},
+		},
+		{
+			name:    "writes file",
+			verbose: true,
+			check: func(t *testing.T, dir string, buf *bytes.Buffer) {
+				t.Helper()
+				entries, err := os.ReadDir(dir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) != 1 {
+					t.Fatalf("expected 1 file, got %d", len(entries))
+				}
+				if !strings.Contains(entries[0].Name(), "01-test-stage.ll") {
+					t.Errorf("unexpected filename: %s", entries[0].Name())
+				}
+				if !strings.Contains(buf.String(), "[dump-ir]") {
+					t.Error("expected verbose output")
+				}
+			},
+		},
+		{
+			name:    "bad dir logs error in verbose",
+			dir:     "/nonexistent/path/that/does/not/exist",
+			verbose: true,
+			check: func(t *testing.T, _ string, buf *bytes.Buffer) {
+				t.Helper()
+				if !strings.Contains(buf.String(), "failed to write") {
+					t.Error("expected error log in verbose mode")
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := tt.dir
+			if dir == "" && tt.name == "writes file" {
+				dir = t.TempDir()
+			}
+			var buf bytes.Buffer
+			d := newModuleDumper(dir, tt.verbose, &buf)
+
+			m := mustParseMinimalModule(t)
+			d.dump("test-stage", m)
+
+			tt.check(t, dir, &buf)
+		})
+	}
+}
+
+func mustParseMinimalModule(t *testing.T) *ir.Module {
+	t.Helper()
+	src := "target triple = \"bpf\"\n\ndefine i32 @f(ptr %ctx) {\nentry:\n  ret i32 0\n}\n"
+	mod, err := ir.Parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return mod
 }

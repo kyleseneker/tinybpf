@@ -1,7 +1,6 @@
 // Package transform converts TinyGo-emitted host-targeted LLVM IR into
 // BPF-compatible IR suitable for llc -march=bpf. Transformations operate on
-// a structured AST (internal/ir) with line-based fallbacks for complex stages
-// that have not yet been fully migrated.
+// a structured AST (internal/ir).
 package transform
 
 import (
@@ -13,6 +12,15 @@ import (
 
 	"github.com/kyleseneker/tinybpf/internal/ir"
 )
+
+// Options configures the IR transformation pass.
+type Options struct {
+	Programs []string
+	Sections map[string]string
+	Verbose  bool
+	Stdout   io.Writer
+	DumpDir  string
+}
 
 // Run reads a .ll file, applies all transformations, and writes the result.
 func Run(ctx context.Context, inputLL, outputLL string, opts Options) error {
@@ -52,7 +60,6 @@ func TransformModule(ctx context.Context, m *ir.Module, opts Options) error {
 }
 
 // TransformLines applies the full IR transformation pipeline to text lines.
-// This is a compatibility wrapper that routes through the AST-based pipeline.
 func TransformLines(ctx context.Context, lines []string, opts Options) ([]string, error) {
 	module, err := ir.Parse(strings.Join(lines, "\n"))
 	if err != nil {
@@ -72,10 +79,12 @@ type moduleDumper struct {
 	seq     int
 }
 
+// newModuleDumper returns a dumper that writes snapshots to dir when non-empty.
 func newModuleDumper(dir string, verbose bool, out io.Writer) *moduleDumper {
 	return &moduleDumper{dir: dir, verbose: verbose, out: out}
 }
 
+// dump writes a numbered IR snapshot for the given stage to the dump directory.
 func (d *moduleDumper) dump(stage string, m *ir.Module) {
 	if d.dir == "" {
 		return
