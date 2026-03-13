@@ -69,7 +69,7 @@ CO-RE requires a kernel with BTF support (CONFIG_DEBUG_INFO_BTF=y), which is ena
 
 | Feature | Flag | Description |
 |---------|------|-------------|
-| IR stage dump | `--dump-ir` | Writes a numbered `.ll` file after each of the 15 transform stages |
+| IR stage dump | `--dump-ir` | Writes a numbered `.ll` file after each transform pass |
 | Verbose logging | `-v` / `--verbose` | Stage names, commands, and timing |
 | Intermediate files | `--keep-temp` | Preserves the temp directory with all artifacts |
 | Toolchain check | `tinybpf doctor` | Checks LLVM, TinyGo, and pahole availability and versions |

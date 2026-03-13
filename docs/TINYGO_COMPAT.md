@@ -616,7 +616,7 @@ C with `libbpf`/`clang` has the broadest ecosystem. `tinybpf` trades that maturi
 Not directly — BPF helpers are kernel-only symbols. Test logic in pure Go with `go test`, then integration-test the compiled `.o` with a loader on a real kernel or VM.
 
 **What does `tinybpf` actually do to the IR?**
-It runs a 15-step transformation: retarget to BPF, strip runtime, rewrite helpers, CO-RE transforms (field access, field/type existence checks, field name mapping), assign data and program sections, replace allocations, inject metadata. See [Architecture](ARCHITECTURE.md) for the full breakdown.
+It parses the IR into an AST and runs an 8-pass transformation: retarget and strip attributes, extract programs, replace allocations, rewrite helpers, CO-RE transforms (field access, field/type existence checks, field name mapping), assign sections, map BTF encoding, and finalize (license injection and cleanup). See [Architecture](ARCHITECTURE.md) for the full breakdown.
 
 ## Further reading
 

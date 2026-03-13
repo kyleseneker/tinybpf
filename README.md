@@ -202,7 +202,7 @@ These flags are accepted by both `build` and `link`.
 | `--btf` | `false` | Inject BTF via `pahole` |
 | `--verbose`, `-v` | `false` | Print each pipeline stage |
 | `--timeout` | `30s` | Per-stage timeout |
-| `--dump-ir` | `false` | Write intermediate IR after each transform stage |
+| `--dump-ir` | `false` | Write intermediate IR after each transform pass |
 | `--program-type` | | Validate sections match a BPF program type (e.g. `kprobe`, `xdp`) |
 | `--keep-temp` | `false` | Preserve intermediate files |
 | `--tmpdir` | | Directory for intermediate files |
@@ -225,7 +225,7 @@ These flags are accepted by `build`, `link`, and `doctor`.
 | Document | Description |
 |----------|-------------|
 | [Writing Go for eBPF](docs/TINYGO_COMPAT.md) | Language constraints, BPF concepts, helpers, patterns, and FAQ |
-| [Architecture](docs/ARCHITECTURE.md) | Pipeline design and the 15-step IR transformation |
+| [Architecture](docs/ARCHITECTURE.md) | Pipeline design and the 8-pass IR transformation |
 | [Support Matrix](docs/SUPPORT_MATRIX.md) | Tested toolchain versions and platforms |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Setup issues, pipeline errors, and verifier debugging |
 | [Contributing](CONTRIBUTING.md) | Development setup, testing, and PR process |

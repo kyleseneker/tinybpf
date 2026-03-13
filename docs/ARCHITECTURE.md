@@ -8,7 +8,7 @@
 graph TD
     A[".ll / .bc / .o / .a"] --> B["Normalize<br>expand archives, extract bitcode"]
     B --> C["llvm-link<br>merge into single IR module"]
-    C --> D["IR Transform<br>15-step rewrite: retarget, strip runtime,<br>rewrite helpers, CO-RE transforms, assign sections, inject metadata"]
+    C --> D["IR Transform<br>8-pass AST rewrite: retarget, strip runtime,<br>rewrite helpers, CO-RE transforms, assign sections, inject metadata"]
     D --> E["opt<br>apply optimization pass pipeline"]
     E --> F["llc -march=bpf<br>BPF code generation"]
     F --> G{"BTF enabled?"}
@@ -24,8 +24,9 @@ graph TD
 cmd/tinybpf/        CLI entrypoint
 internal/
   cli/                     Flag parsing and subcommand dispatch
+  ir/                      LLVM IR parser, AST, serializer, and index
   pipeline/                Orchestration, input normalization, BTF injection
-  transform/               TinyGo IR -> BPF IR rewriting (15 transform steps)
+  transform/               TinyGo IR -> BPF IR rewriting
   llvm/                    Tool discovery, optimization profiles, process execution, config loading
   elfcheck/                Post-link ELF validation
   diag/                    Structured error types with stage context and hints
@@ -47,11 +48,11 @@ examples/
 
 The linker drives standalone LLVM tools (`llvm-link`, `opt`, `llc`) rather than linking against `libLLVM`. This avoids a CGo dependency on a specific LLVM version. Users install whichever LLVM matches their TinyGo, and the Go binary stays small, portable, and easy to cross-compile.
 
-### Text-based IR transformation
+### AST-based IR transformation
 
-The `internal/transform` package operates on LLVM IR text (`.ll` files) using line-level string parsing and rewriting. Hot paths use hand-written scanners instead of compiled regular expressions, keeping the transform pipeline allocation-light and fast. This avoids a CGo/libLLVM dependency, works across LLVM versions that produce text IR, and is straightforward to test and debug.
+The `internal/ir` package provides a lightweight parser that builds a structured AST from LLVM IR text, covering the subset of IR that TinyGo emits: type definitions, globals, declares, functions (with basic blocks and instructions), attribute groups, and metadata nodes. The `internal/transform` package then operates on this AST, modifying nodes directly rather than manipulating raw text lines. After all transforms complete, the AST is serialized back to IR text for the LLVM optimization and codegen stages.
 
-The tradeoff is reliance on textual patterns rather than a semantic AST. In practice, TinyGo's IR output is consistent and well-characterized, making this approach reliable. The fail-loud contract (below) mitigates the inherent fragility of this approach.
+Unrecognized IR constructs are preserved verbatim through `Raw` fields on every AST node, guaranteeing faithful round-trip serialization (`Serialize(Parse(input)) == input` for unmodified modules). This avoids a CGo/libLLVM dependency, works across LLVM versions, and gives transforms structured access to functions, instructions, globals, and metadata without relying on fragile textual patterns.
 
 ### Fail-loud on partial match
 
@@ -106,7 +107,7 @@ The `--keep-temp` and `--tmpdir` flags preserve every intermediate file. When di
 
 ### IR stage dump
 
-The `--dump-ir` flag writes a snapshot of the IR after each of the 15 transform stages into a `dump-ir/` subdirectory of the temp workspace. Files are numbered sequentially (`01-retarget.ll`, `02-strip-attributes.ll`, etc.), making it easy to diff consecutive stages and isolate which transform introduced a problem.
+The `--dump-ir` flag writes a snapshot of the IR after each transform pass into a `dump-ir/` subdirectory of the temp workspace. Files are numbered sequentially (`01-module-rewrite.ll`, `02-extract-programs.ll`, etc.), making it easy to diff consecutive passes and isolate which transform introduced a problem.
 
 ### Enriched error context
 
@@ -114,51 +115,36 @@ Transform-stage errors include the IR line number and a source snippet surroundi
 
 ## IR transformation pipeline
 
-TinyGo emits valid LLVM IR, but it targets the host architecture and carries Go runtime artifacts that the BPF verifier would reject. The 15-step transformation bridges this gap, including automatic CO-RE (Compile Once – Run Everywhere) support for `bpfCore`-prefixed struct types:
+TinyGo emits valid LLVM IR, but it targets the host architecture and carries Go runtime artifacts that the BPF verifier would reject. The 8-pass transformation bridges this gap, including automatic CO-RE (Compile Once – Run Everywhere) support for `bpfCore`-prefixed struct types. Each pass operates on the parsed AST and may combine several logically related rewrites into a single traversal:
 
-- **Steps 1–2** (retarget, strip attrs) make the IR architecture-neutral so `llc -march=bpf` can codegen it. Host-specific data layouts, triples, and CPU feature attributes would cause LLVM errors or wrong-architecture code.
-- **Steps 3–4** (extract programs, replace alloc) strip the TinyGo runtime and eliminate heap allocation. The BPF VM has no heap and no scheduler — any runtime code left in the module would fail verification.
-- **Step 5** (rewrite helpers) translates Go-style BPF helper declarations into the integer-ID calling convention the kernel expects (211 helpers supported (complete kernel coverage)). Without this, the verifier sees unknown function calls and rejects the program.
-- **Steps 6–7** (rewrite CO-RE access, rewrite CO-RE exists) replaces getelementptr instructions on bpfCore-prefixed structs with `llvm.preserve.struct.access.index` intrinsics, and rewrites `bpfCoreFieldExists`/`bpfCoreTypeExists` calls to `llvm.bpf.preserve.field.info`/`llvm.bpf.preserve.type.info` intrinsics for compile-time relocation markers. These are no-ops when the program has no `bpfCore*` types.
-- **Step 8** (assign data sections) places user-defined global variables into `.data`, `.rodata`, or `.bss` sections based on mutability and initialization, enabling BPF global variable support.
-- **Steps 9–12** (program sections, map prefix, map BTF, sanitize BTF) inject the ELF metadata that BPF loaders (`cilium/ebpf`, `libbpf`) require: section names for program type dispatch, BTF-compatible map encoding, and C-style symbol names.
-- **Step 13** (sanitize CO-RE fields) converts Go CamelCase field names in bpfCore struct metadata to kernel-compatible snake_case names so CO-RE relocations match the running kernel's BTF. No-op when no `bpfCore*` types are present.
-- **Steps 14–15** (license, cleanup) add the GPL license section (required by the kernel for programs using GPL-only helpers) and remove dead IR to keep the output minimal.
+- **Pass 1** (module-rewrite) makes the IR architecture-neutral so `llc -march=bpf` can codegen it. Retargets the data layout and triple, and strips host-specific CPU feature attributes.
+- **Passes 2–3** (extract-programs, replace-alloc) strip the TinyGo runtime and eliminate heap allocation. The BPF VM has no heap and no scheduler — any runtime code left in the module would fail verification.
+- **Pass 4** (rewrite-helpers) translates Go-style BPF helper declarations into the integer-ID calling convention the kernel expects (211 helpers supported (complete kernel coverage)). Without this, the verifier sees unknown function calls and rejects the program.
+- **Pass 5** (core) handles all CO-RE transforms in one pass: replaces getelementptr instructions on bpfCore-prefixed structs with `llvm.preserve.struct.access.index` intrinsics, rewrites `bpfCoreFieldExists`/`bpfCoreTypeExists` calls to preserve intrinsics, and converts Go CamelCase field names to kernel-compatible snake_case. No-op when the program has no `bpfCore*` types.
+- **Pass 6** (sections) assigns ELF sections to programs and data: places user-defined globals into `.data`, `.rodata`, or `.bss` and applies BPF program section attributes to functions.
+- **Pass 7** (map-btf) handles all map-related transforms: strips Go package prefixes from map globals, transforms `bpfMapDef` globals and DWARF metadata to libbpf-compatible BTF encoding, and sanitizes Go-style type names to C conventions.
+- **Pass 8** (finalize) adds the GPL license section and removes dead IR (orphaned declares, unreferenced globals, stale attribute groups).
 
-Each step takes a slice of IR text lines and returns a modified slice.
+Each pass receives a parsed `*ir.Module` and modifies the AST in place.
 
 ```mermaid
 graph LR
-    A["retarget"] --> B["strip attrs"]
-    B --> C["extract programs"]
-    C --> D["replace alloc"]
-    D --> E["rewrite helpers"]
-    E --> E2["rewrite CO-RE access"]
-    E2 --> E3["rewrite CO-RE exists"]
-    E3 --> F["assign data sections"]
-    F --> G["assign program sections"]
-    G --> H["strip map prefix"]
-    H --> I["rewrite map BTF"]
-    I --> J["sanitize BTF"]
-    J --> J2["sanitize CO-RE fields"]
-    J2 --> K["add license"]
-    K --> L["cleanup"]
+    A["module-rewrite"] --> B["extract-programs"]
+    B --> C["replace-alloc"]
+    C --> D["rewrite-helpers"]
+    D --> E["core"]
+    E --> F["sections"]
+    F --> G["map-btf"]
+    G --> H["finalize"]
 ```
 
-| Step | Operation | Purpose |
-|------|-----------|---------|
-| 1 | **Retarget** | Replace `target datalayout` and `target triple` with BPF values |
-| 2 | **Strip attributes** | Remove host-specific function attributes (`target-cpu`, `target-features`, `allockind`, etc.) |
-| 3 | **Extract programs** | Keep only user program functions and their dependencies; discard TinyGo runtime (debug metadata preserved for BTF) |
-| 4 | **Replace alloc** | Convert `@runtime.alloc` calls to entry-block `alloca` + `llvm.memset` |
-| 5 | **Rewrite helpers** | Convert mangled `@main.bpfXxx(args, ptr undef)` calls to `inttoptr (i64 ID to ptr)(args)` |
-| 6 | **Rewrite CO-RE access** | Replace getelementptr on bpfCore-prefixed structs with `llvm.preserve.struct.access.index` intrinsics for portable field offsets (no-op without `bpfCore*` types) |
-| 7 | **Rewrite CO-RE exists** | Rewrite `bpfCoreFieldExists`/`bpfCoreTypeExists` to `llvm.bpf.preserve.field.info`/`llvm.bpf.preserve.type.info` intrinsics (no-op without calls) |
-| 8 | **Assign data sections** | Place user-defined globals into `.data`, `.rodata`, or `.bss` based on mutability and initialization |
-| 9 | **Assign program sections** | Apply BPF program section attributes to functions and `.maps` to map globals; promote `internal` linkage to global |
-| 10 | **Strip map prefix** | Rename Go package-qualified map globals (`@main.events` → `@events`) to match the C BPF naming convention |
-| 11 | **Rewrite map BTF** | Transform `bpfMapDef` globals and DWARF metadata to libbpf-compatible BTF encoding; supports 5-field standard, 6-field (with pinning), and 7-field (map-in-map) layouts, zeroinitializer maps, and multiple maps per module |
-| 12 | **Sanitize BTF names** | Replace `.` with `_` in Go-style type names; strip names from `DW_TAG_pointer_type` nodes |
-| 13 | **Sanitize CO-RE fields** | Convert Go CamelCase field names in bpfCore struct metadata to kernel-compatible snake_case (`Pid` → `pid`, `LoginUid` → `login_uid`); rename struct types (`main_bpfCoreTaskStruct` → `task_struct`). No-op without `bpfCore*` types |
-| 14 | **Add license** | Inject `license` section with `"GPL"` if not present |
-| 15 | **Cleanup** | Remove orphaned declares, unreferenced globals, stale attribute groups, and leftover comments |
+| Pass | Name | Consolidates | Purpose |
+|------|------|--------------|---------|
+| 1 | **module-rewrite** | retarget, strip-attributes | Replace `target datalayout` and `target triple` with BPF values; remove host-specific function attributes (`target-cpu`, `target-features`, `allockind`, etc.) |
+| 2 | **extract-programs** | — | Keep only user program functions and their dependencies; discard TinyGo runtime (debug metadata preserved for BTF) |
+| 3 | **replace-alloc** | — | Convert `@runtime.alloc` calls to entry-block `alloca` + `llvm.memset` |
+| 4 | **rewrite-helpers** | — | Convert mangled `@main.bpfXxx(args, ptr undef)` calls to `inttoptr (i64 ID to ptr)(args)` |
+| 5 | **core** | rewrite-core-access, rewrite-core-exists, sanitize-core-fields | Replace getelementptr on bpfCore structs with preserve intrinsics; rewrite field/type existence calls; convert CamelCase metadata field names to snake_case (no-op without `bpfCore*` types) |
+| 6 | **sections** | assign-data-sections, assign-program-sections | Place user-defined globals into `.data`/`.rodata`/`.bss`; apply BPF section attributes to functions and `.maps` to map globals; promote `internal` linkage to global |
+| 7 | **map-btf** | strip-map-prefix, rewrite-map-btf, sanitize-btf-names | Rename package-qualified map globals (`@main.events` → `@events`); transform `bpfMapDef` globals to libbpf-compatible BTF encoding; replace `.` with `_` in type names |
+| 8 | **finalize** | add-license, cleanup | Inject `license` section with `"GPL"` if not present; remove orphaned declares, unreferenced globals, and stale attribute groups |
