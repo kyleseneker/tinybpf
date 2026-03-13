@@ -1,0 +1,161 @@
+package ir
+
+import "strings"
+
+// parseMetadataNode parses a numbered metadata definition like:
+//
+//	!0 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfMapDef", ...)
+//	!1 = !{!2, !3}
+//	!2 = distinct !DISubprogram(...)
+func parseMetadataNode(line, trimmed string, id int) *MetadataNode {
+	mn := &MetadataNode{
+		ID:  id,
+		Raw: line,
+	}
+
+	eqIdx := strings.IndexByte(trimmed, '=')
+	if eqIdx < 0 {
+		return mn
+	}
+	rhs := strings.TrimSpace(trimmed[eqIdx+1:])
+
+	// Skip "distinct" prefix
+	if strings.HasPrefix(rhs, "distinct ") {
+		rhs = strings.TrimSpace(rhs[9:])
+	}
+
+	if strings.HasPrefix(rhs, "!{") {
+		mn.Tuple = parseTupleRefs(rhs)
+		return mn
+	}
+
+	if strings.HasPrefix(rhs, "!DI") || strings.HasPrefix(rhs, "!DW") {
+		parenIdx := strings.IndexByte(rhs, '(')
+		if parenIdx > 1 {
+			mn.Kind = rhs[1:parenIdx]
+		}
+		mn.Fields = parseDIFields(rhs)
+	}
+
+	return mn
+}
+
+// parseNamedMetadata parses a named metadata node like:
+//
+//	!llvm.dbg.cu = !{!0}
+//	!llvm.module.flags = !{!1, !2}
+func parseNamedMetadata(line, trimmed string) *NamedMetadata {
+	nm := &NamedMetadata{Raw: line}
+	eqIdx := strings.IndexByte(trimmed, '=')
+	if eqIdx < 0 {
+		return nm
+	}
+	nm.Name = strings.TrimSpace(trimmed[1:eqIdx])
+	rhs := strings.TrimSpace(trimmed[eqIdx+1:])
+	if strings.HasPrefix(rhs, "!{") {
+		nm.Refs = parseTupleRefsRaw(rhs)
+	}
+	return nm
+}
+
+// parseTupleRefs extracts metadata references from "!{!0, !1, !2}".
+func parseTupleRefs(s string) []string {
+	inner := extractBraced(s, '{', '}')
+	if inner == "" {
+		return nil
+	}
+	parts := strings.Split(inner, ",")
+	var refs []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			refs = append(refs, p)
+		}
+	}
+	return refs
+}
+
+func parseTupleRefsRaw(s string) []string {
+	return parseTupleRefs(s)
+}
+
+// parseDIFields extracts key-value pairs from a DI metadata node.
+// e.g. !DICompositeType(tag: DW_TAG_structure_type, name: "foo", size: 64)
+func parseDIFields(s string) map[string]string {
+	parenIdx := strings.IndexByte(s, '(')
+	if parenIdx < 0 {
+		return nil
+	}
+	closeIdx := strings.LastIndexByte(s, ')')
+	if closeIdx <= parenIdx {
+		return nil
+	}
+	body := s[parenIdx+1 : closeIdx]
+	return splitDIKeyValues(body)
+}
+
+// splitDIKeyValues splits "tag: DW_TAG_member, name: \"foo\", size: 32"
+// into a key-value map, respecting nested quotes and metadata refs.
+func splitDIKeyValues(body string) map[string]string {
+	fields := make(map[string]string)
+	kvPairs := splitDIPairs(body)
+	for _, kv := range kvPairs {
+		colonIdx := strings.IndexByte(kv, ':')
+		if colonIdx <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(kv[:colonIdx])
+		val := strings.TrimSpace(kv[colonIdx+1:])
+		if strings.HasPrefix(val, `"`) && strings.HasSuffix(val, `"`) && len(val) >= 2 {
+			val = val[1 : len(val)-1]
+		}
+		fields[key] = val
+	}
+	return fields
+}
+
+// splitDIPairs splits on commas, respecting nested structures like !{...}
+// and quoted strings.
+func splitDIPairs(body string) []string {
+	var pairs []string
+	depth := 0
+	inQuote := false
+	start := 0
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if c == '"' && (i == 0 || body[i-1] != '\\') {
+			inQuote = !inQuote
+			continue
+		}
+		if inQuote {
+			continue
+		}
+		switch c {
+		case '(', '{':
+			depth++
+		case ')', '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				pairs = append(pairs, strings.TrimSpace(body[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	if f := strings.TrimSpace(body[start:]); f != "" {
+		pairs = append(pairs, f)
+	}
+	return pairs
+}
+
+func extractBraced(s string, open, close byte) string {
+	openIdx := strings.IndexByte(s, open)
+	if openIdx < 0 {
+		return ""
+	}
+	closeIdx := strings.LastIndexByte(s, close)
+	if closeIdx <= openIdx {
+		return ""
+	}
+	return s[openIdx+1 : closeIdx]
+}
