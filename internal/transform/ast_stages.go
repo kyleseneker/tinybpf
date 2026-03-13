@@ -162,8 +162,7 @@ func markGlobalRemoved(m *ir.Module, g *ir.Global) {
 	}
 }
 
-func replaceAllocModule(m *ir.Module, ) error {
-	// Fall back to line-based for this complex transform
+func replaceAllocModule(m *ir.Module) error {
 	result, err := runLineStage(m, replaceAlloc)
 	if err != nil {
 		return err
@@ -173,11 +172,36 @@ func replaceAllocModule(m *ir.Module, ) error {
 }
 
 func rewriteHelpersModule(m *ir.Module) error {
-	result, err := runLineStage(m, rewriteHelpers)
-	if err != nil {
-		return err
+	for _, fn := range m.Functions {
+		if fn.Removed {
+			continue
+		}
+		for i, bline := range fn.BodyRaw {
+			if !strings.Contains(bline, "@main.bpf") {
+				continue
+			}
+			loc := reHelperCall.FindStringSubmatchIndex(bline)
+			if loc == nil {
+				if strings.Contains(bline, "call") {
+					return fmt.Errorf("line references @main.bpf* but does not match expected call pattern: %s",
+						strings.TrimSpace(bline))
+				}
+				continue
+			}
+			retType := bline[loc[2]:loc[3]]
+			funcName := bline[loc[4]:loc[5]]
+			if strings.HasPrefix(funcName, "main.bpfCore") {
+				continue
+			}
+			helperID, ok := knownHelpers[funcName]
+			if !ok {
+				return fmt.Errorf("unknown BPF helper %q", funcName)
+			}
+			args := stripTrailingUndef(strings.TrimSpace(bline[loc[6]:loc[7]]))
+			replacement := fmt.Sprintf("call %s inttoptr (i64 %d to ptr)(%s)", retType, helperID, args)
+			fn.BodyRaw[i] = bline[:loc[0]] + replacement + bline[loc[1]:]
+		}
 	}
-	*m = *result
 	return nil
 }
 
@@ -234,22 +258,94 @@ func classifyGlobalSectionFromAST(g *ir.Global) string {
 }
 
 func assignProgramSectionsModule(m *ir.Module, sections map[string]string) error {
-	result, err := runLineStage(m, func(lines []string) ([]string, error) {
-		return assignProgramSections(lines, sections)
-	})
-	if err != nil {
-		return err
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if e.Removed {
+			continue
+		}
+		if e.Kind == ir.TopFunction && e.Function != nil && !e.Function.Removed {
+			fn := e.Function
+			sec := ""
+			if sections != nil {
+				sec = sections[fn.Name]
+			}
+			if sec == "" {
+				sec = fn.Name
+			}
+			if !strings.Contains(fn.Raw, " section ") {
+				fn.Raw = insertSection(fn.Raw, sec)
+			}
+		}
+		if e.Kind == ir.TopGlobal && e.Global != nil && strings.Contains(e.Raw, "bpfMapDef") {
+			if strings.Contains(e.Raw, " internal ") {
+				e.Raw = strings.Replace(e.Raw, " internal ", " ", 1)
+			}
+			if !strings.Contains(e.Raw, " section ") {
+				e.Raw = insertSectionAttr(e.Raw, ".maps")
+			}
+		}
 	}
-	*m = *result
 	return nil
 }
 
 func stripMapPrefixModule(m *ir.Module) error {
-	result, err := runLineStage(m, stripMapPrefix)
-	if err != nil {
-		return err
+	type rename struct {
+		oldRef string
+		newRef string
 	}
-	*m = *result
+	var renames []rename
+
+	for _, e := range m.Entries {
+		if e.Removed || e.Kind != ir.TopGlobal || e.Global == nil {
+			continue
+		}
+		if !strings.Contains(e.Raw, `section ".maps"`) {
+			continue
+		}
+		name := e.Global.Name
+		dot := strings.IndexByte(name, '.')
+		if dot < 0 {
+			continue
+		}
+		stripped := name[dot+1:]
+		if stripped == "" {
+			continue
+		}
+		renames = append(renames, rename{
+			oldRef: "@" + name,
+			newRef: "@" + stripped,
+		})
+	}
+	if len(renames) == 0 {
+		return nil
+	}
+
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if e.Removed {
+			continue
+		}
+		for _, r := range renames {
+			if strings.Contains(e.Raw, r.oldRef) {
+				e.Raw = strings.ReplaceAll(e.Raw, r.oldRef, r.newRef)
+			}
+		}
+		if e.Kind == ir.TopFunction && e.Function != nil {
+			fn := e.Function
+			for _, r := range renames {
+				if strings.Contains(fn.Raw, r.oldRef) {
+					fn.Raw = strings.ReplaceAll(fn.Raw, r.oldRef, r.newRef)
+				}
+			}
+			for j, bline := range fn.BodyRaw {
+				for _, r := range renames {
+					if strings.Contains(bline, r.oldRef) {
+						fn.BodyRaw[j] = strings.ReplaceAll(fn.BodyRaw[j], r.oldRef, r.newRef)
+					}
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -263,21 +359,101 @@ func rewriteMapForBTFModule(m *ir.Module) error {
 }
 
 func sanitizeBTFNamesModule(m *ir.Module) error {
-	result, err := runLineStage(m, sanitizeBTFNames)
-	if err != nil {
-		return err
+	var buf strings.Builder
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if e.Removed || e.Kind != ir.TopMetadata {
+			continue
+		}
+		line := e.Raw
+		if !strings.Contains(line, "DI") {
+			continue
+		}
+		if !strings.Contains(line, "DIBasicType") &&
+			!strings.Contains(line, "DIDerivedType") &&
+			!strings.Contains(line, "DICompositeType") &&
+			!strings.Contains(line, "DIGlobalVariable") &&
+			!strings.Contains(line, "DISubprogram") {
+			continue
+		}
+		if strings.Contains(line, "DW_TAG_pointer_type") {
+			e.Raw = stripPointerName(line)
+			continue
+		}
+		if strings.Contains(line, ".") {
+			buf.Reset()
+			e.Raw = replaceDotInNameFields(line, &buf)
+		}
 	}
-	*m = *result
 	return nil
 }
 
 func sanitizeCoreFieldNamesModule(m *ir.Module) error {
-	result, err := runLineStage(m, sanitizeCoreFieldNames)
-	if err != nil {
-		return err
+	coreMetaIDs := make(map[int]bool)
+	for _, e := range m.Entries {
+		if e.Removed || e.Kind != ir.TopMetadata {
+			continue
+		}
+		line := e.Raw
+		trimmed := strings.TrimSpace(line)
+		if strings.Contains(trimmed, "DICompositeType") &&
+			strings.Contains(trimmed, "DW_TAG_structure_type") &&
+			strings.Contains(trimmed, "bpfCore") {
+			id := extractMetadataIDFromLine(trimmed)
+			if id >= 0 {
+				coreMetaIDs[id] = true
+			}
+		}
 	}
-	*m = *result
+	if len(coreMetaIDs) == 0 {
+		return nil
+	}
+
+	coreMemberIDs := make(map[int]bool)
+	for _, e := range m.Entries {
+		if e.Removed || e.Kind != ir.TopMetadata {
+			continue
+		}
+		trimmed := strings.TrimSpace(e.Raw)
+		if !strings.Contains(trimmed, "DICompositeType") || !strings.Contains(trimmed, "bpfCore") {
+			continue
+		}
+		for _, seg := range strings.Split(trimmed, "!") {
+			seg = strings.TrimSpace(seg)
+			if n := parseLeadingInt(seg); n >= 0 {
+				coreMemberIDs[n] = true
+			}
+		}
+	}
+
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if e.Removed || e.Kind != ir.TopMetadata {
+			continue
+		}
+		trimmed := strings.TrimSpace(e.Raw)
+		id := extractMetadataIDFromLine(trimmed)
+		if id < 0 {
+			continue
+		}
+		if coreMetaIDs[id] {
+			e.Raw = renameCoreType(e.Raw)
+		} else if coreMemberIDs[id] && isMemberMeta(trimmed) {
+			e.Raw = renameCoreField(e.Raw)
+		}
+	}
 	return nil
+}
+
+func extractMetadataIDFromLine(line string) int {
+	if len(line) < 2 || line[0] != '!' || line[1] < '0' || line[1] > '9' {
+		return -1
+	}
+	n := int(line[1] - '0')
+	for i := 2; i < len(line) && line[i] >= '0' && line[i] <= '9'; i++ {
+		n = n*10 + int(line[i]-'0')
+	}
+	return n
 }
 
 func addLicenseModule(m *ir.Module) error {
@@ -327,10 +503,190 @@ func addLicenseModule(m *ir.Module) error {
 }
 
 func cleanupModule(m *ir.Module) error {
-	result, err := runLineStage(m, cleanup)
-	if err != nil {
-		return err
+	identRefs := buildModuleIdentRefs(m)
+
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if e.Removed {
+			continue
+		}
+		if e.Declare != nil && e.Declare.Removed {
+			e.Removed = true
+			continue
+		}
+		if e.Kind == ir.TopDeclare && e.Declare != nil {
+			name := "@" + e.Declare.Name
+			if !identReferencedElsewhere(identRefs, name, i) {
+				e.Removed = true
+				if i > 0 && isAttrComment(m.Entries[i-1]) {
+					m.Entries[i-1].Removed = true
+				}
+			}
+		}
 	}
-	*m = *result
+
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if e.Removed || e.Kind != ir.TopGlobal || e.Global == nil {
+			continue
+		}
+		if e.Global.Section != "" || strings.Contains(e.Raw, " section ") {
+			continue
+		}
+		name := "@" + e.Global.Name
+		if !identReferencedElsewhere(identRefs, name, i) {
+			e.Removed = true
+		}
+	}
+
+	usedAttrs := collectUsedAttrIDsFromModule(m)
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if e.Removed || e.Kind != ir.TopAttrGroup || e.AttrGroup == nil {
+			continue
+		}
+		if !usedAttrs[e.AttrGroup.ID] {
+			e.Removed = true
+		}
+	}
+
+	markOrphanedAttrCommentsInModule(m)
+	compactModuleEntries(m)
+
 	return nil
+}
+
+func buildModuleIdentRefs(m *ir.Module) map[string][]int {
+	refs := make(map[string][]int)
+	for i, e := range m.Entries {
+		if e.Removed {
+			continue
+		}
+		var lines []string
+		switch {
+		case e.Kind == ir.TopFunction && e.Function != nil:
+			lines = append(lines, e.Function.Raw)
+			lines = append(lines, e.Function.BodyRaw...)
+		default:
+			lines = []string{e.Raw}
+		}
+		for _, line := range lines {
+			for pos := 0; pos < len(line); pos++ {
+				if line[pos] != '@' {
+					continue
+				}
+				j := pos + 1
+				for j < len(line) && isIdentCharByte(line[j]) {
+					j++
+				}
+				if j > pos+1 {
+					ident := line[pos:j]
+					refs[ident] = append(refs[ident], i)
+					pos = j - 1
+				}
+			}
+		}
+	}
+	return refs
+}
+
+func isIdentCharByte(c byte) bool {
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		(c >= '0' && c <= '9') || c == '_' || c == '.'
+}
+
+func identReferencedElsewhere(refs map[string][]int, name string, defIdx int) bool {
+	for _, idx := range refs[name] {
+		if idx != defIdx {
+			return true
+		}
+	}
+	return false
+}
+
+func isAttrComment(e ir.TopLevelEntry) bool {
+	return !e.Removed && e.Kind == ir.TopComment &&
+		strings.Contains(e.Raw, "; Function Attrs:")
+}
+
+func collectUsedAttrIDsFromModule(m *ir.Module) map[string]bool {
+	used := make(map[string]bool)
+	for _, e := range m.Entries {
+		if e.Removed {
+			continue
+		}
+		if e.Kind == ir.TopAttrGroup {
+			continue
+		}
+		var lines []string
+		switch {
+		case e.Kind == ir.TopFunction && e.Function != nil:
+			lines = append(lines, e.Function.Raw)
+			lines = append(lines, e.Function.BodyRaw...)
+		default:
+			lines = []string{e.Raw}
+		}
+		for _, line := range lines {
+			for pos := 0; pos < len(line); pos++ {
+				if line[pos] != '#' {
+					continue
+				}
+				j := pos + 1
+				for j < len(line) && line[j] >= '0' && line[j] <= '9' {
+					j++
+				}
+				if j > pos+1 {
+					used[line[pos+1:j]] = true
+				}
+			}
+		}
+	}
+	return used
+}
+
+func markOrphanedAttrCommentsInModule(m *ir.Module) {
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if e.Removed || !isAttrComment(*e) {
+			continue
+		}
+		hasTarget := false
+		for j := i + 1; j < len(m.Entries); j++ {
+			if m.Entries[j].Removed {
+				continue
+			}
+			if m.Entries[j].Kind == ir.TopBlank {
+				continue
+			}
+			if m.Entries[j].Kind == ir.TopFunction || m.Entries[j].Kind == ir.TopDeclare {
+				hasTarget = true
+			}
+			break
+		}
+		if !hasTarget {
+			e.Removed = true
+		}
+	}
+}
+
+func compactModuleEntries(m *ir.Module) {
+	n := 0
+	prevBlank := false
+	for _, e := range m.Entries {
+		if e.Removed {
+			continue
+		}
+		blank := e.Kind == ir.TopBlank
+		if blank && prevBlank {
+			continue
+		}
+		m.Entries[n] = e
+		n++
+		prevBlank = blank
+	}
+	m.Entries = m.Entries[:n]
+	for len(m.Entries) > 0 && m.Entries[len(m.Entries)-1].Kind == ir.TopBlank {
+		m.Entries = m.Entries[:len(m.Entries)-1]
+	}
+	m.Entries = append(m.Entries, ir.TopLevelEntry{Kind: ir.TopBlank, Raw: ""})
 }
