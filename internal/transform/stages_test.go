@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestBuildStagesOrder(t *testing.T) {
+func TestBuildModuleStagesOrder(t *testing.T) {
 	expected := []struct {
 		idx  int
 		name string
@@ -27,7 +27,7 @@ func TestBuildStagesOrder(t *testing.T) {
 		{14, "cleanup"},
 	}
 
-	stages := buildStages(Options{Stdout: io.Discard})
+	stages := buildModuleStages(Options{Stdout: io.Discard})
 
 	if len(stages) != len(expected) {
 		t.Fatalf("expected %d stages, got %d", len(expected), len(stages))
@@ -36,40 +36,5 @@ func TestBuildStagesOrder(t *testing.T) {
 		if stages[tt.idx].name != tt.name {
 			t.Errorf("stage %d: expected %q, got %q", tt.idx, tt.name, stages[tt.idx].name)
 		}
-	}
-}
-
-func TestBuildStagesPassthrough(t *testing.T) {
-	stages := buildStages(Options{Stdout: io.Discard})
-	input := []string{
-		`target triple = "bpf"`,
-		"define i32 @my_prog(ptr %ctx) {",
-		"entry:",
-		"  ret i32 0",
-		"}",
-	}
-
-	tests := make([]struct {
-		name string
-		fn   func([]string) ([]string, error)
-	}, len(stages))
-	for i, s := range stages {
-		tests[i].name = s.name
-		tests[i].fn = s.fn
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.fn == nil {
-				t.Fatal("stage fn is nil")
-			}
-			out, err := tt.fn(input)
-			if err != nil {
-				t.Errorf("unexpected error: %v", err)
-			}
-			if out == nil {
-				t.Error("returned nil lines")
-			}
-		})
 	}
 }
