@@ -1,0 +1,12 @@
+go 1.24
+
+use (
+	.
+	./examples/cgroup-connect
+	./examples/fentry-open
+	./examples/kprobe-openat
+	./examples/rawtp-sched
+	./examples/tc-filter
+	./examples/tracepoint-connect
+	./examples/xdp-filter
+)

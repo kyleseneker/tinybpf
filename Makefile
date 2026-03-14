@@ -1,4 +1,4 @@
-.PHONY: build test bench cover vet fmt lint check clean doctor setup vm sync e2e
+.PHONY: build test bench cover vet fmt lint check clean doctor setup vm sync e2e example
 
 BIN := tinybpf
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -34,6 +34,17 @@ clean:
 
 doctor: build
 	./$(BIN) doctor
+
+example:
+ifndef NAME
+	$(error NAME is required. Usage: make example NAME=tracepoint-connect)
+endif
+	@echo "[1/3] build tinybpf"
+	@CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -trimpath -o $(BIN) ./cmd/tinybpf
+	@echo "[2/3] tinybpf build -> examples/$(NAME)/build/"
+	@cd examples/$(NAME) && ../../$(BIN) build --verbose ./bpf
+	@echo "[3/3] go build loader -> examples/$(NAME)/build/"
+	@cd examples/$(NAME) && go build -o build/ ./cmd/...
 
 setup:
 	@./scripts/setup.sh

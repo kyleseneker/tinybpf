@@ -78,7 +78,7 @@ examples/
   tc-filter/               TC classifier + port-based filtering
 ```
 
-Each example is a standalone Go module with its own `go.mod`, `tinybpf.json`, BPF source, userspace loader, and build/run scripts.
+Examples are unified under a Go workspace (`go.work`) for IDE navigation and cross-module refactoring. Each example retains its own `go.mod` for independent dependency management. Build any example with `make example NAME=<name>`.
 
 ## Scripts
 

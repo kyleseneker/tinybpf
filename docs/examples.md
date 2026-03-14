@@ -27,18 +27,23 @@ Start here if you want to filter or control traffic.
 
 ## How to build any example
 
-Every example uses the same build pattern via `scripts/build.sh`:
+From the repo root, `make example` builds the `tinybpf` binary, compiles the BPF object, and builds the Go loader in one command:
+
+```bash
+make example NAME=tracepoint-connect
+```
+
+Alternatively, each example has a standalone `scripts/build.sh`:
 
 ```bash
 cd examples/<name>
 ./scripts/build.sh
 ```
 
-The script:
-1. Creates a `build/` directory.
-2. Builds a local `tinybpf` binary (unless `TINYBPF_BIN` is set).
-3. Runs `tinybpf build --verbose ./bpf`.
-4. Produces a BPF ELF object in `build/`.
+Both methods:
+1. Build a local `tinybpf` binary (unless `TINYBPF_BIN` is set).
+2. Run `tinybpf build --verbose ./bpf`.
+3. Produce a BPF ELF object and loader binary in `build/`.
 
 ### Build environment variables
 

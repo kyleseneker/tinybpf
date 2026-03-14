@@ -20,7 +20,6 @@ coverage.txt
 coverage.html
 
 # Go workspace
-go.work
 go.work.sum
 
 # Editor/IDE

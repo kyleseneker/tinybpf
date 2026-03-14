@@ -86,6 +86,13 @@ See [Getting Started](docs/getting-started.md) for a complete walkthrough.
 | [xdp-filter](examples/xdp-filter/) | XDP | Packet parsing, source IP blocklist |
 | [tc-filter](examples/tc-filter/) | TC classifier | Port-based packet filtering |
 
+Build and run any example in one command:
+
+```bash
+make example NAME=tracepoint-connect
+sudo ./examples/tracepoint-connect/scripts/run.sh
+```
+
 See [Examples Guide](docs/examples.md) for learning tracks and how to run them.
 
 ## Documentation

@@ -1,6 +1,6 @@
 module github.com/kyleseneker/tinybpf/examples/fentry-open
 
-go 1.24.0
+go 1.24
 
 require github.com/cilium/ebpf v0.20.0
 
