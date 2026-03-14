@@ -1,10 +1,12 @@
 package transform
 
 import (
+	"errors"
 	"io"
 	"strings"
 	"testing"
 
+	"github.com/kyleseneker/tinybpf/diag"
 	"github.com/kyleseneker/tinybpf/ir"
 )
 
@@ -185,6 +187,29 @@ func TestMarkGlobalRemoved(t *testing.T) {
 	}
 }
 
+func TestReplaceAllocMultiError(t *testing.T) {
+	fn := &ir.Function{
+		Name: "f",
+		BodyRaw: []string{
+			"entry:",
+			"  call void @runtime.alloc(badpattern1)",
+			"  call void @runtime.alloc(badpattern2)",
+		},
+	}
+	m := &ir.Module{Functions: []*ir.Function{fn}}
+	err := replaceAllocModule(m)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var merr *diag.Errors
+	if !errors.As(err, &merr) {
+		t.Fatalf("expected *diag.Errors, got %T", err)
+	}
+	if len(merr.Errs) != 2 {
+		t.Fatalf("expected 2 errors, got %d", len(merr.Errs))
+	}
+}
+
 func TestHasMemsetDecl(t *testing.T) {
 	tests := []struct {
 		name string
@@ -218,6 +243,72 @@ func TestHasMemsetDecl(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := hasMemsetDecl(tt.m); got != tt.want {
 				t.Errorf("hasMemsetDecl() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRewriteHelpersMultiError(t *testing.T) {
+	tests := []struct {
+		name       string
+		bodyLines  []string
+		wantCount  int
+		wantSubstr []string
+	}{
+		{
+			name: "two unknown helpers collected",
+			bodyLines: []string{
+				"  %0 = call i64 @main.bpfFakeHelperAlpha(ptr undef)",
+				"  %1 = call i64 @main.bpfFakeHelperBeta(ptr undef)",
+			},
+			wantCount:  2,
+			wantSubstr: []string{"bpfFakeHelperAlpha", "bpfFakeHelperBeta"},
+		},
+		{
+			name: "fuzzy suggestion included",
+			bodyLines: []string{
+				"  %0 = call i64 @main.bpfMapLookpElem(ptr undef)",
+			},
+			wantCount:  1,
+			wantSubstr: []string{"did you mean"},
+		},
+		{
+			name: "valid helper no error",
+			bodyLines: []string{
+				"  %0 = call i64 @main.bpfGetCurrentPidTgid(ptr undef)",
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fn := &ir.Function{Name: "f", BodyRaw: tt.bodyLines}
+			m := &ir.Module{Functions: []*ir.Function{fn}}
+			err := rewriteHelpersModule(m)
+			if tt.wantCount == 0 {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			var merr *diag.Errors
+			if !errors.As(err, &merr) {
+				t.Fatalf("expected *diag.Errors, got %T: %v", err, err)
+			}
+			if len(merr.Errs) != tt.wantCount {
+				t.Fatalf("expected %d errors, got %d: %v", tt.wantCount, len(merr.Errs), merr.Errs)
+			}
+			msg := err.Error()
+			for _, sub := range tt.wantSubstr {
+				if !strings.Contains(msg, sub) {
+					t.Errorf("missing %q in error:\n%s", sub, msg)
+				}
+			}
+			if !diag.IsStage(err, diag.StageTransform) {
+				t.Error("expected StageTransform")
 			}
 		})
 	}
@@ -626,6 +717,34 @@ func TestCollectMapDefs(t *testing.T) {
 				t.Errorf("collectMapDefs() = %d, want %d", len(got), tt.want)
 			}
 		})
+	}
+}
+
+func TestCollectMapDefsMultiError(t *testing.T) {
+	m := &ir.Module{
+		Entries: []ir.TopLevelEntry{
+			{
+				Kind:   ir.TopGlobal,
+				Global: &ir.Global{Name: "map_a"},
+				Raw:    `@map_a = global %main.bpfMapDef { i32 1, i32 2 }, section ".maps"`,
+			},
+			{
+				Kind:   ir.TopGlobal,
+				Global: &ir.Global{Name: "map_b"},
+				Raw:    `@map_b = global %main.bpfMapDef { i32 1, i32 2, i32 3 }, section ".maps"`,
+			},
+		},
+	}
+	_, err := collectMapDefs(m, 5)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var merr *diag.Errors
+	if !errors.As(err, &merr) {
+		t.Fatalf("expected *diag.Errors, got %T", err)
+	}
+	if len(merr.Errs) != 2 {
+		t.Fatalf("expected 2 errors, got %d: %v", len(merr.Errs), merr.Errs)
 	}
 }
 

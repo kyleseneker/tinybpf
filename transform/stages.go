@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/kyleseneker/tinybpf/diag"
 	"github.com/kyleseneker/tinybpf/ir"
 )
 
@@ -174,6 +175,7 @@ func markGlobalRemoved(m *ir.Module, g *ir.Global) {
 // replaceAllocModule converts runtime.alloc calls to stack allocas zeroed by memset.
 func replaceAllocModule(m *ir.Module) error {
 	needMemset := false
+	var errs []error
 
 	for _, fn := range m.Functions {
 		if fn.Removed {
@@ -198,7 +200,8 @@ func replaceAllocModule(m *ir.Module) error {
 			}
 			match := reAllocCall.FindStringSubmatch(bline)
 			if match == nil {
-				return fmt.Errorf("line references @runtime.alloc but does not match expected call pattern: %s", trimmed)
+				errs = append(errs, fmt.Errorf("line references @runtime.alloc but does not match expected call pattern: %s", trimmed))
+				continue
 			}
 			sites = append(sites, allocSite{
 				bodyIdx: i,
@@ -233,6 +236,11 @@ func replaceAllocModule(m *ir.Module) error {
 		newBody = append(newBody, allocas...)
 		newBody = append(newBody, fn.BodyRaw[insertAt:]...)
 		fn.BodyRaw = newBody
+	}
+
+	if err := diag.WrapErrors(diag.StageTransform, "replace-alloc", errs,
+		"check that @runtime.alloc calls match the expected pattern"); err != nil {
+		return err
 	}
 
 	if needMemset && !hasMemsetDecl(m) {
@@ -277,8 +285,11 @@ func insertMemsetDeclInModule(m *ir.Module) {
 	}
 }
 
-// rewriteHelpersModule replaces Go-style BPF helper calls with inttoptr-based kernel helper calls.
+// rewriteHelpersModule replaces Go-style BPF helper calls with inttoptr-based
+// kernel helper calls. Errors are collected across all functions so that every
+// unknown or malformed helper is reported in a single pass.
 func rewriteHelpersModule(m *ir.Module) error {
+	var errs []error
 	for _, fn := range m.Functions {
 		if fn.Removed {
 			continue
@@ -290,8 +301,8 @@ func rewriteHelpersModule(m *ir.Module) error {
 			loc := helperCallRe.FindStringSubmatchIndex(bline)
 			if loc == nil {
 				if strings.Contains(bline, "call") {
-					return fmt.Errorf("line references @main.bpf* but does not match expected call pattern: %s",
-						strings.TrimSpace(bline))
+					errs = append(errs, fmt.Errorf("line references @main.bpf* but does not match expected call pattern: %s",
+						strings.TrimSpace(bline)))
 				}
 				continue
 			}
@@ -302,14 +313,23 @@ func rewriteHelpersModule(m *ir.Module) error {
 			}
 			helperID, ok := helperIDs[funcName]
 			if !ok {
-				return fmt.Errorf("unknown BPF helper %q", funcName)
+				errs = append(errs, unknownHelperErr(funcName))
+				continue
 			}
 			args := stripTrailingUndef(strings.TrimSpace(bline[loc[6]:loc[7]]))
 			replacement := fmt.Sprintf("call %s inttoptr (i64 %d to ptr)(%s)", retType, helperID, args)
 			fn.BodyRaw[i] = bline[:loc[0]] + replacement + bline[loc[1]:]
 		}
 	}
-	return nil
+	return diag.WrapErrors(diag.StageTransform, "rewrite-helpers", errs,
+		"check that helper names match kernel BPF helpers")
+}
+
+func unknownHelperErr(name string) error {
+	if suggestion := closestHelper(name); suggestion != "" {
+		return fmt.Errorf("unknown BPF helper %q (did you mean %q?)", name, suggestion)
+	}
+	return fmt.Errorf("unknown BPF helper %q", name)
 }
 
 // corePassModule runs all CO-RE transforms: struct access rewriting, exists intrinsics, and field name sanitization.
@@ -323,7 +343,8 @@ func corePassModule(m *ir.Module) error {
 	return sanitizeCoreFieldNamesModule(m)
 }
 
-// rewriteCoreAccessModule converts bpfCore GEP instructions to llvm.preserve.struct.access.index calls.
+// rewriteCoreAccessModule converts bpfCore GEP instructions to
+// llvm.preserve.struct.access.index calls.
 func rewriteCoreAccessModule(m *ir.Module) error {
 	coreTypes := make(map[string]bool)
 	for _, td := range m.TypeDefs {
@@ -337,39 +358,26 @@ func rewriteCoreAccessModule(m *ir.Module) error {
 
 	typeMeta := findCoreTypeMetaFromAST(m, coreTypes)
 
+	var errs []error
 	modified := false
 	for _, fn := range m.Functions {
 		if fn.Removed {
 			continue
 		}
 		for i, bline := range fn.BodyRaw {
-			if !strings.Contains(bline, "getelementptr") || !strings.Contains(bline, "bpfCore") {
-				continue
+			ok, err := rewriteCoreGEP(fn, i, bline, coreTypes, typeMeta)
+			if err != nil {
+				errs = append(errs, err)
 			}
-			match := reCoreGEP.FindStringSubmatch(bline)
-			if match == nil {
-				return fmt.Errorf("getelementptr on bpfCore type does not match expected GEP pattern: %s",
-					strings.TrimSpace(bline))
+			if ok {
+				modified = true
 			}
-			typeName := match[3]
-			if !coreTypes[typeName] {
-				continue
-			}
-			assign := match[1]
-			base := match[4]
-			fieldIdx := match[5]
-			trailing := match[6]
-
-			repl := fmt.Sprintf("%s%s", assign, preserveStructAccessCall(base, typeName, fieldIdx, fieldIdx))
-			if metaID, ok := typeMeta[typeName]; ok {
-				repl += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
-			}
-			if dbg := extractDBG(trailing); dbg != "" {
-				repl += ", " + dbg
-			}
-			fn.BodyRaw[i] = repl
-			modified = true
 		}
+	}
+
+	if err := diag.WrapErrors(diag.StageTransform, "core-access", errs,
+		"check that bpfCore GEP instructions match the expected pattern"); err != nil {
+		return err
 	}
 
 	if !modified {
@@ -380,7 +388,36 @@ func rewriteCoreAccessModule(m *ir.Module) error {
 	return nil
 }
 
-// rewriteCoreExistsModule converts bpfCoreFieldExists/bpfCoreTypeExists calls to BPF CO-RE intrinsics.
+// rewriteCoreGEP rewrites a single bpfCore GEP line to a
+// preserve_struct_access_index call. Returns (true, nil) if rewritten,
+// (false, nil) if skipped, (false, err) if malformed.
+func rewriteCoreGEP(fn *ir.Function, i int, bline string, coreTypes map[string]bool, typeMeta map[string]int) (bool, error) {
+	if !strings.Contains(bline, "getelementptr") || !strings.Contains(bline, "bpfCore") {
+		return false, nil
+	}
+	match := reCoreGEP.FindStringSubmatch(bline)
+	if match == nil {
+		return false, fmt.Errorf("getelementptr on bpfCore type does not match expected GEP pattern: %s",
+			strings.TrimSpace(bline))
+	}
+	typeName := match[3]
+	if !coreTypes[typeName] {
+		return false, nil
+	}
+
+	repl := fmt.Sprintf("%s%s", match[1], preserveStructAccessCall(match[4], typeName, match[5], match[5]))
+	if metaID, ok := typeMeta[typeName]; ok {
+		repl += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
+	}
+	if dbg := extractDBG(match[6]); dbg != "" {
+		repl += ", " + dbg
+	}
+	fn.BodyRaw[i] = repl
+	return true, nil
+}
+
+// rewriteCoreExistsModule converts bpfCoreFieldExists/bpfCoreTypeExists calls
+// to BPF CO-RE intrinsics.
 func rewriteCoreExistsModule(m *ir.Module) error {
 	ctx, err := buildCoreExistsCtxFromAST(m)
 	if err != nil {
@@ -389,6 +426,7 @@ func rewriteCoreExistsModule(m *ir.Module) error {
 	ensureFallbackArtifactsInModule(m, ctx)
 
 	needField, needType, needAccessIdx := false, false, false
+	var errs []error
 
 	for _, fn := range m.Functions {
 		if fn.Removed {
@@ -401,8 +439,8 @@ func rewriteCoreExistsModule(m *ir.Module) error {
 			match := reCoreExistsCall.FindStringSubmatchIndex(bline)
 			if match == nil {
 				if strings.Contains(bline, "Exists") && strings.Contains(bline, "call") {
-					return fmt.Errorf("bpfCore*Exists call does not match expected pattern: %s",
-						strings.TrimSpace(bline))
+					errs = append(errs, fmt.Errorf("bpfCore*Exists call does not match expected pattern: %s",
+						strings.TrimSpace(bline)))
 				}
 				continue
 			}
@@ -414,7 +452,8 @@ func rewriteCoreExistsModule(m *ir.Module) error {
 			case "bpfCoreFieldExists":
 				usedAccess, rwErr := rewriteFieldExistsInBody(fn.BodyRaw, i, match, callPrefix, args, ctx)
 				if rwErr != nil {
-					return rwErr
+					errs = append(errs, rwErr)
+					continue
 				}
 				if usedAccess {
 					needAccessIdx = true
@@ -426,6 +465,11 @@ func rewriteCoreExistsModule(m *ir.Module) error {
 				needType = true
 			}
 		}
+	}
+
+	if err := diag.WrapErrors(diag.StageTransform, "core-exists", errs,
+		"check bpfCore*Exists calls match the expected pattern"); err != nil {
+		return err
 	}
 
 	addCoreExistsIntrinsics(m, needField, needType, needAccessIdx)
@@ -1118,6 +1162,7 @@ type astMapDef struct {
 // collectMapDefs scans module entries for bpfMapDef globals and parses their initializers.
 func collectMapDefs(m *ir.Module, fieldCount int) ([]astMapDef, error) {
 	var maps []astMapDef
+	var errs []error
 	for i, e := range m.Entries {
 		if e.Removed || e.Kind != ir.TopGlobal || e.Global == nil {
 			continue
@@ -1126,10 +1171,12 @@ func collectMapDefs(m *ir.Module, fieldCount int) ([]astMapDef, error) {
 		if mat := reMapGlobal.FindStringSubmatch(trimmed); mat != nil {
 			vals := parseI32Initializer(mat[3])
 			if vals == nil {
-				return nil, fmt.Errorf("bpfMapDef global %q initializer could not be parsed: %s", mat[1], trimmed)
+				errs = append(errs, fmt.Errorf("bpfMapDef global %q initializer could not be parsed: %s", mat[1], trimmed))
+				continue
 			}
 			if len(vals) != fieldCount {
-				return nil, fmt.Errorf("bpfMapDef global %q has %d fields but type has %d", mat[1], len(vals), fieldCount)
+				errs = append(errs, fmt.Errorf("bpfMapDef global %q has %d fields but type has %d", mat[1], len(vals), fieldCount))
+				continue
 			}
 			maps = append(maps, astMapDef{entryIdx: i, name: mat[1], values: vals})
 			continue
@@ -1137,6 +1184,10 @@ func collectMapDefs(m *ir.Module, fieldCount int) ([]astMapDef, error) {
 		if mz := reMapGlobalZero.FindStringSubmatch(trimmed); mz != nil {
 			maps = append(maps, astMapDef{entryIdx: i, name: mz[1], values: make([]int, fieldCount)})
 		}
+	}
+	if err := diag.WrapErrors(diag.StageTransform, "map-btf", errs,
+		"check that bpfMapDef globals have valid initializers"); err != nil {
+		return nil, err
 	}
 	return maps, nil
 }

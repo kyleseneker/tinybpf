@@ -55,9 +55,13 @@ Every transform that uses a two-stage filter (marker string check followed by re
 
 The rule: if we recognize *what* a line is trying to do but can't parse *how*, that is an error, not a skip. Transforms that operate on simple string replacement (retarget, attribute stripping, license injection) don't need this treatment because there's no partial-match scenario — the operation either applies or the line is unrelated.
 
-### Fail-fast structured diagnostics
+### Structured diagnostics
 
 Every pipeline stage produces a `diag.Error` carrying the stage name, the command that failed, and a human-readable hint. LLVM tool errors can be cryptic; wrapping them with context makes debugging practical for users.
+
+Transform passes that iterate independent items (helper rewrites, CO-RE access/exists, alloc replacement, map BTF) collect all errors in a single pass and return them as a `diag.Errors`, so that the user sees every problem at once instead of fixing one error per rebuild. Structural stages (module rewrite, sections, finalize) remain fail-fast because their errors cascade.
+
+Unknown BPF helper names include fuzzy-match suggestions ("did you mean?") based on Levenshtein distance against the generated helper table.
 
 ### Named optimization profiles
 

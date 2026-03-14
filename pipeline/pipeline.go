@@ -147,6 +147,9 @@ func (rc *runContext) transformAndOptimize() error {
 		DumpDir:  dumpDir,
 	}
 	if err := transform.Run(rc.ctx, rc.artifacts.LinkedBC, rc.artifacts.TransformedLL, transformOpts); err != nil {
+		if diag.IsStage(err, diag.StageTransform) {
+			return err
+		}
 		return diag.Wrap(diag.StageTransform, err,
 			"check that the input IR was produced by TinyGo with --gc=none --scheduler=none")
 	}

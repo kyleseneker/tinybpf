@@ -12,7 +12,6 @@ func TestErrorFormat(t *testing.T) {
 		err     *Error
 		want    []string
 		notWant []string
-		check   func(t *testing.T, err *Error)
 	}{
 		{
 			name: "full",
@@ -42,16 +41,6 @@ func TestErrorFormat(t *testing.T) {
 				"--- hint ---",
 			},
 		},
-		{
-			name: "unwrap exposes inner error",
-			err:  &Error{Stage: StageOpt, Err: errors.New("root cause")},
-			check: func(t *testing.T, err *Error) {
-				t.Helper()
-				if !errors.Is(err, err.Err) {
-					t.Fatal("Unwrap should expose inner error")
-				}
-			},
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -66,10 +55,15 @@ func TestErrorFormat(t *testing.T) {
 					t.Errorf("should not include %q when empty", nw)
 				}
 			}
-			if tt.check != nil {
-				tt.check(t, tt.err)
-			}
 		})
+	}
+}
+
+func TestErrorUnwrap(t *testing.T) {
+	inner := errors.New("root cause")
+	err := &Error{Stage: StageOpt, Err: inner}
+	if !errors.Is(err, inner) {
+		t.Fatal("Unwrap should expose inner error")
 	}
 }
 
@@ -80,14 +74,102 @@ func TestIsStage(t *testing.T) {
 		stage Stage
 		want  bool
 	}{
-		{"match", &Error{Stage: StageOpt, Err: errors.New("fail")}, StageOpt, true},
-		{"no match", &Error{Stage: StageOpt, Err: errors.New("fail")}, StageLink, false},
+		{"Error match", &Error{Stage: StageOpt, Err: errors.New("fail")}, StageOpt, true},
+		{"Error no match", &Error{Stage: StageOpt, Err: errors.New("fail")}, StageLink, false},
+		{"Errors match", &Errors{Stage: StageTransform, PassName: "p", Errs: []error{errors.New("x")}}, StageTransform, true},
+		{"Errors no match", &Errors{Stage: StageTransform, PassName: "p", Errs: []error{errors.New("x")}}, StageOpt, false},
 		{"non-diag error", errors.New("plain"), StageOpt, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := IsStage(tt.err, tt.stage); got != tt.want {
 				t.Fatalf("IsStage = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestErrorsFormat(t *testing.T) {
+	tests := []struct {
+		name    string
+		errs    *Errors
+		want    []string
+		notWant []string
+	}{
+		{
+			name: "multiple errors with hint",
+			errs: &Errors{
+				Stage:    StageTransform,
+				PassName: "rewrite-helpers",
+				Errs:     []error{errors.New("unknown helper A"), errors.New("unknown helper B")},
+				Hint:     "check helper names",
+			},
+			want: []string{
+				`stage "transform" failed: 2 problem(s) in rewrite-helpers:`,
+				"unknown helper A",
+				"unknown helper B",
+				"--- hint ---",
+				"check helper names",
+			},
+		},
+		{
+			name: "single error no hint",
+			errs: &Errors{
+				Stage:    StageTransform,
+				PassName: "core",
+				Errs:     []error{errors.New("bad GEP")},
+			},
+			want:    []string{`1 problem(s) in core:`},
+			notWant: []string{"--- hint ---"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := tt.errs.Error()
+			for _, w := range tt.want {
+				if !strings.Contains(s, w) {
+					t.Errorf("missing %q in:\n%s", w, s)
+				}
+			}
+			for _, nw := range tt.notWant {
+				if strings.Contains(s, nw) {
+					t.Errorf("should not include %q when empty", nw)
+				}
+			}
+		})
+	}
+}
+
+func TestErrorsUnwrap(t *testing.T) {
+	inner := errors.New("root cause")
+	merr := &Errors{
+		Stage:    StageTransform,
+		PassName: "test",
+		Errs:     []error{inner, errors.New("other")},
+	}
+	if !errors.Is(merr, inner) {
+		t.Fatal("errors.Is should find inner error through Unwrap")
+	}
+}
+
+func TestWrapErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		errs    []error
+		wantNil bool
+	}{
+		{"nil for empty", nil, true},
+		{"nil for zero-length", []error{}, true},
+		{"non-nil for errors", []error{errors.New("a")}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := WrapErrors(StageTransform, "pass", tt.errs, "hint")
+			if tt.wantNil && got != nil {
+				t.Fatalf("expected nil, got %v", got)
+			}
+			if !tt.wantNil && got == nil {
+				t.Fatal("expected non-nil")
 			}
 		})
 	}
