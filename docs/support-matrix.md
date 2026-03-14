@@ -56,9 +56,11 @@ The primary lane enforces:
 
 ## Kernel validation
 
-| Kernel | Distribution | Architecture | Result |
-|--------|-------------|--------------|--------|
-| 6.8.0-100 | Ubuntu 24.04 | arm64 | Verifier accepted, tracepoint attached, events captured |
+| Kernel | Distribution | Architecture | Confidence |
+|--------|-------------|--------------|------------|
+| 6.8.0-100 | Ubuntu 24.04 | arm64 | Manual |
+
+**Confidence levels:** CI = continuously tested on every PR; Scheduled = tested on a recurring schedule; Manual = validated by maintainers, not continuously tested.
 
 ## CO-RE kernel matrix
 
@@ -76,10 +78,12 @@ CO-RE requires a kernel with BTF support (`CONFIG_DEBUG_INFO_BTF=y`), which is e
 
 ## Platform support
 
-| OS | Architecture | Compilation | Kernel loading |
-|----|-------------|-------------|----------------|
-| Linux | amd64 | Yes | Yes |
-| Linux | arm64 | Yes | Yes (validated) |
-| macOS | arm64 | Yes (through `llc`) | No (requires Linux) |
+| OS | Architecture | Compilation | Kernel loading | Confidence |
+|----|-------------|-------------|----------------|------------|
+| Linux | amd64 | Yes | Yes | CI |
+| Linux | arm64 | Yes | Yes | Manual |
+| macOS | arm64 | Yes (through `llc`) | No (requires Linux) | Manual |
+
+**Confidence levels:** CI = continuously tested on every PR; Manual = validated by maintainers, not continuously tested.
 
 See [Troubleshooting](troubleshooting.md#debugging-flags-summary) for debugging flags and [Contributing](../CONTRIBUTING.md#running-tests) for testing details.
