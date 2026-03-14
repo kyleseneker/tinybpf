@@ -271,9 +271,7 @@ func insertMemsetDeclInModule(m *ir.Module) {
 	blankEntry := ir.TopLevelEntry{Kind: ir.TopBlank, Raw: ""}
 
 	if insertIdx >= 0 {
-		m.Entries = append(m.Entries[:insertIdx+2], m.Entries[insertIdx:]...)
-		m.Entries[insertIdx] = entry
-		m.Entries[insertIdx+1] = blankEntry
+		m.Entries = slices.Insert(m.Entries, insertIdx, entry, blankEntry)
 	} else {
 		m.Entries = append(m.Entries, entry, blankEntry)
 	}
