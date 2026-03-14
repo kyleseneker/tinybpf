@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kyleseneker/tinybpf/internal/diag"
+	"github.com/kyleseneker/tinybpf/diag"
 )
 
 // allowedToolBases is the canonical set of tool basenames this linker

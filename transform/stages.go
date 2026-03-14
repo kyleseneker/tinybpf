@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kyleseneker/tinybpf/internal/ir"
+	"github.com/kyleseneker/tinybpf/ir"
 )
 
 // moduleStage pairs a name with an AST-based transform function.

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyleseneker/tinybpf/internal/diag"
+	"github.com/kyleseneker/tinybpf/diag"
 )
 
 func TestRunE2E(t *testing.T) {
@@ -35,7 +35,7 @@ func TestRunE2E(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			input := filepath.Join(wd, "..", "..", "testdata", tt.fixture)
+			input := filepath.Join(wd, "..", "ir", "testdata", tt.fixture)
 			if _, err := os.Stat(input); err != nil {
 				t.Fatalf("missing test fixture: %v", err)
 			}

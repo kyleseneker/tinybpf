@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/kyleseneker/tinybpf/internal/ir"
+	"github.com/kyleseneker/tinybpf/ir"
 )
 
 // isRuntimeFunc reports whether name belongs to TinyGo's runtime.

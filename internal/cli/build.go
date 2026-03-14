@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kyleseneker/tinybpf/internal/diag"
-	"github.com/kyleseneker/tinybpf/internal/pipeline"
+	"github.com/kyleseneker/tinybpf/diag"
+	"github.com/kyleseneker/tinybpf/pipeline"
 )
 
 type tinyGoRunner func(ctx context.Context, timeout time.Duration, bin string, args ...string) (tinyGoResult, error)

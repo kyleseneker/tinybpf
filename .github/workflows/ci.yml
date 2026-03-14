@@ -162,13 +162,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/go-build/fuzz
-          key: fuzz-${{ runner.os }}-${{ hashFiles('internal/transform/*_test.go') }}
+          key: fuzz-${{ runner.os }}-${{ hashFiles('transform/*_test.go') }}
           restore-keys: fuzz-${{ runner.os }}-
 
       - name: Fuzz smoke
         if: matrix.primary
         run: |
-          fuzz_targets=$(grep -r '^func Fuzz' internal/transform/ --include='*_test.go' -l | sort -u)
+          fuzz_targets=$(grep -r '^func Fuzz' transform/ --include='*_test.go' -l | sort -u)
           for file in $fuzz_targets; do
             dir=$(dirname "$file")
             for target in $(grep -oP '^func \KFuzz\w+' "$file"); do
@@ -192,7 +192,7 @@ jobs:
           cache: false
 
       - name: Benchmark PR
-        run: go test -bench=. -benchmem -count=6 -timeout=5m ./internal/transform/ | tee /tmp/bench-pr.txt
+        run: go test -bench=. -benchmem -count=6 -timeout=5m ./transform/ | tee /tmp/bench-pr.txt
 
       - name: Checkout base
         uses: actions/checkout@v6
@@ -200,7 +200,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Benchmark base
-        run: go test -bench=. -benchmem -count=6 -timeout=5m ./internal/transform/ 2>&1 | tee /tmp/bench-base.txt || true
+        run: go test -bench=. -benchmem -count=6 -timeout=5m ./transform/ 2>&1 | tee /tmp/bench-base.txt || true
 
       - name: Compare benchmarks
         run: |

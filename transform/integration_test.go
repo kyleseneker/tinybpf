@@ -11,7 +11,7 @@ import (
 )
 
 func TestFullTransform(t *testing.T) {
-	fixture := filepath.Join("..", "..", "testdata", "tinygo_probe.ll")
+	fixture := filepath.Join("..", "ir", "testdata", "tinygo_probe.ll")
 	if _, err := os.Stat(fixture); err != nil {
 		t.Skipf("fixture not found: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestFullTransformLLC(t *testing.T) {
 		t.Skip("llc not found on PATH")
 	}
 
-	fixture := filepath.Join("..", "..", "testdata", "tinygo_probe.ll")
+	fixture := filepath.Join("..", "ir", "testdata", "tinygo_probe.ll")
 	if _, err := os.Stat(fixture); err != nil {
 		t.Skipf("fixture not found: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestAllOptProfilesProduceValidBPF(t *testing.T) {
 		t.Skip("llc not found on PATH")
 	}
 
-	fixture := filepath.Join("..", "..", "testdata", "tinygo_probe.ll")
+	fixture := filepath.Join("..", "ir", "testdata", "tinygo_probe.ll")
 	if _, err := os.Stat(fixture); err != nil {
 		t.Skipf("fixture not found: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestAllOptProfilesProduceValidBPF(t *testing.T) {
 }
 
 func BenchmarkTransformLines(b *testing.B) {
-	fixture := filepath.Join("..", "..", "testdata", "tinygo_probe.ll")
+	fixture := filepath.Join("..", "ir", "testdata", "tinygo_probe.ll")
 	data, err := os.ReadFile(fixture)
 	if err != nil {
 		b.Skipf("fixture not found: %v", err)

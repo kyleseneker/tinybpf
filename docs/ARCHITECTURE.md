@@ -21,25 +21,19 @@ graph TD
 ## Package layout
 
 ```
-cmd/tinybpf/        CLI entrypoint
+cmd/tinybpf/               CLI entrypoint
+diag/                      Structured error types with stage context and hints
+doctor/                    Toolchain diagnostic subcommand
+elfcheck/                  Post-link ELF validation
 internal/
   cli/                     Flag parsing and subcommand dispatch
-  ir/                      LLVM IR parser, AST, serializer, and index
-  pipeline/                Orchestration, input normalization, BTF injection
-  transform/               TinyGo IR -> BPF IR rewriting
-  llvm/                    Tool discovery, optimization profiles, process execution, config loading
-  elfcheck/                Post-link ELF validation
-  diag/                    Structured error types with stage context and hints
-  doctor/                  Toolchain diagnostic subcommand
-testdata/                  TinyGo IR fixtures for transform tests
-examples/
-  rawtp-sched/             Raw tracepoint exec tracer with CO-RE portable access
-  tracepoint-connect/      Tracepoint probe + ring buffer + userspace loader
-  xdp-filter/              XDP packet filter with hash map blocklist
-  kprobe-openat/           kprobe tracing openat syscalls with ring buffer
-  tc-filter/               TC classifier that drops packets by port
-  cgroup-connect/          cgroup/connect4 connection blocker
-  fentry-open/             fentry tracing openat2 with ring buffer
+  testutil/                Test helpers (fake LLVM tools, sample IR)
+ir/                        LLVM IR parser, AST, serializer, and index
+  testdata/                IR fixture files for parser/serializer tests
+llvm/                      Tool discovery, optimization profiles, process execution, config loading
+pipeline/                  Orchestration, input normalization, BTF injection
+scaffold/                  Project scaffolding (tinybpf init)
+transform/                 TinyGo IR -> BPF IR rewriting
 ```
 
 ## Design decisions
@@ -50,7 +44,7 @@ The linker drives standalone LLVM tools (`llvm-link`, `opt`, `llc`) rather than 
 
 ### AST-based IR transformation
 
-The `internal/ir` package provides a lightweight parser that builds a structured AST from LLVM IR text, covering the subset of IR that TinyGo emits: type definitions, globals, declares, functions (with basic blocks and instructions), attribute groups, and metadata nodes. The `internal/transform` package then operates on this AST, modifying nodes directly rather than manipulating raw text lines. After all transforms complete, the AST is serialized back to IR text for the LLVM optimization and codegen stages.
+The `ir` package provides a lightweight parser that builds a structured AST from LLVM IR text, covering the subset of IR that TinyGo emits: type definitions, globals, declares, functions (with basic blocks and instructions), attribute groups, and metadata nodes. The `transform` package then operates on this AST, modifying nodes directly rather than manipulating raw text lines. After all transforms complete, the AST is serialized back to IR text for the LLVM optimization and codegen stages.
 
 Unrecognized IR constructs are preserved verbatim through `Raw` fields on every AST node, guaranteeing faithful round-trip serialization (`Serialize(Parse(input)) == input` for unmodified modules). This avoids a CGo/libLLVM dependency, works across LLVM versions, and gives transforms structured access to functions, instructions, globals, and metadata without relying on fragile textual patterns.
 

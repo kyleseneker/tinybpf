@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyleseneker/tinybpf/internal/diag"
-	"github.com/kyleseneker/tinybpf/internal/llvm"
+	"github.com/kyleseneker/tinybpf/diag"
 	"github.com/kyleseneker/tinybpf/internal/testutil"
+	"github.com/kyleseneker/tinybpf/llvm"
 )
 
 func makeFakeTool(t *testing.T, dir, name, script string) string {

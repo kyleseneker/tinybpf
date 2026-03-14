@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/kyleseneker/tinybpf/internal/diag"
-	"github.com/kyleseneker/tinybpf/internal/llvm"
+	"github.com/kyleseneker/tinybpf/diag"
+	"github.com/kyleseneker/tinybpf/llvm"
 )
 
 // normalizeInputs resolves all input files to LLVM IR/bitcode suitable for

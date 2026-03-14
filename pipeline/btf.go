@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/kyleseneker/tinybpf/internal/diag"
-	"github.com/kyleseneker/tinybpf/internal/llvm"
+	"github.com/kyleseneker/tinybpf/diag"
+	"github.com/kyleseneker/tinybpf/llvm"
 )
 
 // injectBTF runs pahole -J on the output object to embed BTF type information.

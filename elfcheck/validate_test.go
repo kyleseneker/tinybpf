@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kyleseneker/tinybpf/internal/diag"
+	"github.com/kyleseneker/tinybpf/diag"
 	"github.com/kyleseneker/tinybpf/internal/testutil"
 )
 

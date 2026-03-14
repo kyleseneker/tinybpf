@@ -1183,7 +1183,7 @@ func TestRoundTripCleanup(t *testing.T) {
 }
 
 func TestRoundTripMinimalFile(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "minimal.ll"))
+	data, err := os.ReadFile(filepath.Join("testdata", "minimal.ll"))
 	if err != nil {
 		t.Skipf("testdata/minimal.ll not found: %v", err)
 	}
@@ -1191,7 +1191,7 @@ func TestRoundTripMinimalFile(t *testing.T) {
 }
 
 func TestRoundTripTinyGoProbe(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("..", "..", "testdata", "tinygo_probe.ll"))
+	data, err := os.ReadFile(filepath.Join("testdata", "tinygo_probe.ll"))
 	if err != nil {
 		t.Skipf("testdata/tinygo_probe.ll not found: %v", err)
 	}

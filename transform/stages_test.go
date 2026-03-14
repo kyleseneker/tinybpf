@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kyleseneker/tinybpf/internal/ir"
+	"github.com/kyleseneker/tinybpf/ir"
 )
 
 func TestBuildModuleStagesOrder(t *testing.T) {

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyleseneker/tinybpf/internal/llvm"
 	"github.com/kyleseneker/tinybpf/internal/testutil"
+	"github.com/kyleseneker/tinybpf/llvm"
 )
 
 func fakeToolOverrides(t *testing.T, script string) llvm.ToolOverrides {

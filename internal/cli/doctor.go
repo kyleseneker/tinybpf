@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/kyleseneker/tinybpf/internal/doctor"
+	"github.com/kyleseneker/tinybpf/doctor"
 )
 
 // runDoctor checks the toolchain installation and version compatibility.

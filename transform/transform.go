@@ -1,6 +1,6 @@
 // Package transform converts TinyGo-emitted host-targeted LLVM IR into
 // BPF-compatible IR suitable for llc -march=bpf. Transformations operate on
-// a structured AST (internal/ir).
+// a structured AST (ir).
 package transform
 
 import (
@@ -10,7 +10,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/kyleseneker/tinybpf/internal/ir"
+	"github.com/kyleseneker/tinybpf/ir"
 )
 
 // Options configures the IR transformation pass.

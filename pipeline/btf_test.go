@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/kyleseneker/tinybpf/internal/diag"
-	"github.com/kyleseneker/tinybpf/internal/llvm"
+	"github.com/kyleseneker/tinybpf/diag"
+	"github.com/kyleseneker/tinybpf/llvm"
 )
 
 func TestInjectBTF(t *testing.T) {

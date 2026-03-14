@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/kyleseneker/tinybpf/internal/elfcheck"
+	"github.com/kyleseneker/tinybpf/elfcheck"
 )
 
 type elfValidator func(path string) error

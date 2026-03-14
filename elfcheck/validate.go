@@ -5,7 +5,7 @@ import (
 	"debug/elf"
 	"fmt"
 
-	"github.com/kyleseneker/tinybpf/internal/diag"
+	"github.com/kyleseneker/tinybpf/diag"
 )
 
 // Validate opens the ELF at path and checks that it meets the minimum

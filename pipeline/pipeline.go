@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kyleseneker/tinybpf/internal/diag"
-	"github.com/kyleseneker/tinybpf/internal/elfcheck"
-	"github.com/kyleseneker/tinybpf/internal/llvm"
-	"github.com/kyleseneker/tinybpf/internal/transform"
+	"github.com/kyleseneker/tinybpf/diag"
+	"github.com/kyleseneker/tinybpf/elfcheck"
+	"github.com/kyleseneker/tinybpf/llvm"
+	"github.com/kyleseneker/tinybpf/transform"
 )
 
 // Config holds all user-provided settings for a linker pipeline run.

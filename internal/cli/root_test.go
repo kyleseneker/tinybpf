@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kyleseneker/tinybpf/internal/pipeline"
 	"github.com/kyleseneker/tinybpf/internal/testutil"
+	"github.com/kyleseneker/tinybpf/pipeline"
 )
 
 func runCLI(t *testing.T, args ...string) (stdout, stderr string, code int) {

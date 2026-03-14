@@ -8,8 +8,8 @@ import (
 	"runtime"
 	"runtime/pprof"
 
-	"github.com/kyleseneker/tinybpf/internal/llvm"
-	"github.com/kyleseneker/tinybpf/internal/pipeline"
+	"github.com/kyleseneker/tinybpf/llvm"
+	"github.com/kyleseneker/tinybpf/pipeline"
 )
 
 type heapProfileWriter func(w io.Writer) error
