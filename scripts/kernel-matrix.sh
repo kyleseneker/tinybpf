@@ -41,27 +41,13 @@ preflight() {
 }
 
 # ---------------------------------------------------------------------------
-# Resolve a shorthand kernel version (e.g. "6.12") to a vng-compatible tag
-# by querying kernel.org for the latest patch release.
+# Normalize a kernel version string for vng (e.g. "6.12" -> "v6.12").
 # Sets: RESOLVED_KERNEL
 # ---------------------------------------------------------------------------
 resolve_kernel() {
-  RESOLVED_KERNEL="${KERNEL_VERSION}"
-
-  if [[ "${KERNEL_VERSION}" =~ ^[0-9]+\.[0-9]+$ ]]; then
-    local latest
-    latest="$(python3 -c "
-import json, urllib.request
-base = '${KERNEL_VERSION}.'
-with urllib.request.urlopen('https://www.kernel.org/releases.json', timeout=5) as r:
-    vs = [rel['version'] for rel in json.load(r).get('releases', [])
-          if rel.get('version','').startswith(base)
-          and all(p.isdigit() for p in rel['version'].split('.'))]
-print(max(vs, key=lambda v: tuple(int(p) for p in v.split('.'))) if vs else '')
-" 2>/dev/null || true)"
-
-    RESOLVED_KERNEL="v${latest:-${KERNEL_VERSION}.0}"
-  elif [[ "${KERNEL_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  if [[ "${KERNEL_VERSION}" =~ ^v ]]; then
+    RESOLVED_KERNEL="${KERNEL_VERSION}"
+  else
     RESOLVED_KERNEL="v${KERNEL_VERSION}"
   fi
 }
@@ -112,7 +98,7 @@ echo ""
 echo "[3/4] Booting kernel ${KERNEL_VERSION} via virtme-ng..."
 
 resolve_kernel
-echo "  resolved: ${KERNEL_VERSION} -> ${RESOLVED_KERNEL}"
+echo "  kernel tag: ${RESOLVED_KERNEL}"
 
 # Prefer a standalone bpftool (e.g. built from source at /usr/local/sbin)
 # over Ubuntu's /usr/sbin/bpftool wrapper, which dispatches via uname -r
