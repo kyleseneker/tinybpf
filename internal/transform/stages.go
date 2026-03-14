@@ -287,7 +287,7 @@ func rewriteHelpersModule(m *ir.Module) error {
 			if !strings.Contains(bline, "@main.bpf") {
 				continue
 			}
-			loc := reHelperCall.FindStringSubmatchIndex(bline)
+			loc := helperCallRe.FindStringSubmatchIndex(bline)
 			if loc == nil {
 				if strings.Contains(bline, "call") {
 					return fmt.Errorf("line references @main.bpf* but does not match expected call pattern: %s",
@@ -300,7 +300,7 @@ func rewriteHelpersModule(m *ir.Module) error {
 			if strings.HasPrefix(funcName, "main.bpfCore") {
 				continue
 			}
-			helperID, ok := knownHelpers[funcName]
+			helperID, ok := helperIDs[funcName]
 			if !ok {
 				return fmt.Errorf("unknown BPF helper %q", funcName)
 			}
