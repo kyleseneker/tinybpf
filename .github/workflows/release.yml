@@ -27,7 +27,7 @@ jobs:
         uses: anchore/sbom-action/download-syft@v0
 
       - name: Build release artifacts
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: build --clean
@@ -75,7 +75,7 @@ jobs:
           fi
 
       - name: Publish release
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --clean
