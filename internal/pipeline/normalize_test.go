@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/kyleseneker/tinybpf/diag"
+	"github.com/kyleseneker/tinybpf/internal/llvm"
 	"github.com/kyleseneker/tinybpf/internal/testutil"
-	"github.com/kyleseneker/tinybpf/llvm"
 )
 
 // fakeAr creates a fake llvm-ar script in dir.
@@ -121,6 +121,111 @@ func TestNormalizeSingleEdgeCases(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestNormalizeInputsParallel(t *testing.T) {
+	tests := []struct {
+		name    string
+		setup   func(t *testing.T, dir string) []string
+		jobs    int
+		usePar  bool
+		wantErr bool
+		check   func(t *testing.T, out, inputs []string)
+	}{
+		{
+			name: "preserves order",
+			setup: func(t *testing.T, dir string) []string {
+				t.Helper()
+				var inputs []string
+				for i := range 10 {
+					f := filepath.Join(dir, fmt.Sprintf("%02d.bc", i))
+					os.WriteFile(f, []byte("bc"), 0o644)
+					inputs = append(inputs, f)
+				}
+				return inputs
+			},
+			jobs: 4,
+			check: func(t *testing.T, out, inputs []string) {
+				t.Helper()
+				for i, got := range out {
+					if got != inputs[i] {
+						t.Fatalf("order mismatch at %d: got %s, want %s", i, got, inputs[i])
+					}
+				}
+			},
+		},
+		{
+			name: "ll passthrough",
+			setup: func(t *testing.T, dir string) []string {
+				t.Helper()
+				var inputs []string
+				for _, name := range []string{"a.ll", "b.ll", "c.ll"} {
+					f := filepath.Join(dir, name)
+					os.WriteFile(f, []byte("target triple = \"bpf\"\n"), 0o644)
+					inputs = append(inputs, f)
+				}
+				return inputs
+			},
+			jobs: 2,
+			check: func(t *testing.T, out, _ []string) {
+				t.Helper()
+				if len(out) != 3 {
+					t.Fatalf("expected 3, got %d", len(out))
+				}
+			},
+		},
+		{
+			name: "error propagation",
+			setup: func(t *testing.T, dir string) []string {
+				t.Helper()
+				ll := filepath.Join(dir, "good.ll")
+				os.WriteFile(ll, []byte("target triple = \"bpf\"\n"), 0o644)
+				obj := filepath.Join(dir, "bad.o")
+				os.WriteFile(obj, []byte("not-elf"), 0o644)
+				return []string{ll, obj}
+			},
+			jobs:    2,
+			usePar:  true,
+			wantErr: true,
+		},
+		{
+			name: "empty result",
+			setup: func(t *testing.T, dir string) []string {
+				t.Helper()
+				return []string{filepath.Join(dir, "a.xyz")}
+			},
+			jobs:    2,
+			usePar:  true,
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			inputs := tt.setup(t, tmp)
+
+			var out []string
+			var err error
+			cfg := Config{Inputs: inputs, Timeout: 5 * time.Second, Jobs: tt.jobs}
+			if tt.usePar {
+				out, err = normalizeInputsParallel(context.Background(), cfg, llvm.Tools{}, tmp)
+			} else {
+				out, err = normalizeInputs(context.Background(), cfg, llvm.Tools{}, tmp)
+			}
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.check != nil {
+				tt.check(t, out, inputs)
 			}
 		})
 	}
@@ -357,111 +462,6 @@ func TestNormalizeArchive(t *testing.T) {
 			}
 			if tt.check != nil {
 				tt.check(t, out)
-			}
-		})
-	}
-}
-
-func TestNormalizeInputsParallel(t *testing.T) {
-	tests := []struct {
-		name    string
-		setup   func(t *testing.T, dir string) []string
-		jobs    int
-		usePar  bool
-		wantErr bool
-		check   func(t *testing.T, out, inputs []string)
-	}{
-		{
-			name: "preserves order",
-			setup: func(t *testing.T, dir string) []string {
-				t.Helper()
-				var inputs []string
-				for i := range 10 {
-					f := filepath.Join(dir, fmt.Sprintf("%02d.bc", i))
-					os.WriteFile(f, []byte("bc"), 0o644)
-					inputs = append(inputs, f)
-				}
-				return inputs
-			},
-			jobs: 4,
-			check: func(t *testing.T, out, inputs []string) {
-				t.Helper()
-				for i, got := range out {
-					if got != inputs[i] {
-						t.Fatalf("order mismatch at %d: got %s, want %s", i, got, inputs[i])
-					}
-				}
-			},
-		},
-		{
-			name: "ll passthrough",
-			setup: func(t *testing.T, dir string) []string {
-				t.Helper()
-				var inputs []string
-				for _, name := range []string{"a.ll", "b.ll", "c.ll"} {
-					f := filepath.Join(dir, name)
-					os.WriteFile(f, []byte("target triple = \"bpf\"\n"), 0o644)
-					inputs = append(inputs, f)
-				}
-				return inputs
-			},
-			jobs: 2,
-			check: func(t *testing.T, out, _ []string) {
-				t.Helper()
-				if len(out) != 3 {
-					t.Fatalf("expected 3, got %d", len(out))
-				}
-			},
-		},
-		{
-			name: "error propagation",
-			setup: func(t *testing.T, dir string) []string {
-				t.Helper()
-				ll := filepath.Join(dir, "good.ll")
-				os.WriteFile(ll, []byte("target triple = \"bpf\"\n"), 0o644)
-				obj := filepath.Join(dir, "bad.o")
-				os.WriteFile(obj, []byte("not-elf"), 0o644)
-				return []string{ll, obj}
-			},
-			jobs:    2,
-			usePar:  true,
-			wantErr: true,
-		},
-		{
-			name: "empty result",
-			setup: func(t *testing.T, dir string) []string {
-				t.Helper()
-				return []string{filepath.Join(dir, "a.xyz")}
-			},
-			jobs:    2,
-			usePar:  true,
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tmp := t.TempDir()
-			inputs := tt.setup(t, tmp)
-
-			var out []string
-			var err error
-			cfg := Config{Inputs: inputs, Timeout: 5 * time.Second, Jobs: tt.jobs}
-			if tt.usePar {
-				out, err = normalizeInputsParallel(context.Background(), cfg, llvm.Tools{}, tmp)
-			} else {
-				out, err = normalizeInputs(context.Background(), cfg, llvm.Tools{}, tmp)
-			}
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tt.check != nil {
-				tt.check(t, out, inputs)
 			}
 		})
 	}

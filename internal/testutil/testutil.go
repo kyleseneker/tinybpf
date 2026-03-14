@@ -8,15 +8,13 @@ import (
 	"testing"
 )
 
-// CopyToolScript is a shell script that copies its input file to its output
-// file, ignoring LLVM-style flags. Suitable for faking llvm-link and opt.
+// CopyToolScript is a shell script that copies its input to its output, ignoring LLVM flags.
 const CopyToolScript = `
 out=""; in=""
 for arg in "$@"; do case "$arg" in -o) n=1;; -passes=*|-S|-march=*|-mcpu=*|-filetype=*) ;; *) if [ "${n:-}" = 1 ]; then out="$arg"; n=0; else in="$arg"; fi;; esac; done
 [ -n "$in" ] && [ -n "$out" ] && cp "$in" "$out"; exit 0`
 
-// LLCELFScript is a shell script that produces a minimal valid BPF ELF
-// object at its -o output path. Suitable for faking llc.
+// LLCELFScript is a shell script that produces a minimal valid BPF ELF object at its -o path.
 const LLCELFScript = `
 out=""
 for arg in "$@"; do case "$arg" in -o) n=1;; *) [ "${n:-}" = 1 ] && { out="$arg"; n=0; };; esac; done
@@ -39,8 +37,7 @@ struct.pack_into('<Q',h,40,so);struct.pack_into('<H',h,60,5);struct.pack_into('<
 sys.stdout.buffer.write(bytes(h)+d+sh)" > "$out"
 exit 0`
 
-// MakeFakeTool creates an executable shell script in dir with the given name
-// and body. Returns the absolute path to the created script.
+// MakeFakeTool creates an executable shell script in dir and returns its path.
 func MakeFakeTool(t *testing.T, dir, name, script string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -50,8 +47,7 @@ func MakeFakeTool(t *testing.T, dir, name, script string) string {
 	return path
 }
 
-// FakeToolDir creates a temp directory populated with fake llvm-link, opt, and
-// llc executables that pass through or generate minimal valid BPF ELF output.
+// FakeToolDir creates a temp directory populated with fake llvm-link, opt, and llc.
 func FakeToolDir(t *testing.T) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), "tools")

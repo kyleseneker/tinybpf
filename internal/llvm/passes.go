@@ -6,14 +6,10 @@ import (
 	"strings"
 )
 
-// DefaultPassPipeline uses Os (optimize for size). Os applies GVN,
-// instcombine, SROA, simplifycfg, and DSE like O2, but avoids aggressive
-// inlining and unrolling that can exceed BPF verifier instruction limits.
+// DefaultPassPipeline uses Os (optimize for size) to stay within BPF verifier limits.
 const DefaultPassPipeline = "default<Os>"
 
-// VerifierSafePipeline includes only passes known to benefit BPF verifier
-// compliance. It excludes loop unrolling, vectorization, and loop idiom
-// recognition. Use when a program fails the verifier with the default profile.
+// VerifierSafePipeline includes only passes known to benefit BPF verifier compliance.
 const VerifierSafePipeline = "function(" +
 	"sroa," +
 	"early-cse<memssa>," +
@@ -29,10 +25,6 @@ const VerifierSafePipeline = "function(" +
 	"adce)"
 
 // profiles maps named optimization profiles to LLVM pass pipeline strings.
-//
-// Profiled against tracepoint-connect probe IR:
-//
-//	conservative=37 insns, default=36, aggressive=36, verifier-safe=36
 var profiles = map[string]string{
 	"conservative":  "default<O1>",
 	"default":       DefaultPassPipeline,

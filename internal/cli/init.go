@@ -4,7 +4,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/kyleseneker/tinybpf/scaffold"
+	"github.com/kyleseneker/tinybpf/internal/scaffold"
 )
 
 // runInit scaffolds a new BPF project in the current directory.

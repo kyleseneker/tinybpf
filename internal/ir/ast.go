@@ -1,12 +1,7 @@
-// Package ir provides a lightweight AST and parser for LLVM IR text files.
-// It parses the subset of IR that TinyGo emits, giving structured access to
-// the constructs that the BPF transform pipeline needs to manipulate. All
-// other IR constructs are preserved verbatim through a Raw field on every node.
+// Package ir provides a lightweight AST and round-trip parser for the subset of LLVM IR that TinyGo emits.
 package ir
 
-// Module is the top-level AST for a parsed .ll file. Entries preserves the
-// source ordering of all top-level constructs for faithful round-trip
-// serialization.
+// Module is the top-level AST for a parsed .ll file.
 type Module struct {
 	Entries []TopLevelEntry
 
@@ -42,7 +37,6 @@ const (
 )
 
 // TopLevelEntry preserves a single top-level item in source order.
-// Exactly one of the pointer fields is non-nil (or none for comments/blanks).
 type TopLevelEntry struct {
 	Kind          TopLevelKind
 	Raw           string

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/kyleseneker/tinybpf/diag"
+	"github.com/kyleseneker/tinybpf/internal/llvm"
 	"github.com/kyleseneker/tinybpf/internal/testutil"
-	"github.com/kyleseneker/tinybpf/llvm"
 )
 
 func makeFakeTool(t *testing.T, dir, name, script string) string {
@@ -31,7 +31,7 @@ type pipelineEnv struct {
 	ToolDir string
 	Input   string
 	Output  string
-	Tools   llvm.ToolOverrides
+	Tools   ToolOverrides
 }
 
 func newPipelineEnv(t *testing.T) *pipelineEnv {
@@ -52,7 +52,7 @@ func newPipelineEnv(t *testing.T) *pipelineEnv {
 		ToolDir: toolDir,
 		Input:   input,
 		Output:  filepath.Join(tmp, "output.o"),
-		Tools: llvm.ToolOverrides{
+		Tools: ToolOverrides{
 			LLVMLink: filepath.Join(toolDir, "llvm-link"),
 			Opt:      filepath.Join(toolDir, "opt"),
 			LLC:      filepath.Join(toolDir, "llc"),
@@ -109,7 +109,7 @@ func TestRunValidation(t *testing.T) {
 				return Config{
 					Inputs: []string{p},
 					Output: filepath.Join(tmp, "out.o"),
-					Tools:  llvm.ToolOverrides{LLVMLink: testutil.BadPath("llvm-link")},
+					Tools:  ToolOverrides{LLVMLink: testutil.BadPath("llvm-link")},
 				}
 			}(),
 			stage: diag.StageDiscover,
@@ -818,50 +818,6 @@ func TestBuildLLCArgs(t *testing.T) {
 	}
 }
 
-func TestParseSectionFlags(t *testing.T) {
-	tests := []struct {
-		name    string
-		flags   []string
-		want    map[string]string
-		wantErr string
-	}{
-		{"nil", nil, nil, ""},
-		{"valid entries", []string{"handle_connect=kprobe/sys_connect", "xdp_filter=xdp"}, map[string]string{"handle_connect": "kprobe/sys_connect", "xdp_filter": "xdp"}, ""},
-		{"rejects missing equals", []string{"no-equals"}, nil, "invalid --section"},
-		{"rejects empty key", []string{"=kprobe/sys_connect"}, nil, "invalid --section"},
-		{"rejects empty value", []string{"handle_connect="}, nil, "invalid --section"},
-		{"duplicate key last wins", []string{"a=x", "a=y"}, map[string]string{"a": "y"}, ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m, err := ParseSectionFlags(tt.flags)
-			if tt.wantErr != "" {
-				if err == nil {
-					t.Fatal("expected error")
-				}
-				if !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("expected %q in error, got: %v", tt.wantErr, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tt.want == nil {
-				if m != nil {
-					t.Fatalf("expected nil, got %v", m)
-				}
-				return
-			}
-			for k, v := range tt.want {
-				if m[k] != v {
-					t.Fatalf("key %q: got %q, want %q", k, m[k], v)
-				}
-			}
-		})
-	}
-}
-
 func TestCopyFile(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -921,6 +877,79 @@ func TestCopyFile(t *testing.T) {
 			}
 			if tt.check != nil {
 				tt.check(t, dst)
+			}
+		})
+	}
+}
+
+func TestInjectBTF(t *testing.T) {
+	tests := []struct {
+		name      string
+		script    string
+		pahole    bool
+		verbose   bool
+		wantErr   bool
+		wantStage bool
+	}{
+		{
+			name:   "success",
+			script: "exit 0",
+			pahole: true,
+		},
+		{
+			name:    "verbose output",
+			script:  "echo info >&2; exit 0",
+			pahole:  true,
+			verbose: true,
+		},
+		{
+			name:      "tool failure",
+			script:    "echo error >&2; exit 1",
+			pahole:    true,
+			wantErr:   true,
+			wantStage: true,
+		},
+		{
+			name:      "pahole not discovered",
+			pahole:    false,
+			wantErr:   true,
+			wantStage: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmp := t.TempDir()
+			out := filepath.Join(tmp, "prog.o")
+			os.WriteFile(out, []byte("elf-data"), 0o644)
+
+			tools := llvm.Tools{}
+			if tt.pahole {
+				p := filepath.Join(tmp, "pahole")
+				os.WriteFile(p, []byte("#!/bin/sh\n"+tt.script+"\n"), 0o755)
+				tools.Pahole = p
+			}
+
+			var stderr bytes.Buffer
+			err := injectBTF(context.Background(), Config{
+				Output:  out,
+				Timeout: 2 * time.Second,
+				Verbose: tt.verbose,
+				Stderr:  &stderr,
+			}, tools)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if tt.wantStage && !diag.IsStage(err, diag.StageBTF) {
+					t.Fatalf("expected BTF stage error, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.verbose && stderr.Len() == 0 {
+				t.Error("expected verbose stderr output")
 			}
 		})
 	}

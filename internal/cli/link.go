@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 
-	"github.com/kyleseneker/tinybpf/pipeline"
+	"github.com/kyleseneker/tinybpf"
 )
 
 type heapProfileWriter func(w io.Writer) error
@@ -25,41 +25,38 @@ func runLinkWith(ctx context.Context, args []string, stdout, stderr io.Writer, w
 	var sectionFlags multiStringFlag
 	var profilePath string
 	var configPath string
-	cfg := pipeline.Config{
-		Stdout: stdout,
-		Stderr: stderr,
-	}
+	var req tinybpf.Request
 
 	fs := newFlagSet(stderr, "tinybpf link --input <file> [flags]", "Link TinyGo LLVM IR into a BPF ELF object.")
 	fs.Var(&inputs, "input", "Input LLVM file (.ll, .bc, .o, .a). Repeat for multiple modules.")
 	fs.Var(&inputs, "i", "Input LLVM file (shorthand).")
-	registerPipelineFlags(fs, &cfg, &programs, &sectionFlags, &configPath)
-	fs.IntVar(&cfg.Jobs, "jobs", 1, "Number of parallel input normalization workers.")
-	fs.IntVar(&cfg.Jobs, "j", 1, "Number of parallel input normalization workers (shorthand).")
+	registerBuildFlags(fs, &req, &programs, &sectionFlags, &configPath)
+	fs.IntVar(&req.Jobs, "jobs", 1, "Number of parallel input normalization workers.")
+	fs.IntVar(&req.Jobs, "j", 1, "Number of parallel input normalization workers (shorthand).")
 	fs.StringVar(&profilePath, "profile", "", "")
 
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
 	}
 
-	if _, cfgErr := loadProjectConfig(fs, configPath, &cfg, stderr); cfgErr != nil {
+	if _, cfgErr := loadProjectConfig(fs, configPath, &req, stderr); cfgErr != nil {
 		return cliErrorf(stderr, "%v", cfgErr)
 	}
 
 	if len(inputs) == 0 {
 		return usageErrorf(fs, stderr, "at least one --input is required")
 	}
-	cfg.Inputs = inputs
+	req.Inputs = inputs
 	if len(programs) > 0 {
-		cfg.Programs = programs
+		req.Programs = programs
 	}
 
-	sections, secErr := pipeline.ParseSectionFlags(sectionFlags)
+	sections, secErr := parseSectionFlags(sectionFlags)
 	if secErr != nil {
 		return cliErrorf(stderr, "%v", secErr)
 	}
 	if len(sections) > 0 {
-		cfg.Sections = sections
+		req.Sections = sections
 	}
 
 	if profilePath != "" {
@@ -71,7 +68,7 @@ func runLinkWith(ctx context.Context, args []string, stdout, stderr io.Writer, w
 		}
 	}
 
-	return runPipelineAndReport(ctx, cfg, stdout, stderr)
+	return runBuildAndReport(ctx, req, stdout, stderr)
 }
 
 // startProfiling starts CPU profiling and returns a cleanup function that

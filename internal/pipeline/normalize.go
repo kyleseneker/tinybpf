@@ -10,11 +10,10 @@ import (
 	"sync"
 
 	"github.com/kyleseneker/tinybpf/diag"
-	"github.com/kyleseneker/tinybpf/llvm"
+	"github.com/kyleseneker/tinybpf/internal/llvm"
 )
 
-// normalizeInputs resolves all input files to LLVM IR/bitcode suitable for
-// llvm-link. Archive and object inputs are expanded/extracted as needed.
+// normalizeInputs resolves all input files to LLVM IR/bitcode suitable for llvm-link.
 func normalizeInputs(ctx context.Context, cfg Config, tools llvm.Tools, workDir string) ([]string, error) {
 	if cfg.Jobs > 1 && len(cfg.Inputs) > 1 {
 		return normalizeInputsParallel(ctx, cfg, tools, workDir)

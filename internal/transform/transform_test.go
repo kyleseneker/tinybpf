@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kyleseneker/tinybpf/internal/ir"
 	"github.com/kyleseneker/tinybpf/internal/testutil"
-	"github.com/kyleseneker/tinybpf/ir"
 )
 
 func TestRun(t *testing.T) {

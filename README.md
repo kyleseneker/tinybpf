@@ -18,7 +18,7 @@
 
 ## What is tinybpf?
 
-[eBPF](https://ebpf.io/) lets sandboxed programs run inside the Linux kernel. Today those programs must be written in C or Rust. `tinybpf` lets you write them in Go instead.
+[eBPF](https://ebpf.io/) lets sandboxed programs run inside the Linux kernel. Today those programs must be written in C or Rust. `tinybpf` is a Go library and CLI that lets you write them in Go instead.
 
 ```mermaid
 graph LR
@@ -43,6 +43,14 @@ The output is a standard BPF ELF object compatible with [`cilium/ebpf`](https://
 | `pahole` | | For BTF injection |
 
 ### Install
+
+**As a library:**
+
+```bash
+go get github.com/kyleseneker/tinybpf@latest
+```
+
+**As a CLI:**
 
 ```bash
 go install github.com/kyleseneker/tinybpf/cmd/tinybpf@latest
@@ -73,6 +81,45 @@ make
 The output is a BPF ELF object at `build/my_probe.bpf.o`, ready for any BPF loader.
 
 See [Getting Started](docs/getting-started.md) for a complete walkthrough.
+
+## Library usage
+
+Use `tinybpf` as a Go library to compile BPF objects programmatically:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/kyleseneker/tinybpf"
+)
+
+func main() {
+	result, err := tinybpf.Build(context.Background(), tinybpf.Request{
+		Package: "./bpf",        // compile Go source via TinyGo
+		Output:  "probe.bpf.o",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println("wrote", result.Output)
+}
+```
+
+Or link pre-compiled LLVM IR:
+
+```go
+result, err := tinybpf.Build(ctx, tinybpf.Request{
+	Inputs:    []string{"module_a.ll", "module_b.ll"},
+	Output:    "combined.bpf.o",
+	EnableBTF: true,
+})
+```
+
+See the [`Request`](https://pkg.go.dev/github.com/kyleseneker/tinybpf#Request) documentation for all available options.
 
 ## Examples
 

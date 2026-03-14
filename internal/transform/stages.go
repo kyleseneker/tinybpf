@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/kyleseneker/tinybpf/diag"
-	"github.com/kyleseneker/tinybpf/ir"
+	"github.com/kyleseneker/tinybpf/internal/ir"
 )
 
 // moduleStage pairs a name with an AST-based transform function.
@@ -285,9 +285,7 @@ func insertMemsetDeclInModule(m *ir.Module) {
 	}
 }
 
-// rewriteHelpersModule replaces Go-style BPF helper calls with inttoptr-based
-// kernel helper calls. Errors are collected across all functions so that every
-// unknown or malformed helper is reported in a single pass.
+// rewriteHelpersModule replaces Go-style BPF helper calls with inttoptr-based kernel helper calls.
 func rewriteHelpersModule(m *ir.Module) error {
 	var errs []error
 	for _, fn := range m.Functions {
@@ -325,6 +323,7 @@ func rewriteHelpersModule(m *ir.Module) error {
 		"check that helper names match kernel BPF helpers")
 }
 
+// unknownHelperErr returns an error for an unrecognized BPF helper, with a suggestion if possible.
 func unknownHelperErr(name string) error {
 	if suggestion := closestHelper(name); suggestion != "" {
 		return fmt.Errorf("unknown BPF helper %q (did you mean %q?)", name, suggestion)
@@ -388,9 +387,7 @@ func rewriteCoreAccessModule(m *ir.Module) error {
 	return nil
 }
 
-// rewriteCoreGEP rewrites a single bpfCore GEP line to a
-// preserve_struct_access_index call. Returns (true, nil) if rewritten,
-// (false, nil) if skipped, (false, err) if malformed.
+// rewriteCoreGEP rewrites a single bpfCore GEP line to a preserve_struct_access_index call.
 func rewriteCoreGEP(fn *ir.Function, i int, bline string, coreTypes map[string]bool, typeMeta map[string]int) (bool, error) {
 	if !strings.Contains(bline, "getelementptr") || !strings.Contains(bline, "bpfCore") {
 		return false, nil

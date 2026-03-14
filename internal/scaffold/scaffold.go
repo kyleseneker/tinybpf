@@ -44,6 +44,7 @@ func Run(cfg Config) error {
 	return writePlannedFiles(cfg.Dir, cfg.Stdout, files)
 }
 
+// buildPlan returns the list of files to create for a new project.
 func buildPlan(dir, bpfDir, program string) []plannedFile {
 	return []plannedFile{
 		{filepath.Join(dir, "tinybpf.json"), projectConfig(program)},
@@ -53,6 +54,7 @@ func buildPlan(dir, bpfDir, program string) []plannedFile {
 	}
 }
 
+// checkCollisions returns an error if any planned file already exists on disk.
 func checkCollisions(files []plannedFile) error {
 	for _, f := range files {
 		if _, err := os.Stat(f.path); err == nil {
@@ -62,6 +64,7 @@ func checkCollisions(files []plannedFile) error {
 	return nil
 }
 
+// writePlannedFiles writes each planned file to disk and logs its relative path.
 func writePlannedFiles(baseDir string, out io.Writer, files []plannedFile) error {
 	for _, f := range files {
 		if err := os.WriteFile(f.path, []byte(f.content), 0o600); err != nil {
@@ -76,6 +79,7 @@ func writePlannedFiles(baseDir string, out io.Writer, files []plannedFile) error
 	return nil
 }
 
+// validateProgramName rejects empty names and names containing path separators.
 func validateProgramName(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("program name is required")
@@ -86,6 +90,7 @@ func validateProgramName(name string) error {
 	return nil
 }
 
+// programGo returns the Go source template for the BPF program entry point.
 func programGo(programName string) string {
 	return `//go:build tinygo
 
@@ -122,6 +127,7 @@ func main() {}
 `
 }
 
+// programStubGo returns the stub source file used when building outside TinyGo.
 func programStubGo() string {
 	return `//go:build !tinygo
 
@@ -129,6 +135,7 @@ package main
 `
 }
 
+// makefile returns a Makefile template that invokes tinybpf build.
 func makefile(programName string) string {
 	return `.PHONY: build clean
 
@@ -148,6 +155,7 @@ clean:
 `
 }
 
+// projectConfig returns the tinybpf.json template for a new project.
 func projectConfig(programName string) string {
 	type build struct {
 		Output   string            `json:"output"`

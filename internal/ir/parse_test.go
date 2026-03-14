@@ -136,15 +136,6 @@ func testRoundTrip(t *testing.T, name, input string) {
 	}
 }
 
-func mustParse(t *testing.T, input string) *Module {
-	t.Helper()
-	m, err := Parse(input)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	return m
-}
-
 func hasEntryWithKind(m *Module, kind TopLevelKind, text string) bool {
 	for _, e := range m.Entries {
 		if e.Kind == kind && strings.Contains(e.Raw, text) {

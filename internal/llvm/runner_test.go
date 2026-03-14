@@ -341,6 +341,67 @@ func TestResolveOptional(t *testing.T) {
 	}
 }
 
+func TestRun(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout time.Duration
+		bin     string
+		args    []string
+		wantErr bool
+		check   func(t *testing.T, res Result)
+	}{
+		{
+			name: "success", timeout: 5 * time.Second,
+			bin: "/bin/echo", args: []string{"hello"},
+			check: func(t *testing.T, res Result) {
+				t.Helper()
+				if !strings.Contains(res.Stdout, "hello") {
+					t.Fatalf("expected hello in stdout, got: %q", res.Stdout)
+				}
+				if !strings.Contains(res.Command, "echo") {
+					t.Fatalf("expected echo in command, got: %q", res.Command)
+				}
+			},
+		},
+		{
+			name: "failure", timeout: 5 * time.Second,
+			bin: "/bin/sh", args: []string{"-c", "echo err >&2; exit 42"},
+			wantErr: true,
+			check: func(t *testing.T, res Result) {
+				t.Helper()
+				if !strings.Contains(res.Stderr, "err") {
+					t.Fatalf("expected stderr, got: %q", res.Stderr)
+				}
+			},
+		},
+		{
+			name: "default timeout", timeout: 0,
+			bin: "/bin/echo", args: []string{"ok"},
+			check: func(t *testing.T, res Result) {
+				t.Helper()
+				if !strings.Contains(res.Stdout, "ok") {
+					t.Fatalf("unexpected stdout: %q", res.Stdout)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			res, err := Run(context.Background(), tt.timeout, tt.bin, tt.args...)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if tt.check != nil {
+				tt.check(t, res)
+			}
+		})
+	}
+}
+
 func TestRunWith(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -423,67 +484,6 @@ func TestRunWith(t *testing.T) {
 				}
 				if tt.errSubstr != "" && !strings.Contains(err.Error(), tt.errSubstr) {
 					t.Fatalf("expected %q in error, got: %v", tt.errSubstr, err)
-				}
-			} else if err != nil {
-				t.Fatal(err)
-			}
-			if tt.check != nil {
-				tt.check(t, res)
-			}
-		})
-	}
-}
-
-func TestRun(t *testing.T) {
-	tests := []struct {
-		name    string
-		timeout time.Duration
-		bin     string
-		args    []string
-		wantErr bool
-		check   func(t *testing.T, res Result)
-	}{
-		{
-			name: "success", timeout: 5 * time.Second,
-			bin: "/bin/echo", args: []string{"hello"},
-			check: func(t *testing.T, res Result) {
-				t.Helper()
-				if !strings.Contains(res.Stdout, "hello") {
-					t.Fatalf("expected hello in stdout, got: %q", res.Stdout)
-				}
-				if !strings.Contains(res.Command, "echo") {
-					t.Fatalf("expected echo in command, got: %q", res.Command)
-				}
-			},
-		},
-		{
-			name: "failure", timeout: 5 * time.Second,
-			bin: "/bin/sh", args: []string{"-c", "echo err >&2; exit 42"},
-			wantErr: true,
-			check: func(t *testing.T, res Result) {
-				t.Helper()
-				if !strings.Contains(res.Stderr, "err") {
-					t.Fatalf("expected stderr, got: %q", res.Stderr)
-				}
-			},
-		},
-		{
-			name: "default timeout", timeout: 0,
-			bin: "/bin/echo", args: []string{"ok"},
-			check: func(t *testing.T, res Result) {
-				t.Helper()
-				if !strings.Contains(res.Stdout, "ok") {
-					t.Fatalf("unexpected stdout: %q", res.Stdout)
-				}
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			res, err := Run(context.Background(), tt.timeout, tt.bin, tt.args...)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error")
 				}
 			} else if err != nil {
 				t.Fatal(err)

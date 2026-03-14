@@ -26,18 +26,13 @@ var events = bpfMapDef{
 	MaxEntries: 128,
 }
 
-// bpfCoreTaskStruct is a CO-RE portable kernel struct stub.
-// Field offsets are resolved at load time via BTF relocations,
-// so this program works across kernel versions even if the
-// layout of task_struct changes.
+// bpfCoreTaskStruct is a CO-RE portable kernel struct stub resolved via BTF at load time.
 type bpfCoreTaskStruct struct {
 	Pid  int32
 	Tgid int32
 }
 
-// Anchor the struct type in LLVM IR so the CO-RE transform can
-// discover its layout. TinyGo strips named types that are only
-// used in local variables; a package-level extern forces emission.
+// Anchor the struct in IR so the CO-RE transform can discover its layout.
 //
 //go:extern __bpf_core_task_struct
 var _coreTaskStruct bpfCoreTaskStruct
@@ -63,10 +58,7 @@ func bpfPerfEventOutput(ctx unsafe.Pointer, mapPtr unsafe.Pointer, flags uint64,
 //go:extern bpf_core_field_exists
 func bpfCoreFieldExists(field unsafe.Pointer) int32
 
-// raw_tracepoint_sched_process_exec fires on every execve.
-// It reads pid/tgid from the current task using CO-RE portable
-// field access. Uses bpfCoreFieldExists to conditionally read
-// tgid only when the kernel's task_struct contains it.
+// raw_tracepoint_sched_process_exec fires on every execve and reads pid/tgid via CO-RE.
 //
 //export raw_tracepoint_sched_process_exec
 func raw_tracepoint_sched_process_exec(ctx unsafe.Pointer) int32 { //nolint:revive

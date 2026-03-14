@@ -8,9 +8,7 @@ import (
 	"github.com/kyleseneker/tinybpf/diag"
 )
 
-// Validate opens the ELF at path and checks that it meets the minimum
-// requirements for a BPF object: 64-bit class, EM_BPF machine, at least
-// one executable program section, and at least one symbol.
+// Validate checks that the ELF at path is a well-formed BPF object.
 func Validate(path string) error {
 	f, err := elf.Open(path)
 	if err != nil {
@@ -30,10 +28,12 @@ func Validate(path string) error {
 	return validateSymbols(f)
 }
 
+// validationErr wraps err as a validation-stage diagnostic with a hint.
 func validationErr(err error, hint string) *diag.Error {
 	return diag.Wrap(diag.StageValidate, err, hint)
 }
 
+// validateClassAndMachine checks for 64-bit class and EM_BPF machine type.
 func validateClassAndMachine(f *elf.File) error {
 	if f.Class != elf.ELFCLASS64 {
 		return validationErr(
@@ -48,6 +48,7 @@ func validateClassAndMachine(f *elf.File) error {
 	return nil
 }
 
+// validateProgramSections checks that at least one executable PROGBITS section exists.
 func validateProgramSections(f *elf.File) error {
 	for _, s := range f.Sections {
 		if s.Type == elf.SHT_PROGBITS && (s.Flags&elf.SHF_EXECINSTR) != 0 {
@@ -59,6 +60,7 @@ func validateProgramSections(f *elf.File) error {
 		"verify input IR contains at least one BPF program function section")
 }
 
+// validateMapsSection rejects a .maps section that is incorrectly marked executable.
 func validateMapsSection(f *elf.File) error {
 	for _, s := range f.Sections {
 		if s.Name == ".maps" && (s.Flags&elf.SHF_EXECINSTR) != 0 {
@@ -70,6 +72,7 @@ func validateMapsSection(f *elf.File) error {
 	return nil
 }
 
+// validateSymbols checks that the object contains at least one symbol.
 func validateSymbols(f *elf.File) error {
 	syms, err := f.Symbols()
 	if err == nil && len(syms) == 0 {

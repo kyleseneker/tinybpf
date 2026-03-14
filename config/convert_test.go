@@ -3,50 +3,53 @@ package config
 import (
 	"testing"
 
-	"github.com/kyleseneker/tinybpf/pipeline"
+	"github.com/kyleseneker/tinybpf"
 )
 
-func checkFullPipeline(t *testing.T, pc pipeline.Config) {
+func checkFullRequest(t *testing.T, req tinybpf.Request) {
 	t.Helper()
-	if pc.Output != "out.o" {
-		t.Errorf("Output = %q", pc.Output)
+	if req.Output != "out.o" {
+		t.Errorf("Output = %q", req.Output)
 	}
-	if pc.CPU != "v2" {
-		t.Errorf("CPU = %q", pc.CPU)
+	if req.CPU != "v2" {
+		t.Errorf("CPU = %q", req.CPU)
 	}
-	if pc.OptProfile != "aggressive" {
-		t.Errorf("OptProfile = %q", pc.OptProfile)
+	if req.OptProfile != "aggressive" {
+		t.Errorf("OptProfile = %q", req.OptProfile)
 	}
-	if !pc.EnableBTF {
+	if !req.EnableBTF {
 		t.Error("EnableBTF should be true")
 	}
-	if pc.Timeout.Seconds() != 45 {
-		t.Errorf("Timeout = %v", pc.Timeout)
+	if req.Timeout.Seconds() != 45 {
+		t.Errorf("Timeout = %v", req.Timeout)
 	}
-	if len(pc.Programs) != 2 {
-		t.Fatalf("Programs len = %d, want 2", len(pc.Programs))
+	if len(req.Programs) != 2 {
+		t.Fatalf("Programs len = %d, want 2", len(req.Programs))
 	}
-	if pc.Sections["handler"] != "kprobe/sys_connect" {
-		t.Errorf("Sections[handler] = %q", pc.Sections["handler"])
+	if req.Sections["handler"] != "kprobe/sys_connect" {
+		t.Errorf("Sections[handler] = %q", req.Sections["handler"])
 	}
-	if _, ok := pc.Sections["prog2"]; ok {
+	if _, ok := req.Sections["prog2"]; ok {
 		t.Error("prog2 should not have a section (empty value)")
 	}
-	if len(pc.CustomPasses) != 1 || pc.CustomPasses[0] != "inline" {
-		t.Errorf("CustomPasses = %v", pc.CustomPasses)
+	if len(req.CustomPasses) != 1 || req.CustomPasses[0] != "inline" {
+		t.Errorf("CustomPasses = %v", req.CustomPasses)
 	}
-	if pc.Tools.LLVMLink != "/opt/llvm/bin/llvm-link" {
-		t.Errorf("Tools.LLVMLink = %q", pc.Tools.LLVMLink)
+	if req.Toolchain.LLVMLink != "/opt/llvm/bin/llvm-link" {
+		t.Errorf("Toolchain.LLVMLink = %q", req.Toolchain.LLVMLink)
+	}
+	if req.Toolchain.TinyGo != "/opt/tinygo/bin/tinygo" {
+		t.Errorf("Toolchain.TinyGo = %q", req.Toolchain.TinyGo)
 	}
 }
 
-func TestToPipeline(t *testing.T) {
+func TestToRequest(t *testing.T) {
 	trueVal := true
 
 	tests := []struct {
 		name  string
 		cfg   *Config
-		check func(t *testing.T, pc pipeline.Config)
+		check func(t *testing.T, req tinybpf.Request)
 	}{
 		{
 			name: "maps all fields",
@@ -65,29 +68,86 @@ func TestToPipeline(t *testing.T) {
 					TinyGo:  "/opt/tinygo/bin/tinygo",
 				},
 			},
-			check: checkFullPipeline,
+			check: checkFullRequest,
 		},
 		{
 			name: "empty config uses zero values",
 			cfg:  &Config{},
-			check: func(t *testing.T, pc pipeline.Config) {
+			check: func(t *testing.T, req tinybpf.Request) {
 				t.Helper()
-				if pc.Output != "" {
-					t.Errorf("Output = %q, want empty", pc.Output)
+				if req.Output != "" {
+					t.Errorf("Output = %q, want empty", req.Output)
 				}
-				if pc.EnableBTF {
+				if req.EnableBTF {
 					t.Error("EnableBTF should be false")
 				}
-				if pc.Timeout != 0 {
-					t.Errorf("Timeout = %v, want 0", pc.Timeout)
+				if req.Timeout != 0 {
+					t.Errorf("Timeout = %v, want 0", req.Timeout)
 				}
 			},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pc := ToPipeline(tt.cfg)
-			tt.check(t, pc)
+			req := ToRequest(tt.cfg)
+			tt.check(t, req)
+		})
+	}
+}
+
+func TestResolveToolchain(t *testing.T) {
+	tests := []struct {
+		name  string
+		tc    Toolchain
+		check func(t *testing.T, tools tinybpf.Toolchain)
+	}{
+		{
+			name: "llvm_dir fills all tools",
+			tc:   Toolchain{LLVMDir: "/opt/llvm/bin"},
+			check: func(t *testing.T, tools tinybpf.Toolchain) {
+				t.Helper()
+				if tools.LLVMLink != "/opt/llvm/bin/llvm-link" {
+					t.Errorf("llvm-link = %q", tools.LLVMLink)
+				}
+				if tools.Opt != "/opt/llvm/bin/opt" {
+					t.Errorf("opt = %q", tools.Opt)
+				}
+				if tools.LLC != "/opt/llvm/bin/llc" {
+					t.Errorf("llc = %q", tools.LLC)
+				}
+			},
+		},
+		{
+			name: "per-tool override beats llvm_dir",
+			tc: Toolchain{
+				LLVMDir: "/opt/llvm/bin",
+				Opt:     "/custom/opt",
+			},
+			check: func(t *testing.T, tools tinybpf.Toolchain) {
+				t.Helper()
+				if tools.Opt != "/custom/opt" {
+					t.Errorf("opt = %q, want /custom/opt", tools.Opt)
+				}
+				if tools.LLC != "/opt/llvm/bin/llc" {
+					t.Errorf("llc = %q, want /opt/llvm/bin/llc", tools.LLC)
+				}
+			},
+		},
+		{
+			name: "empty toolchain returns empty overrides",
+			tc:   Toolchain{},
+			check: func(t *testing.T, tools tinybpf.Toolchain) {
+				t.Helper()
+				if tools.LLVMLink != "" || tools.Opt != "" || tools.LLC != "" {
+					t.Error("expected empty overrides")
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tools := ResolveToolchain(tt.tc)
+			tt.check(t, tools)
 		})
 	}
 }

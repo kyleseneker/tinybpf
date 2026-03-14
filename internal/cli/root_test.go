@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/kyleseneker/tinybpf"
 	"github.com/kyleseneker/tinybpf/internal/testutil"
-	"github.com/kyleseneker/tinybpf/pipeline"
 )
 
 func runCLI(t *testing.T, args ...string) (stdout, stderr string, code int) {
@@ -262,12 +262,12 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
-func TestRegisterPipelineFlags(t *testing.T) {
+func TestRegisterBuildFlags(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	var cfg pipeline.Config
+	var req tinybpf.Request
 	var programs, sections multiStringFlag
 	var configPath string
-	registerPipelineFlags(fs, &cfg, &programs, &sections, &configPath)
+	registerBuildFlags(fs, &req, &programs, &sections, &configPath)
 
 	expected := []struct {
 		name     string

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/kyleseneker/tinybpf/ir"
+	"github.com/kyleseneker/tinybpf/internal/ir"
 )
 
 func TestIsRuntimeFunc(t *testing.T) {

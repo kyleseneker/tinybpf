@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kyleseneker/tinybpf/cache"
 	"github.com/kyleseneker/tinybpf/diag"
 	"github.com/kyleseneker/tinybpf/elfcheck"
-	"github.com/kyleseneker/tinybpf/llvm"
-	"github.com/kyleseneker/tinybpf/transform"
+	"github.com/kyleseneker/tinybpf/internal/cache"
+	"github.com/kyleseneker/tinybpf/internal/llvm"
+	"github.com/kyleseneker/tinybpf/internal/transform"
 )
 
 // Config holds all user-provided settings for a linker pipeline run.
@@ -33,7 +33,7 @@ type Config struct {
 	EnableBTF    bool
 	Programs     []string
 	Sections     map[string]string
-	Tools        llvm.ToolOverrides
+	Tools        ToolOverrides
 	Stdout       io.Writer
 	Stderr       io.Writer
 	Jobs         int
@@ -43,6 +43,10 @@ type Config struct {
 	Cache        bool
 	ValidateELF  func(path string) error
 }
+
+// ToolOverrides allows callers to specify explicit LLVM binary paths,
+// bypassing PATH-based discovery.
+type ToolOverrides = llvm.ToolOverrides
 
 // Artifacts records the paths of intermediate and final build products.
 type Artifacts struct {
@@ -436,22 +440,6 @@ func buildLLCArgs(cpu, inputPath, outputPath string) []string {
 	}
 }
 
-// ParseSectionFlags parses "name=section" flag strings into a map.
-func ParseSectionFlags(flags []string) (map[string]string, error) {
-	if len(flags) == 0 {
-		return nil, nil
-	}
-	m := make(map[string]string, len(flags))
-	for _, f := range flags {
-		parts := strings.SplitN(f, "=", 2)
-		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-			return nil, fmt.Errorf("invalid --section %q: expected format name=section", f)
-		}
-		m[parts[0]] = parts[1]
-	}
-	return m, nil
-}
-
 // logCache logs a cache hit or miss when verbose mode is enabled.
 func (rc *runContext) logCache(stage, key string, hit bool) {
 	if !rc.cfg.Verbose {
@@ -482,4 +470,22 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	return os.WriteFile(dst, data, 0o600)
+}
+
+// injectBTF runs pahole -J on the output object to embed BTF type information.
+func injectBTF(ctx context.Context, cfg Config, tools llvm.Tools) error {
+	if tools.Pahole == "" {
+		return diag.WrapCmd(diag.StageBTF, fmt.Errorf("pahole not found"),
+			"pahole", "", "install pahole or pass --pahole when using --btf")
+	}
+
+	res, err := llvm.Run(ctx, cfg.Timeout, tools.Pahole, "-J", cfg.Output)
+	if cfg.Verbose && strings.TrimSpace(res.Stderr) != "" {
+		fmt.Fprintf(cfg.Stderr, "%s\n", res.Stderr)
+	}
+	if err != nil {
+		return diag.WrapCmd(diag.StageBTF, err, res.Command, res.Stderr,
+			"failed to inject BTF data into output object")
+	}
+	return nil
 }

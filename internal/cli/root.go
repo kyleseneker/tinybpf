@@ -11,10 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kyleseneker/tinybpf/cache"
+	"github.com/kyleseneker/tinybpf"
 	"github.com/kyleseneker/tinybpf/config"
-	"github.com/kyleseneker/tinybpf/llvm"
-	"github.com/kyleseneker/tinybpf/pipeline"
+	"github.com/kyleseneker/tinybpf/internal/cache"
 )
 
 // Version is set at build time via ldflags:
@@ -137,26 +136,26 @@ func runVersion(stdout io.Writer) int {
 	return 0
 }
 
-// registerPipelineFlags registers the flags shared by build and link.
-func registerPipelineFlags(fs *flag.FlagSet, cfg *pipeline.Config, programs, sections *multiStringFlag, configPath *string) {
+// registerBuildFlags registers the flags shared by build and link.
+func registerBuildFlags(fs *flag.FlagSet, req *tinybpf.Request, programs, sections *multiStringFlag, configPath *string) {
 	fs.StringVar(configPath, "config", "", "Path to tinybpf.json project config (default: auto-discovered).")
-	fs.StringVar(&cfg.Output, "output", "bpf.o", "Output eBPF ELF object path.")
-	fs.StringVar(&cfg.Output, "o", "bpf.o", "Output eBPF ELF object path (shorthand).")
-	fs.StringVar(&cfg.CPU, "cpu", "v3", "BPF CPU version passed to llc as -mcpu.")
-	fs.BoolVar(&cfg.KeepTemp, "keep-temp", false, "Keep temporary intermediate files after run.")
-	fs.BoolVar(&cfg.Verbose, "verbose", false, "Enable verbose stage logging.")
-	fs.BoolVar(&cfg.Verbose, "v", false, "Enable verbose stage logging (shorthand).")
-	fs.StringVar(&cfg.PassPipeline, "pass-pipeline", "", "Explicit LLVM opt pass pipeline string.")
-	fs.StringVar(&cfg.OptProfile, "opt-profile", "default", "Optimization profile: conservative, default, aggressive, verifier-safe.")
-	fs.DurationVar(&cfg.Timeout, "timeout", 30*time.Second, "Per-stage command timeout.")
-	fs.StringVar(&cfg.TempDir, "tmpdir", "", "Directory for intermediate artifacts (kept after run).")
-	fs.BoolVar(&cfg.EnableBTF, "btf", false, "Enable BTF injection via pahole.")
-	fs.BoolVar(&cfg.DumpIR, "dump-ir", false, "Write intermediate IR after each transform stage for debugging.")
-	fs.BoolVar(&cfg.Cache, "cache", true, "Enable content-addressed build cache for intermediate artifacts.")
-	fs.StringVar(&cfg.ProgramType, "program-type", "", "Expected BPF program type (e.g. kprobe, xdp, tracepoint). Validates --section values.")
+	fs.StringVar(&req.Output, "output", "bpf.o", "Output eBPF ELF object path.")
+	fs.StringVar(&req.Output, "o", "bpf.o", "Output eBPF ELF object path (shorthand).")
+	fs.StringVar(&req.CPU, "cpu", "v3", "BPF CPU version passed to llc as -mcpu.")
+	fs.BoolVar(&req.KeepTemp, "keep-temp", false, "Keep temporary intermediate files after run.")
+	fs.BoolVar(&req.Verbose, "verbose", false, "Enable verbose stage logging.")
+	fs.BoolVar(&req.Verbose, "v", false, "Enable verbose stage logging (shorthand).")
+	fs.StringVar(&req.PassPipeline, "pass-pipeline", "", "Explicit LLVM opt pass pipeline string.")
+	fs.StringVar(&req.OptProfile, "opt-profile", "default", "Optimization profile: conservative, default, aggressive, verifier-safe.")
+	fs.DurationVar(&req.Timeout, "timeout", 30*time.Second, "Per-stage command timeout.")
+	fs.StringVar(&req.TempDir, "tmpdir", "", "Directory for intermediate artifacts (kept after run).")
+	fs.BoolVar(&req.EnableBTF, "btf", false, "Enable BTF injection via pahole.")
+	fs.BoolVar(&req.DumpIR, "dump-ir", false, "Write intermediate IR after each transform stage for debugging.")
+	fs.BoolVar(&req.Cache, "cache", true, "Enable content-addressed build cache for intermediate artifacts.")
+	fs.StringVar(&req.ProgramType, "program-type", "", "Expected BPF program type (e.g. kprobe, xdp, tracepoint). Validates --section values.")
 	fs.Var(programs, "program", "Program function name to keep. Repeat for multiple programs. Auto-detected if omitted.")
 	fs.Var(sections, "section", "Program-to-section mapping (e.g., handle_connect=tracepoint/syscalls/sys_enter_connect). Repeat for multiple.")
-	registerToolFlags(fs, &cfg.Tools)
+	registerToolFlags(fs, &req.Toolchain)
 }
 
 // configResult holds the loaded project config and tinygo path override.
@@ -164,9 +163,8 @@ type configResult struct {
 	tinygo string
 }
 
-// loadProjectConfig discovers, loads, and applies tinybpf.json settings to
-// the pipeline config. CLI flags that were explicitly set take precedence.
-func loadProjectConfig(fs *flag.FlagSet, configPath string, cfg *pipeline.Config, stderr io.Writer) (*configResult, error) {
+// loadProjectConfig discovers and applies tinybpf.json settings that aren't overridden by CLI flags.
+func loadProjectConfig(fs *flag.FlagSet, configPath string, req *tinybpf.Request, stderr io.Writer) (*configResult, error) {
 	path, err := resolveConfigPath(configPath)
 	if err != nil {
 		return nil, err
@@ -181,9 +179,9 @@ func loadProjectConfig(fs *flag.FlagSet, configPath string, cfg *pipeline.Config
 	}
 
 	set := flagsSet(fs)
-	pc := config.ToPipeline(fileCfg)
-	applyBuildDefaults(set, cfg, &pc, fileCfg)
-	applyToolOverrides(set, &cfg.Tools, pc.Tools)
+	fileReq := config.ToRequest(fileCfg)
+	applyBuildDefaults(set, req, &fileReq, fileCfg)
+	applyToolOverrides(set, &req.Toolchain, fileReq.Toolchain)
 
 	return &configResult{tinygo: fileCfg.Toolchain.TinyGo}, nil
 }
@@ -204,39 +202,40 @@ func resolveConfigPath(explicit string) (string, error) {
 	return found, nil
 }
 
-// applyBuildDefaults copies config-file build settings into the pipeline
-// config for any field not explicitly set via CLI flags.
-func applyBuildDefaults(set map[string]bool, cfg *pipeline.Config, pc *pipeline.Config, fileCfg *config.Config) {
-	applyBuildScalars(set, cfg, pc, fileCfg)
-	if !set["program"] && len(pc.Programs) > 0 {
-		cfg.Programs = pc.Programs
+// applyBuildDefaults copies config-file build settings into the request
+// for any field not explicitly set via CLI flags.
+func applyBuildDefaults(set map[string]bool, req *tinybpf.Request, fileReq *tinybpf.Request, fileCfg *config.Config) {
+	applyBuildScalars(set, req, fileReq, fileCfg)
+	if !set["program"] && len(fileReq.Programs) > 0 {
+		req.Programs = fileReq.Programs
 	}
-	if !set["section"] && len(pc.Sections) > 0 {
-		cfg.Sections = pc.Sections
+	if !set["section"] && len(fileReq.Sections) > 0 {
+		req.Sections = fileReq.Sections
 	}
-	if len(pc.CustomPasses) > 0 {
-		cfg.CustomPasses = pc.CustomPasses
+	if len(fileReq.CustomPasses) > 0 {
+		req.CustomPasses = fileReq.CustomPasses
 	}
 }
 
-func applyBuildScalars(set map[string]bool, cfg *pipeline.Config, pc *pipeline.Config, fileCfg *config.Config) {
-	if !set["output"] && !set["o"] && pc.Output != "" {
-		cfg.Output = pc.Output
+// applyBuildScalars copies individual config-file scalar fields unless overridden by CLI flags.
+func applyBuildScalars(set map[string]bool, req *tinybpf.Request, fileReq *tinybpf.Request, fileCfg *config.Config) {
+	if !set["output"] && !set["o"] && fileReq.Output != "" {
+		req.Output = fileReq.Output
 	}
-	if !set["cpu"] && pc.CPU != "" {
-		cfg.CPU = pc.CPU
+	if !set["cpu"] && fileReq.CPU != "" {
+		req.CPU = fileReq.CPU
 	}
-	if !set["opt-profile"] && pc.OptProfile != "" {
-		cfg.OptProfile = pc.OptProfile
+	if !set["opt-profile"] && fileReq.OptProfile != "" {
+		req.OptProfile = fileReq.OptProfile
 	}
 	if !set["btf"] && fileCfg.Build.BTF != nil {
-		cfg.EnableBTF = pc.EnableBTF
+		req.EnableBTF = fileReq.EnableBTF
 	}
 	if !set["cache"] && fileCfg.Build.Cache != nil {
-		cfg.Cache = pc.Cache
+		req.Cache = fileReq.Cache
 	}
-	if !set["timeout"] && pc.Timeout > 0 {
-		cfg.Timeout = pc.Timeout
+	if !set["timeout"] && fileReq.Timeout > 0 {
+		req.Timeout = fileReq.Timeout
 	}
 }
 
@@ -249,7 +248,7 @@ func flagsSet(fs *flag.FlagSet) map[string]bool {
 
 // applyToolOverrides applies config-file tool paths for any tool not
 // explicitly overridden via CLI flags.
-func applyToolOverrides(set map[string]bool, dst *llvm.ToolOverrides, src llvm.ToolOverrides) {
+func applyToolOverrides(set map[string]bool, dst *tinybpf.Toolchain, src tinybpf.Toolchain) {
 	if !set["llvm-link"] && src.LLVMLink != "" {
 		dst.LLVMLink = src.LLVMLink
 	}
@@ -270,28 +269,30 @@ func applyToolOverrides(set map[string]bool, dst *llvm.ToolOverrides, src llvm.T
 	}
 }
 
-// runPipelineAndReport runs the link pipeline and prints the result.
-func runPipelineAndReport(ctx context.Context, cfg pipeline.Config, stdout, stderr io.Writer) int {
-	artifacts, err := pipeline.Run(ctx, cfg)
+// runBuildAndReport runs a build request and prints the result.
+func runBuildAndReport(ctx context.Context, req tinybpf.Request, stdout, stderr io.Writer) int {
+	req.Stdout = stdout
+	req.Stderr = stderr
+	result, err := tinybpf.Build(ctx, req)
 	if err != nil {
 		fmt.Fprintln(stderr, err.Error())
 		return 1
 	}
-	if cfg.Verbose || cfg.KeepTemp || cfg.TempDir != "" {
-		fmt.Fprintf(stdout, "intermediates: %s\n", artifacts.TempDir)
+	if req.Verbose || req.KeepTemp || req.TempDir != "" {
+		fmt.Fprintf(stdout, "intermediates: %s\n", result.TempDir)
 	}
-	fmt.Fprintf(stdout, "wrote %s\n", cfg.Output)
+	fmt.Fprintf(stdout, "wrote %s\n", result.Output)
 	return 0
 }
 
-// registerToolFlags binds the standard LLVM tool path flags to a ToolOverrides.
-func registerToolFlags(fs *flag.FlagSet, tools *llvm.ToolOverrides) {
-	fs.StringVar(&tools.LLVMLink, "llvm-link", "", "Path to llvm-link binary.")
-	fs.StringVar(&tools.Opt, "opt", "", "Path to opt binary.")
-	fs.StringVar(&tools.LLC, "llc", "", "Path to llc binary.")
-	fs.StringVar(&tools.LLVMAr, "llvm-ar", "", "Path to llvm-ar binary.")
-	fs.StringVar(&tools.Objcopy, "llvm-objcopy", "", "Path to llvm-objcopy binary.")
-	fs.StringVar(&tools.Pahole, "pahole", "", "Path to pahole binary (used with --btf).")
+// registerToolFlags binds the standard LLVM tool path flags to a Toolchain.
+func registerToolFlags(fs *flag.FlagSet, tc *tinybpf.Toolchain) {
+	fs.StringVar(&tc.LLVMLink, "llvm-link", "", "Path to llvm-link binary.")
+	fs.StringVar(&tc.Opt, "opt", "", "Path to opt binary.")
+	fs.StringVar(&tc.LLC, "llc", "", "Path to llc binary.")
+	fs.StringVar(&tc.LLVMAr, "llvm-ar", "", "Path to llvm-ar binary.")
+	fs.StringVar(&tc.Objcopy, "llvm-objcopy", "", "Path to llvm-objcopy binary.")
+	fs.StringVar(&tc.Pahole, "pahole", "", "Path to pahole binary (used with --btf).")
 }
 
 // cliErrorf prints a formatted error message and returns exit code 1.
@@ -318,4 +319,20 @@ func runCleanCache(stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintf(stdout, "cleaned cache: %s\n", s.Dir())
 	return 0
+}
+
+// parseSectionFlags parses "name=section" flag strings into a map.
+func parseSectionFlags(flags []string) (map[string]string, error) {
+	if len(flags) == 0 {
+		return nil, nil
+	}
+	m := make(map[string]string, len(flags))
+	for _, f := range flags {
+		parts := strings.SplitN(f, "=", 2)
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return nil, fmt.Errorf("invalid --section %q: expected format name=section", f)
+		}
+		m[parts[0]] = parts[1]
+	}
+	return m, nil
 }

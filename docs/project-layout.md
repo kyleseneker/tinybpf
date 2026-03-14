@@ -2,67 +2,94 @@
 
 Package map for contributors working on `tinybpf` internals.
 
+## Public API
+
+```
+tinybpf.go                 Request, Result, Toolchain types — the stable SDK surface
+build.go                   Build() entrypoint — validates, compiles, and orchestrates the pipeline
+```
+
+Import as:
+
+```go
+import "github.com/kyleseneker/tinybpf"
+```
+
+## Supporting public packages
+
+```
+config/                    Project config loading (tinybpf.json), validation, and merge
+  config.go                Config struct, file parsing, field defaults
+  convert.go               Config-to-Request conversion, tool resolution
+
+diag/                      Structured error types with stage context, hints, and snippets
+
+elfcheck/                  Post-link ELF validation (class, machine, sections, symbols)
+```
+
+## CLI
+
 ```
 cmd/tinybpf/               CLI entrypoint (main package)
 internal/
   cli/                     Flag parsing, subcommand dispatch, config/CLI merge
+```
+
+## Internal implementation
+
+Everything below `internal/` is hidden from external consumers.
+
+### Core pipeline
+
+```
+internal/
+  pipeline/                Orchestration: normalize -> link -> transform -> opt -> codegen -> BTF -> validate
+    pipeline.go            Stage sequencing, caching, verbose logging, BTF injection
+    normalize.go           Input normalization (.a expansion, .o bitcode extraction)
+    progtype.go            BPF program type validation and section name mapping
+```
+
+### IR processing
+
+```
+internal/
+  ir/                      LLVM IR parser, AST, and serializer
+    ast.go                 AST node types (Module, Function, Global, BasicBlock, etc.)
+    parse.go               Parses LLVM IR text into *ir.Module AST
+    parse_inst.go          Instruction-level parsing
+    parse_meta.go          Metadata and attribute parsing
+    serialize.go           Serializes AST back to IR text (round-trip safe)
+    testdata/              IR fixture files for parser/serializer tests
+
+  transform/               TinyGo IR -> BPF IR rewriting (8 passes)
+    transform.go           Transform interface and types
+    stages.go              Pass registration, sequencing, and most pass implementations
+    core.go                CO-RE struct access, exists intrinsics, field names
+    btfmap.go              map prefix strip, BTF encoding, name sanitization
+    helpers.go             BPF helper name-to-ID mapping
+    bpfhelpers_gen.go      Generated helper table (from kernel bpf.h)
+    gen.go                 Code generation tooling for bpfhelpers_gen.go
+    suggest.go             Fuzzy-match suggestions for unknown helper names
+    irutil.go              IR utility functions shared across passes
+```
+
+### LLVM tooling
+
+```
+internal/
+  llvm/                    Tool discovery, optimization profiles, process execution
+    runner.go              Tool resolution, binary validation, environment sanitization, exec with timeout
+    passes.go              Named optimization profiles and custom pass validation
+```
+
+### Other internal packages
+
+```
+internal/
+  cache/                   Content-addressed build cache for pipeline artifacts
+  doctor/                  Toolchain diagnostic subcommand (tool discovery, version checks)
+  scaffold/                Project scaffolding (tinybpf init)
   testutil/                Test helpers (fake LLVM tools, sample IR fixtures)
-```
-
-## Core pipeline
-
-```
-pipeline/                  Orchestration: normalize -> link -> transform -> opt -> codegen -> BTF -> validate
-  normalize.go             Input normalization (.a expansion, .o bitcode extraction)
-  pipeline.go              Stage sequencing, caching, verbose logging, artifact management
-```
-
-## IR processing
-
-```
-ir/                        LLVM IR parser, AST, serializer, and index
-  parser.go                Parses LLVM IR text into *ir.Module AST
-  serialize.go             Serializes AST back to IR text (round-trip safe)
-  ast.go                   AST node types (Module, Function, Global, BasicBlock, etc.)
-  testdata/                IR fixture files for parser/serializer tests
-
-transform/                 TinyGo IR -> BPF IR rewriting (8 passes)
-  stages.go                Pass registration, sequencing, and most pass implementations
-  core.go                  CO-RE struct access, exists intrinsics, field names
-  btfmap.go                map prefix strip, BTF encoding, name sanitization
-  helpers.go               BPF helper name-to-ID mapping
-  bpfhelpers_gen.go        Generated helper table (from kernel bpf.h)
-  suggest.go               Fuzzy-match suggestions for unknown helper names
-  irutil.go                IR utility functions shared across passes
-  transform.go             Transform interface and types
-```
-
-## LLVM tooling
-
-```
-llvm/                      Tool discovery, optimization profiles, process execution
-  runner.go                Binary validation, environment sanitization, exec with timeout
-  passes.go                Named optimization profiles and custom pass validation
-  discover.go              Tool path resolution (PATH, config, versioned names)
-```
-
-## Validation and diagnostics
-
-```
-elfcheck/                  Post-link ELF validation (class, machine, sections, symbols)
-diag/                      Structured error types with stage context, hints, and snippets
-```
-
-## Build infrastructure
-
-```
-cache/                     Content-addressed build cache for pipeline artifacts
-  cache.go                 SHA-256 keying, shard storage, atomic writes
-config/                    Project config loading (tinybpf.json), validation, and merge
-  config.go                Config struct, file parsing, field defaults
-  convert.go               Config-to-pipeline conversion, tool resolution
-doctor/                    Toolchain diagnostic subcommand (tool discovery, version checks)
-scaffold/                  Project scaffolding (tinybpf init)
 ```
 
 ## Examples
@@ -94,11 +121,12 @@ scripts/
 
 | Task | Start here |
 |------|-----------|
+| Use tinybpf as a library | `tinybpf.go` (types), `build.go` (Build function) |
 | Add a CLI flag | `internal/cli/root.go` (shared flags), `internal/cli/build.go` or `link.go` (command-specific) |
-| Add a config field | `config/config.go` (struct), `internal/cli/root.go` (merge logic) |
-| Add a transform pass | `transform/stages.go` (registration), new file in `transform/` |
-| Change optimization profiles | `llvm/passes.go` |
+| Add a config field | `config/config.go` (struct), `config/convert.go` (to Request), `internal/cli/root.go` (merge logic) |
+| Add a transform pass | `internal/transform/stages.go` (registration), new file in `internal/transform/` |
+| Change optimization profiles | `internal/llvm/passes.go` |
 | Change ELF validation | `elfcheck/validate.go` |
-| Change doctor checks | `doctor/doctor.go` |
-| Change scaffolded output | `scaffold/scaffold.go` |
+| Change doctor checks | `internal/doctor/doctor.go` |
+| Change scaffolded output | `internal/scaffold/scaffold.go` |
 | Add a new example | Copy an existing `examples/` directory and adapt |

@@ -1,5 +1,5 @@
-// Package config loads and merges tinybpf project configuration from
-// a tinybpf.json file and CLI flag overrides.
+// Package config loads tinybpf project configuration from a tinybpf.json
+// file and converts it to [github.com/kyleseneker/tinybpf.Request] values.
 package config
 
 import (
@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kyleseneker/tinybpf/llvm"
+	"github.com/kyleseneker/tinybpf/internal/llvm"
 )
 
 // Filename is the conventional config file name.
@@ -81,40 +81,6 @@ func Find(startDir string) (string, error) {
 	}
 }
 
-// Merge returns a new Config with file values as the base and flag values
-// as overrides. Non-zero flag values take precedence over file values.
-func Merge(file, flags *Config) *Config {
-	out := *file
-
-	if flags.Build.Output != "" {
-		out.Build.Output = flags.Build.Output
-	}
-	if flags.Build.CPU != "" {
-		out.Build.CPU = flags.Build.CPU
-	}
-	if flags.Build.OptProfile != "" {
-		out.Build.OptProfile = flags.Build.OptProfile
-	}
-	if flags.Build.BTF != nil {
-		out.Build.BTF = flags.Build.BTF
-	}
-	if flags.Build.Cache != nil {
-		out.Build.Cache = flags.Build.Cache
-	}
-	if flags.Build.Timeout != "" {
-		out.Build.Timeout = flags.Build.Timeout
-	}
-	if len(flags.Build.Programs) > 0 {
-		out.Build.Programs = flags.Build.Programs
-	}
-	if len(flags.Build.CustomPasses) > 0 {
-		out.Build.CustomPasses = flags.Build.CustomPasses
-	}
-
-	out.Toolchain = mergeToolchain(file.Toolchain, flags.Toolchain)
-	return &out
-}
-
 // ParseTimeout parses the timeout string into a time.Duration.
 func ParseTimeout(s string) (time.Duration, error) {
 	s = strings.TrimSpace(s)
@@ -131,28 +97,7 @@ func ParseTimeout(s string) (time.Duration, error) {
 	return d, nil
 }
 
-// ResolveToolOverrides builds llvm.ToolOverrides from the Toolchain config,
-// applying llvm_dir as a prefix for any tool not explicitly set.
-func ResolveToolOverrides(tc Toolchain) llvm.ToolOverrides {
-	resolve := func(explicit, name string) string {
-		if explicit != "" {
-			return explicit
-		}
-		if tc.LLVMDir != "" {
-			return filepath.Join(tc.LLVMDir, name)
-		}
-		return ""
-	}
-	return llvm.ToolOverrides{
-		LLVMLink: resolve(tc.LLVMLink, "llvm-link"),
-		Opt:      resolve(tc.Opt, "opt"),
-		LLC:      resolve(tc.LLC, "llc"),
-		LLVMAr:   resolve(tc.LLVMAr, "llvm-ar"),
-		Objcopy:  resolve(tc.LLVMObjcopy, "llvm-objcopy"),
-		Pahole:   resolve(tc.Pahole, "pahole"),
-	}
-}
-
+// validate checks that all config values are well-formed.
 func validate(cfg *Config, path string) error {
 	for i, p := range cfg.Build.CustomPasses {
 		if err := llvm.ValidatePassFlag(p); err != nil {
@@ -165,33 +110,4 @@ func validate(cfg *Config, path string) error {
 		}
 	}
 	return nil
-}
-
-func mergeToolchain(file, flags Toolchain) Toolchain {
-	out := file
-	if flags.LLVMDir != "" {
-		out.LLVMDir = flags.LLVMDir
-	}
-	if flags.LLVMLink != "" {
-		out.LLVMLink = flags.LLVMLink
-	}
-	if flags.Opt != "" {
-		out.Opt = flags.Opt
-	}
-	if flags.LLC != "" {
-		out.LLC = flags.LLC
-	}
-	if flags.LLVMAr != "" {
-		out.LLVMAr = flags.LLVMAr
-	}
-	if flags.LLVMObjcopy != "" {
-		out.LLVMObjcopy = flags.LLVMObjcopy
-	}
-	if flags.Pahole != "" {
-		out.Pahole = flags.Pahole
-	}
-	if flags.TinyGo != "" {
-		out.TinyGo = flags.TinyGo
-	}
-	return out
 }

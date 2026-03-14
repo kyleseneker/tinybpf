@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kyleseneker/tinybpf/llvm"
+	"github.com/kyleseneker/tinybpf/internal/llvm"
 )
 
 const minLLVMMajor = 20

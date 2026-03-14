@@ -51,9 +51,7 @@ var knownProgramTypes = map[string]string{
 	"syscall":               "Syscall",
 }
 
-// ValidateProgramType checks whether a section name matches a known BPF
-// program type prefix. Returns nil if no program-type validation is
-// requested (programType is empty).
+// ValidateProgramType checks that all section names match the given BPF program type prefix.
 func ValidateProgramType(programType string, sections map[string]string) error {
 	if programType == "" {
 		return nil
@@ -73,6 +71,7 @@ func ValidateProgramType(programType string, sections map[string]string) error {
 	return nil
 }
 
+// isKnownType reports whether pt matches a recognized BPF program type.
 func isKnownType(pt string) bool {
 	for prefix := range knownProgramTypes {
 		if pt == strings.TrimSuffix(prefix, "/") {
@@ -82,10 +81,12 @@ func isKnownType(pt string) bool {
 	return false
 }
 
+// matchesProgramType reports whether section matches or is a child of programType.
 func matchesProgramType(section, programType string) bool {
 	return section == programType || strings.HasPrefix(section, programType+"/")
 }
 
+// knownTypeList returns a comma-separated list of all recognized program types.
 func knownTypeList() string {
 	seen := make(map[string]bool)
 	var types []string

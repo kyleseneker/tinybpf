@@ -1,47 +1,28 @@
 package cli
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"io"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"time"
 
-	"github.com/kyleseneker/tinybpf/diag"
-	"github.com/kyleseneker/tinybpf/pipeline"
+	"github.com/kyleseneker/tinybpf"
 )
-
-type tinyGoRunner func(ctx context.Context, timeout time.Duration, bin string, args ...string) (tinyGoResult, error)
 
 // runBuild compiles Go source to a BPF ELF object in one step.
 func runBuild(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	return runBuildWith(ctx, args, stdout, stderr, execTinyGo)
-}
-
-// runBuildWith is the testable core of runBuild with an injected TinyGo runner.
-func runBuildWith(ctx context.Context, args []string, stdout, stderr io.Writer, tg tinyGoRunner) int {
 	var programs multiStringFlag
 	var sectionFlags multiStringFlag
-	var tinygoPath string
 	var configPath string
-	cfg := pipeline.Config{
-		Stdout: stdout,
-		Stderr: stderr,
-	}
+	var req tinybpf.Request
 
 	fs := newFlagSet(stderr, "tinybpf build [flags] <package>", "Compile Go source to a BPF ELF object in one step.")
-	registerPipelineFlags(fs, &cfg, &programs, &sectionFlags, &configPath)
-	fs.StringVar(&tinygoPath, "tinygo", "", "Path to tinygo binary (default: discovered from PATH).")
+	registerBuildFlags(fs, &req, &programs, &sectionFlags, &configPath)
+	fs.StringVar(&req.Toolchain.TinyGo, "tinygo", "", "Path to tinygo binary (default: discovered from PATH).")
 
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
 	}
 
-	cfgResult, cfgErr := loadProjectConfig(fs, configPath, &cfg, stderr)
+	cfgResult, cfgErr := loadProjectConfig(fs, configPath, &req, stderr)
 	if cfgErr != nil {
 		return cliErrorf(stderr, "%v", cfgErr)
 	}
@@ -49,118 +30,24 @@ func runBuildWith(ctx context.Context, args []string, stdout, stderr io.Writer, 
 	if fs.NArg() != 1 {
 		return usageErrorf(fs, stderr, "exactly one package argument is required")
 	}
-	pkg := fs.Arg(0)
 
-	if tinygoPath == "" && cfgResult.tinygo != "" {
-		tinygoPath = cfgResult.tinygo
-	}
-	tinygo, err := findTinyGo(tinygoPath)
-	if err != nil {
-		return cliErrorf(stderr, "%v", err)
+	req.Package = fs.Arg(0)
+
+	if req.Toolchain.TinyGo == "" && cfgResult.tinygo != "" {
+		req.Toolchain.TinyGo = cfgResult.tinygo
 	}
 
-	workDir, cleanup, err := buildWorkDir(cfg.TempDir)
-	if err != nil {
-		return cliErrorf(stderr, "creating temp directory: %v", err)
-	}
-	if !cfg.KeepTemp {
-		defer cleanup()
-	}
-
-	irFile, err := compileTinyGo(ctx, tg, cfg, tinygo, pkg, workDir, stdout, stderr)
-	if err != nil {
-		return 1
-	}
-
-	cfg.Inputs = []string{irFile}
 	if len(programs) > 0 {
-		cfg.Programs = programs
+		req.Programs = programs
 	}
 
-	sections, secErr := pipeline.ParseSectionFlags(sectionFlags)
+	sections, secErr := parseSectionFlags(sectionFlags)
 	if secErr != nil {
 		return cliErrorf(stderr, "%v", secErr)
 	}
 	if len(sections) > 0 {
-		cfg.Sections = sections
+		req.Sections = sections
 	}
 
-	return runPipelineAndReport(ctx, cfg, stdout, stderr)
-}
-
-// compileTinyGo runs TinyGo to produce LLVM IR from the given Go package.
-func compileTinyGo(ctx context.Context, tg tinyGoRunner, cfg pipeline.Config, tinygo, pkg, workDir string, stdout, stderr io.Writer) (string, error) {
-	irFile := filepath.Join(workDir, "program.ll")
-	tinygoArgs := []string{
-		"build",
-		"-gc=none", "-scheduler=none", "-panic=trap", "-opt=1",
-		"-o", irFile,
-		pkg,
-	}
-
-	if cfg.Verbose {
-		fmt.Fprintf(stdout, "[tinygo-compile] %s %s\n", tinygo, strings.Join(tinygoArgs, " "))
-	}
-	tgRes, tgErr := tg(ctx, cfg.Timeout, tinygo, tinygoArgs...)
-	if cfg.Verbose && strings.TrimSpace(tgRes.stderr) != "" {
-		fmt.Fprintln(stderr, tgRes.stderr)
-	}
-	if tgErr != nil {
-		cmd := tinygo + " " + strings.Join(tinygoArgs, " ")
-		diagErr := diag.WrapCmd(diag.StageCompile, tgErr, cmd, tgRes.stderr,
-			"ensure TinyGo is installed and the package compiles with: tinygo build -gc=none -scheduler=none -panic=trap -opt=1 "+pkg)
-		fmt.Fprintln(stderr, diagErr.Error())
-		return "", tgErr
-	}
-	return irFile, nil
-}
-
-type tinyGoResult struct{ stderr string }
-
-// execTinyGo runs TinyGo with the full process environment so it can
-// resolve GOPATH, GOMODCACHE, and other Go toolchain variables.
-func execTinyGo(ctx context.Context, timeout time.Duration, bin string, args ...string) (tinyGoResult, error) {
-	if timeout <= 0 {
-		timeout = 60 * time.Second
-	}
-	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(cmdCtx, bin, args...)
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
-
-	err := cmd.Run()
-	return tinyGoResult{stderr: stderrBuf.String()}, err
-}
-
-// buildWorkDir returns the working directory for intermediate build artifacts
-// and a cleanup function. If explicit is set, no cleanup is performed.
-func buildWorkDir(explicit string) (dir string, cleanup func(), err error) {
-	if explicit != "" {
-		if err := os.MkdirAll(explicit, 0o700); err != nil {
-			return "", nil, err
-		}
-		return explicit, func() {}, nil
-	}
-	dir, err = os.MkdirTemp("", "tinybpf-build-")
-	if err != nil {
-		return "", nil, err
-	}
-	return dir, func() { _ = os.RemoveAll(dir) }, nil
-}
-
-// findTinyGo resolves the tinygo binary from an explicit path or PATH.
-func findTinyGo(override string) (string, error) {
-	if override != "" {
-		if _, err := os.Stat(override); err != nil {
-			return "", fmt.Errorf("tinygo not found at %q: %w", override, err)
-		}
-		return override, nil
-	}
-	path, err := exec.LookPath("tinygo")
-	if err != nil {
-		return "", fmt.Errorf("tinygo not found on PATH (install from tinygo.org or pass --tinygo)")
-	}
-	return path, nil
+	return runBuildAndReport(ctx, req, stdout, stderr)
 }

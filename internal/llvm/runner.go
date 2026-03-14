@@ -142,8 +142,6 @@ type toolSpec struct {
 }
 
 // DiscoverTools resolves LLVM binary paths from overrides or PATH.
-// Required tools (llvm-link, opt, llc) produce an error if missing.
-// Optional tools (llvm-ar, llvm-objcopy) are silently left empty.
 func DiscoverTools(o ToolOverrides) (Tools, error) {
 	specs := []toolSpec{
 		{o.LLVMLink, "llvm-link", "--llvm-link", true},
@@ -275,8 +273,7 @@ func findRequired(name string) (string, error) {
 	return exec.LookPath(name)
 }
 
-// findOptional resolves a tool that is not required. If the override is empty
-// and the tool is not on PATH, it returns "" without error.
+// findOptional resolves a tool that is not required, returning "" if absent.
 func findOptional(override, defaultName string) (string, error) {
 	if strings.TrimSpace(override) != "" {
 		return findRequired(override)
