@@ -37,24 +37,42 @@ jobs:
       - name: Smoke test release artifacts
         run: |
           set -euo pipefail
-          binary=$(find dist -name tinybpf -path "*linux_amd64*" -type f | head -1)
-          if [ -z "$binary" ]; then
-            echo "ERROR: linux/amd64 binary not found in dist/"
+          tag_version="${GITHUB_REF_NAME#v}"
+          found=0
+
+          for binary in $(find dist -name tinybpf -type f); do
+            echo "--- $binary ---"
+            file "$binary"
+            found=$((found + 1))
+
+            case "$binary" in
+              *linux_amd64*)
+                chmod +x "$binary"
+                "$binary" version
+                "$binary" --help
+                got=$("$binary" version)
+                if ! echo "$got" | grep -qF "$tag_version"; then
+                  echo "ERROR: version mismatch: got '$got', expected to contain '$tag_version'"
+                  exit 1
+                fi
+                echo "Smoke test passed: $got"
+                ;;
+              *linux_arm64*)
+                file "$binary" | grep -q "ELF 64-bit" || { echo "ERROR: not a valid ELF binary"; exit 1; }
+                echo "linux/arm64 ELF validated"
+                ;;
+              *darwin_amd64* | *darwin_arm64*)
+                file "$binary" | grep -q "Mach-O" || { echo "ERROR: not a valid Mach-O binary"; exit 1; }
+                echo "darwin binary validated"
+                ;;
+            esac
+          done
+
+          if [ "$found" -lt 4 ]; then
+            echo "ERROR: expected at least 4 binaries, found $found"
             find dist -type f
             exit 1
           fi
-          chmod +x "$binary"
-
-          "$binary" version
-          "$binary" --help
-
-          tag_version="${GITHUB_REF_NAME#v}"
-          got=$("$binary" version)
-          if ! echo "$got" | grep -qF "$tag_version"; then
-            echo "ERROR: version mismatch: got '$got', expected to contain '$tag_version'"
-            exit 1
-          fi
-          echo "Smoke test passed: $got"
 
       - name: Publish release
         uses: goreleaser/goreleaser-action@v6

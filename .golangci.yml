@@ -27,8 +27,6 @@ linters:
         - G301 # directory permissions 0755 — standard for output directories
         - G304 # file inclusion via variable — CLI tool reads files by path by design
   exclusions:
-    paths:
-      - examples
     rules:
       - path: _test\.go
         linters:
