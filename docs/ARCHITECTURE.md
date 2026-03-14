@@ -21,6 +21,7 @@ graph TD
 ## Package layout
 
 ```
+cache/                     Content-addressed build cache for pipeline artifacts
 cmd/tinybpf/               CLI entrypoint
 config/                    Project config loading (tinybpf.json), validation, and merge
 diag/                      Structured error types with stage context and hints
@@ -99,6 +100,16 @@ Custom LLVM opt passes are specified in `build.custom_passes`:
 ```
 
 Every pass name is validated against a strict pattern before being appended to the `opt` pipeline. This allows users to extend optimization without opening a command-injection vector.
+
+### Content-addressed build cache
+
+The `cache` package provides a per-stage content-addressed build cache stored under `$XDG_CACHE_HOME/tinybpf/v1/` (defaults to `~/.cache/tinybpf/v1/`). Each pipeline stage (link, transform, opt, codegen) computes a SHA-256 cache key from its inputs -- file content hashes, tool paths, and relevant config flags. On a cache hit, the cached output is copied directly to the working directory and the LLVM tool invocation is skipped.
+
+Cache keys are composed per stage: the link stage hashes normalized input file contents plus the `llvm-link` path; the transform stage hashes linked IR plus program/section config; the opt stage hashes transformed IR plus the pass pipeline and `opt` path; the codegen stage hashes optimized IR plus the CPU flag and `llc` path. Tool paths are included (not versions) because the same path with an upgraded binary produces different output.
+
+Artifacts are stored in two-character hex shard directories to prevent any single directory from accumulating thousands of entries. The `v1/` prefix allows future format changes without conflicting. The cache is enabled by default and can be disabled with `--cache=false`. `tinybpf clean-cache` removes all cached artifacts.
+
+BTF injection and ELF validation are not cached because they operate on the final output file and their cost is negligible compared to the LLVM tool stages.
 
 ### Input normalization as an explicit stage
 

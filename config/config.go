@@ -28,6 +28,7 @@ type Build struct {
 	CPU          string            `json:"cpu"`
 	OptProfile   string            `json:"opt_profile"`
 	BTF          *bool             `json:"btf"`
+	Cache        *bool             `json:"cache"`
 	Timeout      string            `json:"timeout"`
 	Programs     map[string]string `json:"programs"`
 	CustomPasses []string          `json:"custom_passes"`
@@ -96,6 +97,9 @@ func Merge(file, flags *Config) *Config {
 	}
 	if flags.Build.BTF != nil {
 		out.Build.BTF = flags.Build.BTF
+	}
+	if flags.Build.Cache != nil {
+		out.Build.Cache = flags.Build.Cache
 	}
 	if flags.Build.Timeout != "" {
 		out.Build.Timeout = flags.Build.Timeout

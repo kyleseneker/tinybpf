@@ -142,7 +142,8 @@ Generates a `tinybpf.json` config file, BPF source file, stub file for IDE compa
     "programs": {
       "probe_connect": "kprobe/sys_connect"
     },
-    "custom_passes": ["inline", "dce"]
+    "custom_passes": ["inline", "dce"],
+    "cache": true
   },
   "toolchain": {
     "llvm_dir": "/usr/lib/llvm-20/bin"
@@ -164,6 +165,7 @@ Run `tinybpf --help` or `tinybpf <command> --help` for details.
 | `link` | Link pre-compiled LLVM IR into a BPF ELF object |
 | `init` | Scaffold a new BPF project |
 | `verify` | Validate a BPF ELF object offline |
+| `clean-cache` | Remove cached build artifacts |
 | `doctor` | Check toolchain installation |
 | `version` | Print version information |
 
@@ -214,6 +216,14 @@ tinybpf doctor [flags]
 
 Also accepts [tool path overrides](#tool-path-overrides).
 
+### clean-cache
+
+```bash
+tinybpf clean-cache
+```
+
+Removes all cached build artifacts from `$XDG_CACHE_HOME/tinybpf` (defaults to `~/.cache/tinybpf`). No additional flags.
+
 ### init
 
 ```bash
@@ -239,6 +249,7 @@ These flags are accepted by both `build` and `link`.
 | `--verbose`, `-v` | `false` | Print each pipeline stage |
 | `--timeout` | `30s` | Per-stage timeout |
 | `--dump-ir` | `false` | Write intermediate IR after each transform pass |
+| `--cache` | `true` | Enable content-addressed build cache for intermediate artifacts |
 | `--program-type` | | Validate sections match a BPF program type (e.g. `kprobe`, `xdp`) |
 | `--keep-temp` | `false` | Preserve intermediate files |
 | `--tmpdir` | | Directory for intermediate files |

@@ -19,6 +19,10 @@ func ToPipeline(cfg *Config) pipeline.Config {
 		pc.EnableBTF = *cfg.Build.BTF
 	}
 
+	if cfg.Build.Cache != nil {
+		pc.Cache = *cfg.Build.Cache
+	}
+
 	if cfg.Build.Timeout != "" {
 		d, _ := ParseTimeout(cfg.Build.Timeout)
 		pc.Timeout = d

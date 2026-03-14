@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kyleseneker/tinybpf/cache"
 	"github.com/kyleseneker/tinybpf/config"
 	"github.com/kyleseneker/tinybpf/llvm"
 	"github.com/kyleseneker/tinybpf/pipeline"
@@ -60,6 +61,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runInit(ctx, args[1:], stdout, stderr)
 	case "verify":
 		return runVerify(ctx, args[1:], stdout, stderr)
+	case "clean-cache":
+		return runCleanCache(stdout, stderr)
 	case "version", "--version", "-version":
 		return runVersion(stdout)
 	default:
@@ -78,6 +81,7 @@ Usage:
   tinybpf link --input <file> [flags]   Link pre-compiled LLVM IR into a BPF ELF
   tinybpf init <name>               Scaffold a new BPF project
   tinybpf verify --input <file>     Validate a BPF ELF object
+  tinybpf clean-cache               Remove cached build artifacts
   tinybpf doctor [flags]            Check toolchain installation
   tinybpf version                   Print version information
   tinybpf help                      Show this message
@@ -148,6 +152,7 @@ func registerPipelineFlags(fs *flag.FlagSet, cfg *pipeline.Config, programs, sec
 	fs.StringVar(&cfg.TempDir, "tmpdir", "", "Directory for intermediate artifacts (kept after run).")
 	fs.BoolVar(&cfg.EnableBTF, "btf", false, "Enable BTF injection via pahole.")
 	fs.BoolVar(&cfg.DumpIR, "dump-ir", false, "Write intermediate IR after each transform stage for debugging.")
+	fs.BoolVar(&cfg.Cache, "cache", true, "Enable content-addressed build cache for intermediate artifacts.")
 	fs.StringVar(&cfg.ProgramType, "program-type", "", "Expected BPF program type (e.g. kprobe, xdp, tracepoint). Validates --section values.")
 	fs.Var(programs, "program", "Program function name to keep. Repeat for multiple programs. Auto-detected if omitted.")
 	fs.Var(sections, "section", "Program-to-section mapping (e.g., handle_connect=tracepoint/syscalls/sys_enter_connect). Repeat for multiple.")
@@ -227,6 +232,9 @@ func applyBuildScalars(set map[string]bool, cfg *pipeline.Config, pc *pipeline.C
 	if !set["btf"] && fileCfg.Build.BTF != nil {
 		cfg.EnableBTF = pc.EnableBTF
 	}
+	if !set["cache"] && fileCfg.Build.Cache != nil {
+		cfg.Cache = pc.Cache
+	}
 	if !set["timeout"] && pc.Timeout > 0 {
 		cfg.Timeout = pc.Timeout
 	}
@@ -297,4 +305,17 @@ func usageErrorf(fs *flag.FlagSet, w io.Writer, format string, args ...any) int 
 	fmt.Fprintf(w, "error: "+format+"\n", args...)
 	fs.Usage()
 	return 2
+}
+
+// runCleanCache removes all cached build artifacts.
+func runCleanCache(stdout, stderr io.Writer) int {
+	s, err := cache.Open()
+	if err != nil {
+		return cliErrorf(stderr, "opening cache: %v", err)
+	}
+	if err := s.Clean(); err != nil {
+		return cliErrorf(stderr, "cleaning cache: %v", err)
+	}
+	fmt.Fprintf(stdout, "cleaned cache: %s\n", s.Dir())
+	return 0
 }

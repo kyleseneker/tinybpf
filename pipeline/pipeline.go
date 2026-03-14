@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kyleseneker/tinybpf/cache"
 	"github.com/kyleseneker/tinybpf/diag"
 	"github.com/kyleseneker/tinybpf/elfcheck"
 	"github.com/kyleseneker/tinybpf/llvm"
@@ -39,6 +40,7 @@ type Config struct {
 	CustomPasses []string
 	DumpIR       bool
 	ProgramType  string
+	Cache        bool
 	ValidateELF  func(path string) error
 }
 
@@ -60,6 +62,7 @@ type runContext struct {
 	tools     llvm.Tools
 	workDir   string
 	artifacts *Artifacts
+	store     *cache.Store
 }
 
 // Run executes the full linking pipeline: normalize -> llvm-link ->
@@ -101,11 +104,21 @@ func prepareRunContext(ctx context.Context, cfg Config) (*runContext, func(), er
 		return nil, noop, diag.Wrap(diag.StageInput, err, "failed to create temporary workspace")
 	}
 
+	var store *cache.Store
+	if cfg.Cache {
+		s, cacheErr := cache.Open()
+		if cacheErr != nil && cfg.Verbose {
+			fmt.Fprintf(cfg.Stdout, "[cache] warning: %v (continuing without cache)\n", cacheErr)
+		}
+		store = s
+	}
+
 	rc := &runContext{
 		ctx:     ctx,
 		cfg:     cfg,
 		tools:   tools,
 		workDir: workDir,
+		store:   store,
 		artifacts: &Artifacts{
 			TempDir:       workDir,
 			LinkedBC:      filepath.Join(workDir, "01-linked.ll"),
@@ -125,6 +138,19 @@ func (rc *runContext) linkInputs() error {
 		return err
 	}
 
+	if rc.store != nil {
+		inputHash, hashErr := cache.HashFiles(inputs)
+		if hashErr == nil {
+			key := cache.Key("link", inputHash, rc.tools.LLVMLink)
+			if cached, hit := rc.store.Lookup(key); hit {
+				rc.logCache("link", key, true)
+				return copyFile(cached, rc.artifacts.LinkedBC)
+			}
+			rc.logCache("link", key, false)
+			defer rc.storeArtifact(key, rc.artifacts.LinkedBC)
+		}
+	}
+
 	linkArgs := append(append([]string{}, inputs...), "-S", "-o", rc.artifacts.LinkedBC)
 	return runStage(rc.ctx, rc.cfg, diag.StageLink, rc.tools.LLVMLink, linkArgs,
 		"validate your IR files and ensure they are LLVM .ll/.bc modules")
@@ -133,11 +159,34 @@ func (rc *runContext) linkInputs() error {
 // transformAndOptimize runs the IR transform pass, strips host paths, and
 // invokes the opt stage.
 func (rc *runContext) transformAndOptimize() error {
+	if err := rc.runTransformStage(); err != nil {
+		return err
+	}
+	return rc.runOptStage()
+}
+
+// runTransformStage applies the IR transform pass with optional caching.
+func (rc *runContext) runTransformStage() error {
 	dumpDir, err := setupDumpIR(rc.cfg, rc.workDir)
 	if err != nil {
 		return err
 	}
 	rc.artifacts.DumpIRDir = dumpDir
+
+	if rc.store != nil {
+		inputHash, hashErr := cache.HashFile(rc.artifacts.LinkedBC)
+		if hashErr == nil {
+			key := cache.Key("transform", inputHash,
+				strings.Join(rc.cfg.Programs, ","),
+				cache.SortedSections(rc.cfg.Sections))
+			if cached, hit := rc.store.Lookup(key); hit {
+				rc.logCache("transform", key, true)
+				return copyFile(cached, rc.artifacts.TransformedLL)
+			}
+			rc.logCache("transform", key, false)
+			defer rc.storeArtifact(key, rc.artifacts.TransformedLL)
+		}
+	}
 
 	transformOpts := transform.Options{
 		Programs: rc.cfg.Programs,
@@ -157,8 +206,7 @@ func (rc *runContext) transformAndOptimize() error {
 	if err := stripHostPaths(rc.artifacts.TransformedLL, rc.workDir); err != nil {
 		return diag.Wrap(diag.StageOpt, err, "failed to sanitize paths in intermediate IR")
 	}
-
-	return rc.runOptStage()
+	return nil
 }
 
 // finalizeAndValidate runs code generation, copies the output, optionally
@@ -180,6 +228,24 @@ func (rc *runContext) runOptStage() error {
 		}
 		optArgs = validated
 	}
+
+	if rc.store != nil {
+		inputHash, hashErr := cache.HashFile(rc.artifacts.TransformedLL)
+		if hashErr == nil {
+			key := cache.Key("opt", inputHash,
+				rc.tools.Opt,
+				rc.cfg.PassPipeline,
+				rc.cfg.OptProfile,
+				strings.Join(rc.cfg.CustomPasses, ","))
+			if cached, hit := rc.store.Lookup(key); hit {
+				rc.logCache("opt", key, true)
+				return copyFile(cached, rc.artifacts.OptimizedLL)
+			}
+			rc.logCache("opt", key, false)
+			defer rc.storeArtifact(key, rc.artifacts.OptimizedLL)
+		}
+	}
+
 	return runStage(rc.ctx, rc.cfg, diag.StageOpt, rc.tools.Opt, optArgs,
 		"try a less aggressive --pass-pipeline or inspect linked IR")
 }
@@ -187,11 +253,32 @@ func (rc *runContext) runOptStage() error {
 // runCodegenAndFinalize runs llc code generation, copies the output, and
 // optionally injects BTF.
 func (rc *runContext) runCodegenAndFinalize() error {
+	if rc.store != nil {
+		inputHash, hashErr := cache.HashFile(rc.artifacts.OptimizedLL)
+		if hashErr == nil {
+			key := cache.Key("codegen", inputHash, rc.tools.LLC, rc.cfg.CPU)
+			if cached, hit := rc.store.Lookup(key); hit {
+				rc.logCache("codegen", key, true)
+				if err := copyFile(cached, rc.artifacts.CodegenObj); err != nil {
+					return err
+				}
+				return rc.finalizeOutput()
+			}
+			rc.logCache("codegen", key, false)
+			defer rc.storeArtifact(key, rc.artifacts.CodegenObj)
+		}
+	}
+
 	llcArgs := buildLLCArgs(rc.cfg.CPU, rc.artifacts.OptimizedLL, rc.artifacts.CodegenObj)
 	if err := runStage(rc.ctx, rc.cfg, diag.StageCodegen, rc.tools.LLC, llcArgs,
 		"ensure llc supports BPF target and input IR is valid"); err != nil {
 		return err
 	}
+	return rc.finalizeOutput()
+}
+
+// finalizeOutput copies the codegen object to the output path and optionally injects BTF.
+func (rc *runContext) finalizeOutput() error {
 	if err := os.MkdirAll(filepath.Dir(rc.cfg.Output), 0o755); err != nil {
 		return diag.Wrap(diag.StageFinalize, err, "failed to create output directory")
 	}
@@ -363,6 +450,29 @@ func ParseSectionFlags(flags []string) (map[string]string, error) {
 		m[parts[0]] = parts[1]
 	}
 	return m, nil
+}
+
+// logCache logs a cache hit or miss when verbose mode is enabled.
+func (rc *runContext) logCache(stage, key string, hit bool) {
+	if !rc.cfg.Verbose {
+		return
+	}
+	status := "miss"
+	if hit {
+		status = "hit"
+	}
+	fmt.Fprintf(rc.cfg.Stdout, "[cache] %s stage=%s key=%s\n", status, stage, key[:12])
+}
+
+// storeArtifact stores an artifact in the cache, silently ignoring errors.
+func (rc *runContext) storeArtifact(key, path string) {
+	if rc.store == nil {
+		return
+	}
+	if _, err := os.Stat(path); err != nil {
+		return
+	}
+	_ = rc.store.Put(key, path)
 }
 
 // copyFile copies src to dst, creating or overwriting dst.
