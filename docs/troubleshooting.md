@@ -15,17 +15,26 @@ Common issues and solutions when using `tinybpf`. Run `tinybpf --help` for a qui
 ```bash
 # Check your LLVM version:
 llvm-link --version
+```
 
-# On Ubuntu 24.04 (defaults to LLVM 18), install LLVM 20+:
+On Ubuntu (which may default to an older LLVM), install a supported version from [apt.llvm.org](https://apt.llvm.org):
+
+```bash
 wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
 echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" | sudo tee /etc/apt/sources.list.d/llvm-20.list
 sudo apt-get update && sudo apt-get install -y llvm-20
 
-# Point tinybpf to the correct tools:
+# Point tinybpf to the versioned tools:
 tinybpf build --llvm-link llvm-link-20 --opt opt-20 --llc llc-20 ./bpf
 ```
 
-On macOS with Homebrew, `brew install llvm@20` and add the LLVM bin directory to your `PATH`.
+On macOS with Homebrew:
+
+```bash
+brew install llvm
+```
+
+Then add the LLVM bin directory to your `PATH` (the `make setup` script does this automatically).
 
 ### TinyGo not found
 
@@ -51,7 +60,7 @@ If a required tool (`llvm-link`, `opt`, `llc`) is missing, install LLVM or pass 
 
 When using `tinybpf build`, the TinyGo compilation step runs before the link pipeline. Errors from this stage are reported as `tinygo-compile`.
 
-### Stage `tinygo-compile` — TOOL_EXECUTION_FAILED
+### Stage `tinygo-compile` -- TOOL_EXECUTION_FAILED
 
 TinyGo could not compile the Go package.
 
@@ -76,7 +85,7 @@ TinyGo could not compile the Go package.
 
 `tinybpf` reports errors as structured diagnostics with a stage name, error code, and remediation hint. The stage tells you where in the pipeline the failure occurred.
 
-### Stage `discover-tools` — TOOL_NOT_FOUND
+### Stage `discover-tools` -- TOOL_NOT_FOUND
 
 One or more required LLVM binaries could not be found on `PATH`.
 
@@ -88,7 +97,7 @@ install LLVM tools or pass --llvm-link explicitly
 
 **Fix:** Install LLVM or provide explicit paths. See [LLVM version mismatch](#llvm-version-mismatch) above.
 
-### Stage `llvm-link` — TOOL_EXECUTION_FAILED
+### Stage `llvm-link` -- TOOL_EXECUTION_FAILED
 
 The input IR modules could not be linked together.
 
@@ -99,13 +108,13 @@ The input IR modules could not be linked together.
 
 **Fix:** Verify the input was produced by TinyGo (`tinygo build -o program.ll ...`), and check LLVM version compatibility.
 
-### Stage `transform` — TOOL_EXECUTION_FAILED
+### Stage `transform` -- TOOL_EXECUTION_FAILED
 
 The IR rewrite step failed. This is the `tinybpf`-specific transformation that converts TinyGo IR to BPF-compatible IR.
 
 **Common causes:**
 - Input IR was not produced by TinyGo (or was compiled without `-gc=none -scheduler=none`)
-- Input uses an unrecognized BPF helper name
+- Input uses an unrecognized BPF helper name (error includes "did you mean?" suggestions)
 - IR structure does not match expected TinyGo output patterns
 
 **Fix:**
@@ -113,10 +122,11 @@ The IR rewrite step failed. This is the `tinybpf`-specific transformation that c
    ```bash
    tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o program.ll ./bpf
    ```
-2. Check that BPF helper declarations use recognized names (see [TINYGO_COMPAT.md](TINYGO_COMPAT.md#supported-bpf-helpers)).
+2. Check that BPF helper declarations use recognized names (see [Writing Go for eBPF](writing-go-for-ebpf.md#supported-bpf-helpers)).
 3. Use `--keep-temp` to inspect the linked IR before transformation.
+4. Use `--dump-ir` to see the IR after each transform pass and isolate which pass introduced the problem.
 
-### Stage `opt` — TOOL_EXECUTION_FAILED
+### Stage `opt` -- TOOL_EXECUTION_FAILED
 
 The LLVM optimization pass failed.
 
@@ -128,7 +138,7 @@ tinybpf build --opt-profile conservative ./bpf
 
 Or inspect the intermediate IR with `--keep-temp` and `--tmpdir ./debug`.
 
-### Stage `llc` — TOOL_EXECUTION_FAILED
+### Stage `llc` -- TOOL_EXECUTION_FAILED
 
 BPF code generation failed.
 
@@ -136,9 +146,9 @@ BPF code generation failed.
 - The IR contains constructs the BPF backend cannot lower (floating point, unsupported instructions)
 - The transform step did not fully clean up non-BPF constructs
 
-**Fix:** Inspect the optimized IR (`03-optimized.ll` in the temp directory) and check for constructs listed in [unsupported features](TINYGO_COMPAT.md#unsupported-features). File an issue if the IR looks correct but `llc` rejects it.
+**Fix:** Inspect the optimized IR (`03-optimized.ll` in the temp directory) and check for constructs listed in [unsupported features](writing-go-for-ebpf.md#unsupported). File an issue if the IR looks correct but `llc` rejects it.
 
-### Stage `elf-validate` — ELF_VALIDATION_FAILED
+### Stage `elf-validate` -- ELF_VALIDATION_FAILED
 
 The output file is not a valid BPF ELF object.
 
@@ -186,12 +196,13 @@ tinybpf build --cpu v4 ./bpf   # latest features (requires newer kernel)
 
 ### macOS
 
-The `tinybpf` pipeline (through `llc`) works on macOS for development and testing. However, loading BPF programs into the kernel requires Linux. Use the QEMU VM workflow for end-to-end validation:
+The `tinybpf` pipeline (through `llc`) works on macOS for development and compilation. Loading BPF programs into the kernel requires Linux. Use the QEMU VM workflow for end-to-end validation:
 
 ```bash
 make vm          # create and boot Ubuntu VM
 make sync        # sync repo into VM
 # inside VM:
+cd ~/tinybpf
 sudo make setup  # install toolchain
 sudo make e2e    # full validation
 ```
@@ -199,3 +210,14 @@ sudo make e2e    # full validation
 ### Ubuntu 24.04
 
 Ubuntu 24.04 ships LLVM 18 by default. TinyGo 0.40.x requires LLVM 20+. See [LLVM version mismatch](#llvm-version-mismatch) for installation instructions.
+
+## Debugging flags summary
+
+| Flag | Purpose |
+|------|---------|
+| `--verbose` / `-v` | Print each pipeline stage with commands and timing |
+| `--dump-ir` | Write numbered `.ll` file after each transform pass |
+| `--keep-temp` | Preserve all intermediate files |
+| `--tmpdir <dir>` | Set a specific directory for intermediates |
+| `tinybpf doctor` | Diagnose toolchain installation |
+| `tinybpf verify` | Validate a BPF ELF object offline |

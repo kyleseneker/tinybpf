@@ -105,7 +105,7 @@ type bpfMapDef struct {
 }
 
 // Declare BPF helpers with //go:extern. tinybpf rewrites these to kernel helper calls.
-// See docs/TINYGO_COMPAT.md for the full list of supported helpers.
+// See docs/writing-go-for-ebpf.md for the full list of supported helpers.
 //
 //go:extern bpf_get_current_pid_tgid
 func bpfGetCurrentPidTgid() uint64

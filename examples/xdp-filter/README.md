@@ -1,12 +1,6 @@
 # xdp-filter
 
-An XDP packet filter written entirely in Go, built with `tinybpf`.
-
-This example demonstrates the full lifecycle: writing an eBPF XDP program in Go, compiling it through TinyGo and `tinybpf`, loading it into the kernel with [`cilium/ebpf`](https://github.com/cilium/ebpf), and managing a live blocklist from userspace.
-
-## Overview
-
-The program attaches to a network interface at the XDP hook. For each incoming packet it parses the Ethernet and IPv4 headers, looks up the source address in a BPF hash map, and returns `XDP_DROP` if found or `XDP_PASS` otherwise. The Go userspace loader populates the blocklist map and keeps the program attached until interrupted.
+An XDP packet filter that drops incoming packets by source IP. Parses Ethernet and IPv4 headers, looks up the source address in a hash map blocklist, and returns `XDP_DROP` or `XDP_PASS`. The Go userspace loader populates the blocklist.
 
 ```mermaid
 graph LR
@@ -21,45 +15,19 @@ graph LR
     end
 ```
 
-## Project layout
-
-```
-bpf/
-  filter.go              eBPF XDP program source (compiled with TinyGo)
-  filter_stub.go         Build tag placeholder for standard Go tooling
-cmd/loader/
-  main.go                Userspace entry point (load, attach, manage map)
-internal/
-  loader/                ELF loading and XDP attachment (cilium/ebpf)
-scripts/
-  build.sh               TinyGo + tinybpf build pipeline
-  run.sh                 Build and run (requires root)
-```
+**Concepts:** XDP, packet parsing, hash map blocklist
 
 ## Prerequisites
 
-- Linux host with XDP support
-- Go 1.24+
-- TinyGo 0.40+
-- LLVM tools (`llvm-link`, `opt`, `llc`) version 20+
-- Root privileges or `CAP_BPF` + `CAP_NET_ADMIN`
+- Linux with XDP support
+- Root or `CAP_BPF` + `CAP_NET_ADMIN`
+- [Toolchain requirements](../../docs/getting-started.md#prerequisites)
 
-## Build
+## Build and run
 
 ```bash
 ./scripts/build.sh
-```
 
-Produces `build/filter.bpf.o`. The build is configurable via environment variables:
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TINYBPF_BIN` | *(built from source)* | Path to `tinybpf` binary |
-| `BPF_CPU` | `v3` | BPF CPU version for `llc -mcpu` |
-
-## Run
-
-```bash
 # Attach to loopback and block 10.0.0.1
 sudo BLOCK_IP=10.0.0.1 ./scripts/run.sh
 
@@ -71,10 +39,10 @@ The program stays attached until you press Ctrl+C.
 
 ## Managing the blocklist at runtime
 
-While the program is running, use `bpftool` to manage the blocklist map:
+While the program is running, use `bpftool` to manage the blocklist:
 
 ```bash
-# Add an address to block
+# Add an address
 sudo bpftool map update name blocklist key 10 0 0 1 value 0 0 0 0
 
 # List blocked addresses
@@ -88,7 +56,9 @@ sudo bpftool map delete name blocklist key 10 0 0 1
 
 | Symptom | Resolution |
 |---------|------------|
-| XDP attach failure | Check that the interface supports XDP. Some virtual interfaces require `xdpgeneric` mode; try `ip link set dev <iface> xdpgeneric obj filter.bpf.o sec xdp` |
-| Permission denied | Run as root or grant `CAP_BPF` and `CAP_NET_ADMIN` capabilities |
-| Packets not dropped | Verify the blocklist map has entries: `bpftool map dump name blocklist` |
-| Toolchain errors | Run `tinybpf doctor` to diagnose |
+| XDP attach failure | Some virtual interfaces require `xdpgeneric` mode |
+| Permission denied | Run as root or grant `CAP_BPF` + `CAP_NET_ADMIN` |
+| Packets not dropped | Verify map has entries: `bpftool map dump name blocklist` |
+| Build errors | Run `tinybpf doctor` |
+
+See [Troubleshooting](../../docs/troubleshooting.md) for general guidance.

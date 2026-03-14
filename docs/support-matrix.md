@@ -1,4 +1,4 @@
-# Support matrix
+# Support Matrix
 
 Tested toolchain versions and platforms for `tinybpf`.
 
@@ -8,7 +8,7 @@ Tested toolchain versions and platforms for `tinybpf`.
 |------------|-----------------|-------|
 | Go | 1.24.x, 1.25.x | |
 | TinyGo | 0.40.1 | Bundles LLVM 20.1.1 |
-| LLVM | 20, 21 | System LLVM must be >= TinyGo's bundled LLVM major version |
+| LLVM | 20, 21, 22 | System LLVM must be >= TinyGo's bundled LLVM major version |
 | bpftool | 7.4.0 | Used for verifier validation on Linux |
 
 ### LLVM version compatibility
@@ -21,6 +21,7 @@ TinyGo 0.40.x emits LLVM 20 IR. System LLVM tools (`llvm-link`, `opt`, `llc`) mu
 | 19 | No | Cannot parse LLVM 20 IR (`nuw` on GEP, unsupported attributes) |
 | 20 | Yes | Matches TinyGo 0.40.x |
 | 21 | Yes | Forward-compatible with LLVM 20 IR |
+| 22 | Yes | Forward-compatible with LLVM 20 IR |
 
 ## Required LLVM binaries
 
@@ -38,6 +39,21 @@ TinyGo 0.40.x emits LLVM 20 IR. System LLVM tools (`llvm-link`, `opt`, `llc`) mu
 | `llvm-objcopy` | Extracting embedded bitcode from `.o` inputs |
 | `pahole` | BTF injection (`--btf` flag) |
 
+## CI matrix
+
+CI runs on Ubuntu 24.04 with the following matrix:
+
+| Dimension | Values |
+|-----------|--------|
+| Go | 1.24.x, 1.25.x |
+| LLVM | 20, 21, 22 |
+| Primary lane | Go 1.25.x + LLVM 20 |
+
+The primary lane enforces:
+- 90% coverage threshold
+- Binary size limit (15 MiB)
+- Fuzz smoke tests (10s per target)
+
 ## Kernel validation
 
 | Kernel | Distribution | Architecture | Result |
@@ -46,7 +62,7 @@ TinyGo 0.40.x emits LLVM 20 IR. System LLVM tools (`llvm-link`, `opt`, `llc`) mu
 
 ## CO-RE kernel matrix
 
-CO-RE relocations are tested across active LTS kernel versions via the `kernel-matrix` CI workflow:
+CO-RE relocations are tested across active LTS kernel versions via the `kernel-matrix` CI workflow (weekly, using the `rawtp-sched` example):
 
 | Kernel | LTS EOL | CO-RE status |
 |--------|---------|-------------|
@@ -56,7 +72,7 @@ CO-RE relocations are tested across active LTS kernel versions via the `kernel-m
 | 6.12 | Dec 2028 | Tested |
 | 6.18 | Dec 2028 | Tested |
 
-CO-RE requires a kernel with BTF support (CONFIG_DEBUG_INFO_BTF=y), which is enabled by default on most distributions since kernel 5.4+.
+CO-RE requires a kernel with BTF support (`CONFIG_DEBUG_INFO_BTF=y`), which is enabled by default on most distributions since kernel 5.4+.
 
 ## Platform support
 
@@ -66,17 +82,4 @@ CO-RE requires a kernel with BTF support (CONFIG_DEBUG_INFO_BTF=y), which is ena
 | Linux | arm64 | Yes | Yes (validated) |
 | macOS | arm64 | Yes (through `llc`) | No (requires Linux) |
 
-## Debugging features
-
-| Feature | Flag | Description |
-|---------|------|-------------|
-| IR stage dump | `--dump-ir` | Writes a numbered `.ll` file after each transform pass |
-| Verbose logging | `-v` / `--verbose` | Stage names, commands, and timing |
-| Intermediate files | `--keep-temp` | Preserves the temp directory with all artifacts |
-| Toolchain check | `tinybpf doctor` | Checks LLVM, TinyGo, and pahole availability and versions |
-| Program type check | `--program-type` | Validates `--section` values against a known BPF program type |
-
-## Testing notes
-
-- End-to-end tests skip automatically when LLVM tools are not on `PATH`.
-- Loader smoke tests require a Linux host with root privileges or `CAP_BPF`.
+See [Troubleshooting](troubleshooting.md#debugging-flags-summary) for debugging flags and [Contributing](../CONTRIBUTING.md#running-tests) for testing details.

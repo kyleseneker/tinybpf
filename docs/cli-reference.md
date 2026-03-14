@@ -1,0 +1,186 @@
+# CLI Reference
+
+Run `tinybpf --help` or `tinybpf <command> --help` for built-in help.
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| [`build`](#build) | Compile Go source to a BPF ELF object |
+| [`link`](#link) | Link pre-compiled LLVM IR into a BPF ELF object |
+| [`init`](#init) | Scaffold a new BPF project |
+| [`verify`](#verify) | Validate a BPF ELF object offline |
+| [`doctor`](#doctor) | Check toolchain installation |
+| [`clean-cache`](#clean-cache) | Remove cached build artifacts |
+| [`version`](#version) | Print version information |
+
+---
+
+## build
+
+Compile a Go package through TinyGo and the full `tinybpf` pipeline to produce a BPF ELF object.
+
+```
+tinybpf build [flags] <package>
+```
+
+**Positional argument:** Exactly one Go package path (e.g. `./bpf`).
+
+### Build-specific flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--tinygo` | *(PATH lookup)* | Path to `tinygo` binary |
+
+Also accepts all [shared pipeline flags](#shared-pipeline-flags) and [tool path overrides](#tool-path-overrides).
+
+TinyGo is resolved in order: `--tinygo` flag > `toolchain.tinygo` in config > `tinygo` on `PATH`.
+
+---
+
+## link
+
+Link pre-compiled LLVM inputs into a BPF ELF object. Skips the TinyGo compilation step.
+
+```
+tinybpf link --input <file> [flags]
+```
+
+### Link-specific flags
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--input` | `-i` | *(required)* | Input file: `.ll`, `.bc`, `.o`, or `.a`. Repeatable. |
+| `--jobs` | `-j` | `1` | Parallel input normalization workers |
+| `--profile` | | | Base path for CPU + heap profiles |
+
+At least one `--input` is required. When multiple inputs are provided, they are normalized and linked together.
+
+Also accepts all [shared pipeline flags](#shared-pipeline-flags) and [tool path overrides](#tool-path-overrides).
+
+---
+
+## init
+
+Scaffold a new BPF project in the current directory.
+
+```
+tinybpf init <name>
+```
+
+**Positional argument:** Project name (e.g. `xdp_filter`).
+
+Generates:
+
+- `tinybpf.json` -- build config with output path and program-to-section mapping
+- `bpf/<name>.go` -- BPF program with map definition, helper declaration, and exported entry point
+- `bpf/<name>_stub.go` -- `//go:build !tinygo` stub for IDE compatibility
+- `Makefile` -- runs `tinybpf build --verbose ./bpf`
+
+No additional flags.
+
+---
+
+## verify
+
+Validate a BPF ELF object offline (without loading it into the kernel).
+
+```
+tinybpf verify --input <file>
+```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--input` | `-i` | *(required)* | Path to the BPF ELF object to validate |
+
+Checks: ELF64 format, `EM_BPF` machine type, at least one executable program section, `.maps` section is not executable, and at least one symbol.
+
+---
+
+## doctor
+
+Check toolchain installation: discovers LLVM tools, TinyGo, and `pahole`, prints resolved paths and versions, and warns on issues.
+
+```
+tinybpf doctor [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--timeout` | `10s` | Timeout for each version check |
+
+Also accepts [tool path overrides](#tool-path-overrides).
+
+Warns if system LLVM major version is below 20 (the minimum for TinyGo 0.40.x IR).
+
+---
+
+## clean-cache
+
+Remove all cached build artifacts from the content-addressed build cache.
+
+```
+tinybpf clean-cache
+```
+
+Cache location: `$XDG_CACHE_HOME/tinybpf` (defaults to `~/.cache/tinybpf`). No additional flags.
+
+---
+
+## version
+
+Print version information.
+
+```
+tinybpf version
+```
+
+Also available as `--version` or `-version`. No additional flags.
+
+---
+
+## Shared pipeline flags
+
+These flags are accepted by both `build` and `link`.
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--config` | | *(auto-discovered)* | Path to `tinybpf.json` project config |
+| `--output` | `-o` | `bpf.o` | Output ELF path |
+| `--program` | | *(auto-detect)* | Program function to keep. Repeatable. |
+| `--section` | | | Program-to-section mapping `name=section`. Repeatable. |
+| `--cpu` | | `v3` | BPF CPU version for `llc -mcpu` |
+| `--opt-profile` | | `default` | Optimization profile: `conservative`, `default`, `aggressive`, `verifier-safe` |
+| `--pass-pipeline` | | | Explicit `opt` pass pipeline (overrides profile) |
+| `--btf` | | `false` | Inject BTF via `pahole` |
+| `--verbose` | `-v` | `false` | Print each pipeline stage |
+| `--timeout` | | `30s` | Per-stage timeout |
+| `--dump-ir` | | `false` | Write intermediate IR after each transform pass |
+| `--cache` | | `true` | Enable content-addressed build cache |
+| `--program-type` | | | Validate sections match a BPF program type (e.g. `kprobe`, `xdp`) |
+| `--keep-temp` | | `false` | Preserve intermediate files |
+| `--tmpdir` | | | Directory for intermediate files |
+
+### Flag behavior notes
+
+- **`--program`**: Repeatable. When omitted, programs are auto-detected from exported functions. When specified, only the named functions are kept in the output.
+- **`--section`**: Repeatable. Format: `name=section` (e.g. `handle_connect=tracepoint/syscalls/sys_enter_connect`). Maps program functions to ELF section names, which determine the program type and kernel attachment point.
+- **`--opt-profile`**: See [Config Reference](config-reference.md#optimization-profiles) for what each profile does.
+- **`--pass-pipeline`**: Overrides `--opt-profile` entirely. Uses the raw `opt` pass pipeline string.
+
+## Tool path overrides
+
+Accepted by `build`, `link`, and `doctor`. Each overrides automatic tool discovery for a single binary.
+
+| Flag | Description |
+|------|-------------|
+| `--llvm-link` | Path to `llvm-link` binary |
+| `--opt` | Path to `opt` binary |
+| `--llc` | Path to `llc` binary |
+| `--llvm-ar` | Path to `llvm-ar` binary |
+| `--llvm-objcopy` | Path to `llvm-objcopy` binary |
+| `--pahole` | Path to `pahole` binary (used with `--btf`) |
+
+## Precedence
+
+CLI flags override `tinybpf.json` config values. See [Config Reference](config-reference.md#precedence) for detailed merge rules.

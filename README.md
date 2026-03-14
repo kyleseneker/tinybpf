@@ -16,7 +16,7 @@
 
 ---
 
-## Overview
+## What is tinybpf?
 
 [eBPF](https://ebpf.io/) lets sandboxed programs run inside the Linux kernel. Today those programs must be written in C or Rust. `tinybpf` lets you write them in Go instead.
 
@@ -28,23 +28,9 @@ graph LR
     D --> E["bpf.o"]
 ```
 
-The output is a standard BPF ELF object compatible with [`cilium/ebpf`](https://github.com/cilium/ebpf), [`libbpf`](https://github.com/libbpf/libbpf), and [`bpftool`](https://github.com/libbpf/bpftool).
-
-### Why TinyGo?
-
-Standard Go compiles to native machine code via its own backend — there is no LLVM IR to retarget to BPF, and its runtime (GC, goroutines, channels) cannot run in the kernel. TinyGo compiles through LLVM and supports bare-metal mode (`-gc=none -scheduler=none -panic=trap`) with no runtime, producing IR that `tinybpf` transforms into verifier-friendly BPF bytecode.
-
-### How it works
-
-`tinybpf` sits between TinyGo's LLVM IR output and the final BPF ELF. It retargets the IR to BPF, strips the TinyGo runtime, rewrites helper calls to kernel form, and injects the metadata that loaders expect. See [Architecture](docs/ARCHITECTURE.md) for the full pipeline.
+The output is a standard BPF ELF object compatible with [`cilium/ebpf`](https://github.com/cilium/ebpf), [`libbpf`](https://github.com/libbpf/libbpf), and [`bpftool`](https://github.com/libbpf/bpftool). See [Writing Go for eBPF](docs/writing-go-for-ebpf.md) for how the language subset and compilation model work.
 
 ## Quick start
-
-### Install
-
-```bash
-go install github.com/kyleseneker/tinybpf/cmd/tinybpf@latest
-```
 
 ### Prerequisites
 
@@ -52,229 +38,69 @@ go install github.com/kyleseneker/tinybpf/cmd/tinybpf@latest
 |------------|---------|----------|
 | Go | 1.24+ | Yes |
 | TinyGo | 0.40+ | Yes |
-| LLVM (`llvm-link`, `opt`, `llc`) | 20+ (>= TinyGo's bundled LLVM) | Yes |
+| LLVM (`llvm-link`, `opt`, `llc`) | 20+ | Yes |
 | `llvm-ar`, `llvm-objcopy` | 20+ | For `.a` / `.o` inputs |
 | `pahole` | | For BTF injection |
+
+### Install
+
+```bash
+go install github.com/kyleseneker/tinybpf/cmd/tinybpf@latest
+```
+
+Or use the setup script (installs all dependencies):
 
 ```bash
 make setup    # install everything
 make doctor   # verify toolchain
 ```
 
-### Example
+### Build your first BPF object
 
-A tracepoint probe that captures outbound TCP connections, written entirely in Go:
-
-```go
-//go:extern bpf_get_current_pid_tgid
-func bpfGetCurrentPidTgid() uint64
-
-//go:extern bpf_probe_read_user
-func bpfProbeReadUser(dst unsafe.Pointer, size uint32, src unsafe.Pointer) int64
-
-//go:extern bpf_ringbuf_output
-func bpfRingbufOutput(mapPtr unsafe.Pointer, data unsafe.Pointer, size uint64, flags uint64) int64
-
-//export handle_connect
-func handle_connect(ctx unsafe.Pointer) int32 {
-    args := (*tpConnectArgs)(ctx)
-    var sa sockaddrIn
-    bpfProbeReadUser(unsafe.Pointer(&sa), uint32(unsafe.Sizeof(sa)), unsafe.Pointer(uintptr(args.Uservaddr)))
-    if sa.Family != afINET {
-        return 0
-    }
-    pid := uint32(bpfGetCurrentPidTgid() >> 32)
-    ev := connectEvent{PID: pid, DstAddrBE: sa.AddrBE, DstPortBE: sa.PortBE, Proto: ipProtoTCP}
-    bpfRingbufOutput(unsafe.Pointer(&events), unsafe.Pointer(&ev), uint64(unsafe.Sizeof(ev)), 0)
-    return 0
-}
-```
-
-Configure (`tinybpf.json`):
-
-```json
-{
-  "build": {
-    "output": "build/connect.bpf.o",
-    "programs": {
-      "handle_connect": "tracepoint/syscalls/sys_enter_connect"
-    }
-  }
-}
-```
-
-Build:
+Scaffold a project:
 
 ```bash
-tinybpf build --verbose ./bpf
+tinybpf init my_probe
+cd my_probe
 ```
 
-### Examples
-
-- [`tracepoint-connect/`](examples/tracepoint-connect/) — tracepoint + ring buffer + `cilium/ebpf` loader
-- [`xdp-filter/`](examples/xdp-filter/) — XDP packet filter with hash map blocklist
-- [`kprobe-openat/`](examples/kprobe-openat/) — kprobe tracing `openat` with ring buffer
-- [`tc-filter/`](examples/tc-filter/) — TC classifier that drops packets by port
-- [`cgroup-connect/`](examples/cgroup-connect/) — cgroup/connect4 connection blocker
-- [`fentry-open/`](examples/fentry-open/) — fentry tracing `openat2` with ring buffer
-- [`rawtp-sched/`](examples/rawtp-sched/) — raw tracepoint exec tracer with CO-RE portable struct access
-
-### Scaffold a new project
+This generates a `tinybpf.json`, a BPF source file in `bpf/`, a stub file for IDE compatibility, and a Makefile. Build it:
 
 ```bash
-tinybpf init xdp_filter
+make
 ```
 
-Generates a `tinybpf.json` config file, BPF source file, stub file for IDE compatibility, and a Makefile.
+The output is a BPF ELF object at `build/my_probe.bpf.o`, ready for any BPF loader.
 
-### Project configuration
+See [Getting Started](docs/getting-started.md) for a complete walkthrough.
 
-`tinybpf.json` stores project-level build settings. The CLI auto-discovers this file by walking parent directories from the working directory. CLI flags override config values for one-off invocations.
+## Examples
 
-```json
-{
-  "build": {
-    "output": "build/probe.bpf.o",
-    "cpu": "v3",
-    "opt_profile": "verifier-safe",
-    "btf": true,
-    "timeout": "30s",
-    "programs": {
-      "probe_connect": "kprobe/sys_connect"
-    },
-    "custom_passes": ["inline", "dce"],
-    "cache": true
-  },
-  "toolchain": {
-    "llvm_dir": "/usr/lib/llvm-20/bin"
-  }
-}
-```
+| Example | Hook type | What it demonstrates |
+|---------|-----------|---------------------|
+| [tracepoint-connect](examples/tracepoint-connect/) | Tracepoint | Ring buffer, `cilium/ebpf` loader, live event capture |
+| [kprobe-openat](examples/kprobe-openat/) | Kprobe | Function tracing, `pt_regs` context, architecture offsets |
+| [fentry-open](examples/fentry-open/) | Fentry | BTF-based tracing (kernel 5.5+) |
+| [rawtp-sched](examples/rawtp-sched/) | Raw tracepoint | CO-RE portable structs, perf event array |
+| [cgroup-connect](examples/cgroup-connect/) | Cgroup | Hash map blocklist, connection policy |
+| [xdp-filter](examples/xdp-filter/) | XDP | Packet parsing, source IP blocklist |
+| [tc-filter](examples/tc-filter/) | TC classifier | Port-based packet filtering |
 
-All fields are optional. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
-
-## CLI reference
-
-Run `tinybpf --help` or `tinybpf <command> --help` for details.
-
-### Subcommands
-
-| Command | Description |
-|---------|-------------|
-| `build` | Compile Go source to a BPF ELF object in one step |
-| `link` | Link pre-compiled LLVM IR into a BPF ELF object |
-| `init` | Scaffold a new BPF project |
-| `verify` | Validate a BPF ELF object offline |
-| `clean-cache` | Remove cached build artifacts |
-| `doctor` | Check toolchain installation |
-| `version` | Print version information |
-
-### build
-
-```bash
-tinybpf build [flags] <package>
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--tinygo` | *(PATH)* | Path to tinygo binary |
-
-Also accepts all [shared pipeline flags](#shared-pipeline-flags) and [tool path overrides](#tool-path-overrides).
-
-### link
-
-```bash
-tinybpf link --input <file> [flags]
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--input`, `-i` | *(required)* | Input file `.ll`, `.bc`, `.o`, `.a` (repeatable) |
-| `--jobs`, `-j` | `1` | Parallel input normalization workers |
-
-Also accepts all [shared pipeline flags](#shared-pipeline-flags) and [tool path overrides](#tool-path-overrides).
-
-### verify
-
-```bash
-tinybpf verify --input <file>
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--input`, `-i` | *(required)* | Path to the BPF ELF object to validate |
-
-### doctor
-
-```bash
-tinybpf doctor [flags]
-```
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--timeout` | `10s` | Timeout for each version check |
-
-Also accepts [tool path overrides](#tool-path-overrides).
-
-### clean-cache
-
-```bash
-tinybpf clean-cache
-```
-
-Removes all cached build artifacts from `$XDG_CACHE_HOME/tinybpf` (defaults to `~/.cache/tinybpf`). No additional flags.
-
-### init
-
-```bash
-tinybpf init <name>
-```
-
-Takes a single project name argument. No additional flags.
-
-### Shared pipeline flags
-
-These flags are accepted by both `build` and `link`.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--config` | *(auto-discovered)* | Path to `tinybpf.json` project config |
-| `--output`, `-o` | `bpf.o` | Output ELF path |
-| `--program` | *(auto-detect)* | Program function to keep (repeatable) |
-| `--section` | | Program-to-section mapping `name=section` (repeatable) |
-| `--cpu` | `v3` | BPF CPU version for `llc -mcpu` |
-| `--opt-profile` | `default` | `conservative`, `default`, `aggressive`, or `verifier-safe` |
-| `--pass-pipeline` | | Explicit `opt` pass pipeline (overrides profile) |
-| `--btf` | `false` | Inject BTF via `pahole` |
-| `--verbose`, `-v` | `false` | Print each pipeline stage |
-| `--timeout` | `30s` | Per-stage timeout |
-| `--dump-ir` | `false` | Write intermediate IR after each transform pass |
-| `--cache` | `true` | Enable content-addressed build cache for intermediate artifacts |
-| `--program-type` | | Validate sections match a BPF program type (e.g. `kprobe`, `xdp`) |
-| `--keep-temp` | `false` | Preserve intermediate files |
-| `--tmpdir` | | Directory for intermediate files |
-
-### Tool path overrides
-
-These flags are accepted by `build`, `link`, and `doctor`.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--llvm-link` | | Path to `llvm-link` binary |
-| `--opt` | | Path to `opt` binary |
-| `--llc` | | Path to `llc` binary |
-| `--llvm-ar` | | Path to `llvm-ar` binary |
-| `--llvm-objcopy` | | Path to `llvm-objcopy` binary |
-| `--pahole` | | Path to `pahole` binary |
+See [Examples Guide](docs/examples.md) for learning tracks and how to run them.
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Writing Go for eBPF](docs/TINYGO_COMPAT.md) | Language constraints, BPF concepts, helpers, patterns, and FAQ |
-| [Architecture](docs/ARCHITECTURE.md) | Pipeline design and the 8-pass IR transformation |
-| [Support Matrix](docs/SUPPORT_MATRIX.md) | Tested toolchain versions and platforms |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | Setup issues, pipeline errors, and verifier debugging |
+| [Getting Started](docs/getting-started.md) | Install, scaffold, build, and load your first BPF program |
+| [Writing Go for eBPF](docs/writing-go-for-ebpf.md) | Language constraints, helpers, CO-RE, and patterns |
+| [CLI Reference](docs/cli-reference.md) | Every command, flag, and default |
+| [Config Reference](docs/config-reference.md) | `tinybpf.json` schema, auto-discovery, and merge rules |
+| [Examples Guide](docs/examples.md) | Learning tracks and how to run examples |
+| [Troubleshooting](docs/troubleshooting.md) | Setup issues, pipeline errors, and verifier debugging |
+| [Architecture](docs/architecture.md) | Pipeline design and the 8-pass IR transformation |
+| [Support Matrix](docs/support-matrix.md) | Tested toolchain versions, kernels, and platforms |
+| [Project Layout](docs/project-layout.md) | Package map for contributors |
 | [Contributing](CONTRIBUTING.md) | Development setup, testing, and PR process |
 
 ## Related projects
