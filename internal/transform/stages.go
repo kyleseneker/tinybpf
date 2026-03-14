@@ -87,6 +87,32 @@ func extractProgramsModule(m *ir.Module, programNames []string, verbose bool, w 
 	if w == nil {
 		w = io.Discard
 	}
+	programSet, err := buildProgramSet(m, programNames)
+	if err != nil {
+		return err
+	}
+	if verbose {
+		for name := range programSet {
+			fmt.Fprintf(w, "[transform] keeping program: %s\n", name)
+		}
+	}
+	for _, fn := range m.Functions {
+		if !programSet[fn.Name] {
+			fn.Removed = true
+		}
+	}
+	for i := range m.Entries {
+		entry := &m.Entries[i]
+		if entry.Kind == ir.TopFunction && entry.Function != nil && entry.Function.Removed {
+			entry.Removed = true
+		}
+	}
+	markRuntimeGlobalsRemoved(m)
+	return nil
+}
+
+// buildProgramSet resolves which functions to keep based on explicit names or auto-detection.
+func buildProgramSet(m *ir.Module, programNames []string) (map[string]bool, error) {
 	programSet := make(map[string]bool)
 	if len(programNames) > 0 {
 		defined := make(map[string]bool, len(m.Functions))
@@ -105,7 +131,7 @@ func extractProgramsModule(m *ir.Module, programNames []string, verbose bool, w 
 			for i, fn := range m.Functions {
 				available[i] = fn.Name
 			}
-			return fmt.Errorf("requested program(s) not found in IR: %v (available: %v)", missing, available)
+			return nil, fmt.Errorf("requested program(s) not found in IR: %v (available: %v)", missing, available)
 		}
 	} else {
 		for _, fn := range m.Functions {
@@ -119,24 +145,13 @@ func extractProgramsModule(m *ir.Module, programNames []string, verbose bool, w 
 		for i, fn := range m.Functions {
 			names[i] = fn.Name
 		}
-		return fmt.Errorf("no program functions found among: %v", names)
+		return nil, fmt.Errorf("no program functions found among: %v", names)
 	}
-	if verbose {
-		for name := range programSet {
-			fmt.Fprintf(w, "[transform] keeping program: %s\n", name)
-		}
-	}
-	for _, fn := range m.Functions {
-		if !programSet[fn.Name] {
-			fn.Removed = true
-		}
-	}
-	for i := range m.Entries {
-		entry := &m.Entries[i]
-		if entry.Kind == ir.TopFunction && entry.Function != nil && entry.Function.Removed {
-			entry.Removed = true
-		}
-	}
+	return programSet, nil
+}
+
+// markRuntimeGlobalsRemoved flags runtime-internal globals for removal.
+func markRuntimeGlobalsRemoved(m *ir.Module) {
 	for _, g := range m.Globals {
 		if strings.HasPrefix(g.Name, "runtime.") || g.Name == ".string" ||
 			strings.HasPrefix(g.Name, "__bpf_core_") {
@@ -144,7 +159,6 @@ func extractProgramsModule(m *ir.Module, programNames []string, verbose bool, w 
 			markGlobalRemoved(m, g)
 		}
 	}
-	return nil
 }
 
 // markGlobalRemoved flags the module entry associated with the given global as removed.
@@ -221,27 +235,25 @@ func replaceAllocModule(m *ir.Module) error {
 		fn.BodyRaw = newBody
 	}
 
-	if needMemset {
-		hasMemset := false
-		for _, d := range m.Declares {
-			if d.Name == memsetIntrinsicName && !d.Removed {
-				hasMemset = true
-				break
-			}
-		}
-		if !hasMemset {
-			for _, e := range m.Entries {
-				if !e.Removed && strings.Contains(e.Raw, "@"+memsetIntrinsicName) {
-					hasMemset = true
-					break
-				}
-			}
-		}
-		if !hasMemset {
-			insertMemsetDeclInModule(m)
-		}
+	if needMemset && !hasMemsetDecl(m) {
+		insertMemsetDeclInModule(m)
 	}
 	return nil
+}
+
+// hasMemsetDecl reports whether the module already declares llvm.memset.p0.i64.
+func hasMemsetDecl(m *ir.Module) bool {
+	for _, d := range m.Declares {
+		if d.Name == memsetIntrinsicName && !d.Removed {
+			return true
+		}
+	}
+	for _, e := range m.Entries {
+		if !e.Removed && strings.Contains(e.Raw, "@"+memsetIntrinsicName) {
+			return true
+		}
+	}
+	return false
 }
 
 // insertMemsetDeclInModule adds a declare for llvm.memset.p0.i64 if not already present.
@@ -418,6 +430,13 @@ func rewriteCoreExistsModule(m *ir.Module) error {
 		}
 	}
 
+	addCoreExistsIntrinsics(m, needField, needType, needAccessIdx)
+	stripCoreExistsDeclsFromModule(m)
+	return nil
+}
+
+// addCoreExistsIntrinsics adds LLVM intrinsic declarations required by CO-RE exists rewrites.
+func addCoreExistsIntrinsics(m *ir.Module, needField, needType, needAccessIdx bool) {
 	if needField {
 		addIntrinsicDeclToModule(m, "llvm.bpf.preserve.field.info", fieldInfoIntrinsicDecl)
 	}
@@ -427,9 +446,6 @@ func rewriteCoreExistsModule(m *ir.Module) error {
 	if needAccessIdx {
 		addIntrinsicDeclToModule(m, "llvm.preserve.struct.access.index", coreIntrinsicDecl)
 	}
-
-	stripCoreExistsDeclsFromModule(m)
-	return nil
 }
 
 // buildCoreExistsCtxFromAST gathers bpfCore type offsets and metadata needed for CO-RE exists rewrites.
@@ -950,12 +966,22 @@ func mapBTFPassModule(m *ir.Module) error {
 
 // stripMapPrefixModule removes the "main." prefix from map global names and updates all references.
 func stripMapPrefixModule(m *ir.Module) error {
-	type rename struct {
-		oldRef string
-		newRef string
+	renames := collectMapRenames(m)
+	if len(renames) == 0 {
+		return nil
 	}
-	var renames []rename
+	applyRenames(m, renames)
+	return nil
+}
 
+type mapRename struct {
+	oldRef string
+	newRef string
+}
+
+// collectMapRenames builds rename pairs for map globals that have a package prefix.
+func collectMapRenames(m *ir.Module) []mapRename {
+	var renames []mapRename
 	for _, e := range m.Entries {
 		if e.Removed || e.Kind != ir.TopGlobal || e.Global == nil {
 			continue
@@ -972,15 +998,16 @@ func stripMapPrefixModule(m *ir.Module) error {
 		if stripped == "" {
 			continue
 		}
-		renames = append(renames, rename{
+		renames = append(renames, mapRename{
 			oldRef: "@" + name,
 			newRef: "@" + stripped,
 		})
 	}
-	if len(renames) == 0 {
-		return nil
-	}
+	return renames
+}
 
+// applyRenames replaces all occurrences of old references with new ones across all entries.
+func applyRenames(m *ir.Module, renames []mapRename) {
 	for i := range m.Entries {
 		e := &m.Entries[i]
 		if e.Removed {
@@ -992,65 +1019,37 @@ func stripMapPrefixModule(m *ir.Module) error {
 			}
 		}
 		if e.Kind == ir.TopFunction && e.Function != nil {
-			fn := e.Function
-			for _, r := range renames {
-				if strings.Contains(fn.Raw, r.oldRef) {
-					fn.Raw = strings.ReplaceAll(fn.Raw, r.oldRef, r.newRef)
-				}
-			}
-			for j, bline := range fn.BodyRaw {
-				for _, r := range renames {
-					if strings.Contains(bline, r.oldRef) {
-						fn.BodyRaw[j] = strings.ReplaceAll(fn.BodyRaw[j], r.oldRef, r.newRef)
-					}
-				}
+			applyRenamesToFunction(e.Function, renames)
+		}
+	}
+}
+
+// applyRenamesToFunction replaces old references with new ones in a function's raw lines.
+func applyRenamesToFunction(fn *ir.Function, renames []mapRename) {
+	for _, r := range renames {
+		if strings.Contains(fn.Raw, r.oldRef) {
+			fn.Raw = strings.ReplaceAll(fn.Raw, r.oldRef, r.newRef)
+		}
+	}
+	for j, bline := range fn.BodyRaw {
+		for _, r := range renames {
+			if strings.Contains(bline, r.oldRef) {
+				fn.BodyRaw[j] = strings.ReplaceAll(fn.BodyRaw[j], r.oldRef, r.newRef)
 			}
 		}
 	}
-	return nil
 }
 
 // rewriteMapForBTFModule converts bpfMapDef globals from i32 fields to pointer-based BTF map definitions.
 func rewriteMapForBTFModule(m *ir.Module) error {
-	fieldCount := 0
-	for _, td := range m.TypeDefs {
-		if strings.Contains(td.Name, "bpfMapDef") {
-			fieldCount = len(td.Fields)
-			if fieldCount < 5 || fieldCount > 7 {
-				return fmt.Errorf("bpfMapDef type has %d fields (expected 5-7): %s", fieldCount, td.Raw)
-			}
-			break
-		}
-	}
-	if fieldCount == 0 {
-		fieldCount = 5
+	fieldCount, err := detectMapFieldCount(m)
+	if err != nil {
+		return err
 	}
 
-	type astMapDef struct {
-		entryIdx int
-		name     string
-		values   []int
-	}
-	var maps []astMapDef
-	for i, e := range m.Entries {
-		if e.Removed || e.Kind != ir.TopGlobal || e.Global == nil {
-			continue
-		}
-		trimmed := strings.TrimSpace(e.Raw)
-		if mat := reMapGlobal.FindStringSubmatch(trimmed); mat != nil {
-			vals := parseI32Initializer(mat[3])
-			if vals == nil {
-				return fmt.Errorf("bpfMapDef global %q initializer could not be parsed: %s", mat[1], trimmed)
-			}
-			if len(vals) != fieldCount {
-				return fmt.Errorf("bpfMapDef global %q has %d fields but type has %d", mat[1], len(vals), fieldCount)
-			}
-			maps = append(maps, astMapDef{entryIdx: i, name: mat[1], values: vals})
-			continue
-		}
-		if mz := reMapGlobalZero.FindStringSubmatch(trimmed); mz != nil {
-			maps = append(maps, astMapDef{entryIdx: i, name: mz[1], values: make([]int, fieldCount)})
-		}
+	maps, err := collectMapDefs(m, fieldCount)
+	if err != nil {
+		return err
 	}
 	if len(maps) == 0 {
 		return nil
@@ -1096,6 +1095,52 @@ func rewriteMapForBTFModule(m *ir.Module) error {
 	}
 
 	return nil
+}
+
+// detectMapFieldCount returns the field count from a bpfMapDef type, defaulting to 5.
+func detectMapFieldCount(m *ir.Module) (int, error) {
+	for _, td := range m.TypeDefs {
+		if strings.Contains(td.Name, "bpfMapDef") {
+			fc := len(td.Fields)
+			if fc < 5 || fc > 7 {
+				return 0, fmt.Errorf("bpfMapDef type has %d fields (expected 5-7): %s", fc, td.Raw)
+			}
+			return fc, nil
+		}
+	}
+	return 5, nil
+}
+
+type astMapDef struct {
+	entryIdx int
+	name     string
+	values   []int
+}
+
+// collectMapDefs scans module entries for bpfMapDef globals and parses their initializers.
+func collectMapDefs(m *ir.Module, fieldCount int) ([]astMapDef, error) {
+	var maps []astMapDef
+	for i, e := range m.Entries {
+		if e.Removed || e.Kind != ir.TopGlobal || e.Global == nil {
+			continue
+		}
+		trimmed := strings.TrimSpace(e.Raw)
+		if mat := reMapGlobal.FindStringSubmatch(trimmed); mat != nil {
+			vals := parseI32Initializer(mat[3])
+			if vals == nil {
+				return nil, fmt.Errorf("bpfMapDef global %q initializer could not be parsed: %s", mat[1], trimmed)
+			}
+			if len(vals) != fieldCount {
+				return nil, fmt.Errorf("bpfMapDef global %q has %d fields but type has %d", mat[1], len(vals), fieldCount)
+			}
+			maps = append(maps, astMapDef{entryIdx: i, name: mat[1], values: vals})
+			continue
+		}
+		if mz := reMapGlobalZero.FindStringSubmatch(trimmed); mz != nil {
+			maps = append(maps, astMapDef{entryIdx: i, name: mz[1], values: make([]int, fieldCount)})
+		}
+	}
+	return maps, nil
 }
 
 // rewriteMemberNodesInModule updates DW_TAG_member metadata to use pointer base types and C field names.
@@ -1221,38 +1266,11 @@ func sanitizeBTFNamesModule(m *ir.Module) error {
 
 // sanitizeCoreFieldNamesModule converts bpfCore type and field names from CamelCase to snake_case.
 func sanitizeCoreFieldNamesModule(m *ir.Module) error {
-	coreMetaIDs := make(map[int]bool)
-	for _, e := range m.Entries {
-		if e.Removed || e.Kind != ir.TopMetadata {
-			continue
-		}
-		trimmed := strings.TrimSpace(e.Raw)
-		if isBpfCoreStructMeta(trimmed) {
-			if id := parseMetaID(trimmed); id >= 0 {
-				coreMetaIDs[id] = true
-			}
-		}
-	}
+	coreMetaIDs := collectCoreStructMetaIDs(m)
 	if len(coreMetaIDs) == 0 {
 		return nil
 	}
-
-	coreMemberIDs := make(map[int]bool)
-	for _, e := range m.Entries {
-		if e.Removed || e.Kind != ir.TopMetadata {
-			continue
-		}
-		trimmed := strings.TrimSpace(e.Raw)
-		if !isBpfCoreStructMeta(trimmed) {
-			continue
-		}
-		for _, seg := range strings.Split(trimmed, "!") {
-			seg = strings.TrimSpace(seg)
-			if n := parseLeadingInt(seg); n >= 0 {
-				coreMemberIDs[n] = true
-			}
-		}
-	}
+	coreMemberIDs := collectCoreMemberIDs(m)
 
 	for i := range m.Entries {
 		e := &m.Entries[i]
@@ -1271,6 +1289,44 @@ func sanitizeCoreFieldNamesModule(m *ir.Module) error {
 		}
 	}
 	return nil
+}
+
+// collectCoreStructMetaIDs returns the metadata IDs of bpfCore struct type entries.
+func collectCoreStructMetaIDs(m *ir.Module) map[int]bool {
+	ids := make(map[int]bool)
+	for _, e := range m.Entries {
+		if e.Removed || e.Kind != ir.TopMetadata {
+			continue
+		}
+		trimmed := strings.TrimSpace(e.Raw)
+		if isBpfCoreStructMeta(trimmed) {
+			if id := parseMetaID(trimmed); id >= 0 {
+				ids[id] = true
+			}
+		}
+	}
+	return ids
+}
+
+// collectCoreMemberIDs returns the metadata IDs referenced by bpfCore struct type entries.
+func collectCoreMemberIDs(m *ir.Module) map[int]bool {
+	ids := make(map[int]bool)
+	for _, e := range m.Entries {
+		if e.Removed || e.Kind != ir.TopMetadata {
+			continue
+		}
+		trimmed := strings.TrimSpace(e.Raw)
+		if !isBpfCoreStructMeta(trimmed) {
+			continue
+		}
+		for _, seg := range strings.Split(trimmed, "!") {
+			seg = strings.TrimSpace(seg)
+			if n := parseLeadingInt(seg); n >= 0 {
+				ids[n] = true
+			}
+		}
+	}
+	return ids
 }
 
 // finalizeModule adds a GPL license if missing and removes unreferenced definitions.
@@ -1324,7 +1380,16 @@ func addLicenseModule(m *ir.Module) error {
 // cleanupModule removes unreferenced declares, globals, and attribute groups, then compacts entries.
 func cleanupModule(m *ir.Module) error {
 	identRefs := buildModuleIdentRefs(m)
+	removeUnreferencedDeclares(m, identRefs)
+	removeUnreferencedGlobals(m, identRefs)
+	removeUnusedAttrGroups(m)
+	markOrphanedAttrCommentsInModule(m)
+	compactModuleEntries(m)
+	return nil
+}
 
+// removeUnreferencedDeclares marks declare entries as removed if no other entry references them.
+func removeUnreferencedDeclares(m *ir.Module, identRefs map[string][]int) {
 	for i := range m.Entries {
 		e := &m.Entries[i]
 		if e.Removed {
@@ -1344,7 +1409,10 @@ func cleanupModule(m *ir.Module) error {
 			}
 		}
 	}
+}
 
+// removeUnreferencedGlobals marks non-section globals as removed if no other entry references them.
+func removeUnreferencedGlobals(m *ir.Module, identRefs map[string][]int) {
 	for i := range m.Entries {
 		e := &m.Entries[i]
 		if e.Removed || e.Kind != ir.TopGlobal || e.Global == nil {
@@ -1358,7 +1426,10 @@ func cleanupModule(m *ir.Module) error {
 			e.Removed = true
 		}
 	}
+}
 
+// removeUnusedAttrGroups marks attribute groups as removed if no active entry references their ID.
+func removeUnusedAttrGroups(m *ir.Module) {
 	usedAttrs := collectUsedAttrIDsFromModule(m)
 	for i := range m.Entries {
 		e := &m.Entries[i]
@@ -1369,11 +1440,6 @@ func cleanupModule(m *ir.Module) error {
 			e.Removed = true
 		}
 	}
-
-	markOrphanedAttrCommentsInModule(m)
-	compactModuleEntries(m)
-
-	return nil
 }
 
 // buildModuleIdentRefs scans all entries and builds a map of @-identifier to entry indices.
