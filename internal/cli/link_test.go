@@ -53,7 +53,7 @@ func TestRunLink(t *testing.T) {
 					"link", "--input", "/dev/null",
 					"--output", filepath.Join(t.TempDir(), "out.o"),
 					"--llvm-link", testutil.BadPath("llvm-link"),
-					"--config", testutil.BadPath("linker-config.json"),
+					"--config", testutil.BadPath("tinybpf.json"),
 				}
 			},
 			wantCode: 1,
@@ -64,8 +64,8 @@ func TestRunLink(t *testing.T) {
 			setup: func(t *testing.T) []string {
 				t.Helper()
 				tmp := t.TempDir()
-				cfgPath := filepath.Join(tmp, "linker-config.json")
-				os.WriteFile(cfgPath, []byte(`{"custom_passes": ["-inline;rm"]}`), 0o644)
+				cfgPath := filepath.Join(tmp, "tinybpf.json")
+				os.WriteFile(cfgPath, []byte(`{"build":{"custom_passes": ["-inline;rm"]}}`), 0o644)
 				return []string{
 					"link", "--input", "/dev/null",
 					"--output", filepath.Join(tmp, "out.o"),
@@ -80,8 +80,8 @@ func TestRunLink(t *testing.T) {
 			setup: func(t *testing.T) []string {
 				t.Helper()
 				tmp := t.TempDir()
-				cfgPath := filepath.Join(tmp, "linker-config.json")
-				os.WriteFile(cfgPath, []byte(`{"custom_passes": ["inline", "dse"]}`), 0o644)
+				cfgPath := filepath.Join(tmp, "tinybpf.json")
+				os.WriteFile(cfgPath, []byte(`{"build":{"custom_passes": ["inline", "dse"]}}`), 0o644)
 				return []string{
 					"link", "--input", "/dev/null",
 					"--output", filepath.Join(tmp, "out.o"),

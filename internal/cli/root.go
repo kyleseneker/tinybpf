@@ -7,9 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/kyleseneker/tinybpf/config"
 	"github.com/kyleseneker/tinybpf/llvm"
 	"github.com/kyleseneker/tinybpf/pipeline"
 )
@@ -132,7 +134,8 @@ func runVersion(stdout io.Writer) int {
 }
 
 // registerPipelineFlags registers the flags shared by build and link.
-func registerPipelineFlags(fs *flag.FlagSet, cfg *pipeline.Config, programs, sections *multiStringFlag) {
+func registerPipelineFlags(fs *flag.FlagSet, cfg *pipeline.Config, programs, sections *multiStringFlag, configPath *string) {
+	fs.StringVar(configPath, "config", "", "Path to tinybpf.json project config (default: auto-discovered).")
 	fs.StringVar(&cfg.Output, "output", "bpf.o", "Output eBPF ELF object path.")
 	fs.StringVar(&cfg.Output, "o", "bpf.o", "Output eBPF ELF object path (shorthand).")
 	fs.StringVar(&cfg.CPU, "cpu", "v3", "BPF CPU version passed to llc as -mcpu.")
@@ -149,6 +152,114 @@ func registerPipelineFlags(fs *flag.FlagSet, cfg *pipeline.Config, programs, sec
 	fs.Var(programs, "program", "Program function name to keep. Repeat for multiple programs. Auto-detected if omitted.")
 	fs.Var(sections, "section", "Program-to-section mapping (e.g., handle_connect=tracepoint/syscalls/sys_enter_connect). Repeat for multiple.")
 	registerToolFlags(fs, &cfg.Tools)
+}
+
+// configResult holds the loaded project config and tinygo path override.
+type configResult struct {
+	tinygo string
+}
+
+// loadProjectConfig discovers, loads, and applies tinybpf.json settings to
+// the pipeline config. CLI flags that were explicitly set take precedence.
+func loadProjectConfig(fs *flag.FlagSet, configPath string, cfg *pipeline.Config, stderr io.Writer) (*configResult, error) {
+	path, err := resolveConfigPath(configPath)
+	if err != nil {
+		return nil, err
+	}
+	if path == "" {
+		return &configResult{}, nil
+	}
+
+	fileCfg, err := config.Load(path)
+	if err != nil {
+		return nil, err
+	}
+
+	set := flagsSet(fs)
+	pc := config.ToPipeline(fileCfg)
+	applyBuildDefaults(set, cfg, &pc, fileCfg)
+	applyToolOverrides(set, &cfg.Tools, pc.Tools)
+
+	return &configResult{tinygo: fileCfg.Toolchain.TinyGo}, nil
+}
+
+// resolveConfigPath returns an explicit path or auto-discovers tinybpf.json.
+func resolveConfigPath(explicit string) (string, error) {
+	if explicit != "" {
+		return explicit, nil
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", nil
+	}
+	found, err := config.Find(wd)
+	if err != nil {
+		return "", nil
+	}
+	return found, nil
+}
+
+// applyBuildDefaults copies config-file build settings into the pipeline
+// config for any field not explicitly set via CLI flags.
+func applyBuildDefaults(set map[string]bool, cfg *pipeline.Config, pc *pipeline.Config, fileCfg *config.Config) {
+	applyBuildScalars(set, cfg, pc, fileCfg)
+	if !set["program"] && len(pc.Programs) > 0 {
+		cfg.Programs = pc.Programs
+	}
+	if !set["section"] && len(pc.Sections) > 0 {
+		cfg.Sections = pc.Sections
+	}
+	if len(pc.CustomPasses) > 0 {
+		cfg.CustomPasses = pc.CustomPasses
+	}
+}
+
+func applyBuildScalars(set map[string]bool, cfg *pipeline.Config, pc *pipeline.Config, fileCfg *config.Config) {
+	if !set["output"] && !set["o"] && pc.Output != "" {
+		cfg.Output = pc.Output
+	}
+	if !set["cpu"] && pc.CPU != "" {
+		cfg.CPU = pc.CPU
+	}
+	if !set["opt-profile"] && pc.OptProfile != "" {
+		cfg.OptProfile = pc.OptProfile
+	}
+	if !set["btf"] && fileCfg.Build.BTF != nil {
+		cfg.EnableBTF = pc.EnableBTF
+	}
+	if !set["timeout"] && pc.Timeout > 0 {
+		cfg.Timeout = pc.Timeout
+	}
+}
+
+// flagsSet returns a set of flag names that were explicitly provided by the user.
+func flagsSet(fs *flag.FlagSet) map[string]bool {
+	m := make(map[string]bool)
+	fs.Visit(func(f *flag.Flag) { m[f.Name] = true })
+	return m
+}
+
+// applyToolOverrides applies config-file tool paths for any tool not
+// explicitly overridden via CLI flags.
+func applyToolOverrides(set map[string]bool, dst *llvm.ToolOverrides, src llvm.ToolOverrides) {
+	if !set["llvm-link"] && src.LLVMLink != "" {
+		dst.LLVMLink = src.LLVMLink
+	}
+	if !set["opt"] && src.Opt != "" {
+		dst.Opt = src.Opt
+	}
+	if !set["llc"] && src.LLC != "" {
+		dst.LLC = src.LLC
+	}
+	if !set["llvm-ar"] && src.LLVMAr != "" {
+		dst.LLVMAr = src.LLVMAr
+	}
+	if !set["llvm-objcopy"] && src.Objcopy != "" {
+		dst.Objcopy = src.Objcopy
+	}
+	if !set["pahole"] && src.Pahole != "" {
+		dst.Pahole = src.Pahole
+	}
 }
 
 // runPipelineAndReport runs the link pipeline and prints the result.

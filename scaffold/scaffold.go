@@ -2,6 +2,7 @@
 package scaffold
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -45,6 +46,7 @@ func Run(cfg Config) error {
 
 func buildPlan(dir, bpfDir, program string) []plannedFile {
 	return []plannedFile{
+		{filepath.Join(dir, "tinybpf.json"), projectConfig(program)},
 		{filepath.Join(bpfDir, program+".go"), programGo(program)},
 		{filepath.Join(bpfDir, program+"_stub.go"), programStubGo()},
 		{filepath.Join(dir, "Makefile"), makefile(program)},
@@ -109,7 +111,7 @@ type bpfMapDef struct {
 func bpfGetCurrentPidTgid() uint64
 
 // ` + programName + ` is the BPF program entry point.
-// Assign it to an ELF section with: tinybpf build --section ` + programName + `=<type>/<attach_point>
+// Set the ELF section in tinybpf.json under build.programs.
 //
 //export ` + programName + `
 func ` + programName + `(ctx unsafe.Pointer) int32 {
@@ -130,21 +132,13 @@ package main
 func makefile(programName string) string {
 	return `.PHONY: build clean
 
-# Output paths
 BUILD_DIR := build
 BPF_OBJ   := $(BUILD_DIR)/` + programName + `.bpf.o
 
-# Customize: set the ELF section for your program.
-# Examples:
-#   tracepoint/syscalls/sys_enter_connect
-#   kprobe/__x64_sys_openat
-#   xdp
-SECTION := ` + programName + `
-
 build: $(BPF_OBJ)
 
-$(BPF_OBJ): bpf/` + programName + `.go | $(BUILD_DIR)
-	tinybpf build --output $@ --section ` + programName + `=$(SECTION) --verbose ./bpf
+$(BPF_OBJ): bpf/` + programName + `.go tinybpf.json | $(BUILD_DIR)
+	tinybpf build --verbose ./bpf
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -152,4 +146,21 @@ $(BUILD_DIR):
 clean:
 	rm -rf $(BUILD_DIR)
 `
+}
+
+func projectConfig(programName string) string {
+	type build struct {
+		Output   string            `json:"output"`
+		Programs map[string]string `json:"programs"`
+	}
+	cfg := struct {
+		Build build `json:"build"`
+	}{
+		Build: build{
+			Output:   "build/" + programName + ".bpf.o",
+			Programs: map[string]string{programName: programName},
+		},
+	}
+	data, _ := json.MarshalIndent(cfg, "", "  ")
+	return string(data) + "\n"
 }

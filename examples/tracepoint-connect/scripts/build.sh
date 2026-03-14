@@ -23,8 +23,6 @@ echo "[2/2] tinybpf build -> ${BUILD_DIR}/connect.bpf.o"
 (
   cd "${EXAMPLE_DIR}" && \
   "${TINYBPF_BIN}" build \
-    --output "${BUILD_DIR}/connect.bpf.o" \
-    --section handle_connect=tracepoint/syscalls/sys_enter_connect \
     --cpu "${CPU}" \
     --verbose \
     ./bpf

@@ -1,0 +1,8 @@
+{
+  "build": {
+    "output": "build/sched.bpf.o",
+    "programs": {
+      "raw_tracepoint_sched_process_exec": "raw_tracepoint/sched_process_exec"
+    }
+  }
+}

@@ -23,8 +23,6 @@ echo "[2/2] tinybpf build -> ${BUILD_DIR}/openat.bpf.o"
 (
   cd "${EXAMPLE_DIR}" && \
   "${TINYBPF_BIN}" build \
-    --output "${BUILD_DIR}/openat.bpf.o" \
-    --section kprobe_openat=kprobe/do_sys_openat2 \
     --cpu "${CPU}" \
     --verbose \
     ./bpf

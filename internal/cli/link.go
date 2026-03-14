@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"runtime/pprof"
 
-	"github.com/kyleseneker/tinybpf/llvm"
 	"github.com/kyleseneker/tinybpf/pipeline"
 )
 
@@ -25,6 +24,7 @@ func runLinkWith(ctx context.Context, args []string, stdout, stderr io.Writer, w
 	var programs multiStringFlag
 	var sectionFlags multiStringFlag
 	var profilePath string
+	var configPath string
 	cfg := pipeline.Config{
 		Stdout: stdout,
 		Stderr: stderr,
@@ -33,34 +33,33 @@ func runLinkWith(ctx context.Context, args []string, stdout, stderr io.Writer, w
 	fs := newFlagSet(stderr, "tinybpf link --input <file> [flags]", "Link TinyGo LLVM IR into a BPF ELF object.")
 	fs.Var(&inputs, "input", "Input LLVM file (.ll, .bc, .o, .a). Repeat for multiple modules.")
 	fs.Var(&inputs, "i", "Input LLVM file (shorthand).")
-	registerPipelineFlags(fs, &cfg, &programs, &sectionFlags)
+	registerPipelineFlags(fs, &cfg, &programs, &sectionFlags, &configPath)
 	fs.IntVar(&cfg.Jobs, "jobs", 1, "Number of parallel input normalization workers.")
 	fs.IntVar(&cfg.Jobs, "j", 1, "Number of parallel input normalization workers (shorthand).")
 	fs.StringVar(&profilePath, "profile", "", "")
-	fs.StringVar(&cfg.ConfigPath, "config", "", "Path to linker-config.json for custom passes and settings.")
 
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
+	}
+
+	if _, cfgErr := loadProjectConfig(fs, configPath, &cfg, stderr); cfgErr != nil {
+		return cliErrorf(stderr, "%v", cfgErr)
 	}
 
 	if len(inputs) == 0 {
 		return usageErrorf(fs, stderr, "at least one --input is required")
 	}
 	cfg.Inputs = inputs
-	cfg.Programs = programs
+	if len(programs) > 0 {
+		cfg.Programs = programs
+	}
 
 	sections, secErr := pipeline.ParseSectionFlags(sectionFlags)
 	if secErr != nil {
 		return cliErrorf(stderr, "%v", secErr)
 	}
-	cfg.Sections = sections
-
-	if cfg.ConfigPath != "" {
-		linkerCfg, err := llvm.LoadConfig(cfg.ConfigPath)
-		if err != nil {
-			return cliErrorf(stderr, "%v", err)
-		}
-		cfg.CustomPasses = linkerCfg.CustomPasses
+	if len(sections) > 0 {
+		cfg.Sections = sections
 	}
 
 	if profilePath != "" {

@@ -23,8 +23,6 @@ echo "[2/2] tinybpf build -> ${BUILD_DIR}/open.bpf.o"
 (
   cd "${EXAMPLE_DIR}" && \
   "${TINYBPF_BIN}" build \
-    --output "${BUILD_DIR}/open.bpf.o" \
-    --section trace_openat2=fentry/do_sys_openat2 \
     --cpu "${CPU}" \
     --verbose \
     ./bpf

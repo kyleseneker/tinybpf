@@ -25,13 +25,19 @@ func TestRun(t *testing.T) {
 			cfg: func(dir string) Config {
 				return Config{Dir: dir, Program: "xdp_filter"}
 			},
-			wantFiles: []string{"bpf/xdp_filter.go", "bpf/xdp_filter_stub.go", "Makefile"},
+			wantFiles: []string{"tinybpf.json", "bpf/xdp_filter.go", "bpf/xdp_filter_stub.go", "Makefile"},
 			wantStdout: []string{
+				"create tinybpf.json",
 				"create bpf/xdp_filter.go",
 				"create bpf/xdp_filter_stub.go",
 				"create Makefile",
 			},
 			wantContain: map[string][]string{
+				"tinybpf.json": {
+					`"output"`,
+					`"xdp_filter"`,
+					`"programs"`,
+				},
 				"bpf/xdp_filter.go": {
 					"//go:build tinygo",
 					"package main",
@@ -47,10 +53,7 @@ func TestRun(t *testing.T) {
 				},
 				"Makefile": {
 					"tinybpf build",
-					"--section xdp_filter=",
-					"SECTION :=",
-					"bpf/xdp_filter.go",
-					"xdp_filter.bpf.o",
+					"tinybpf.json",
 				},
 			},
 		},
@@ -59,7 +62,7 @@ func TestRun(t *testing.T) {
 			cfg: func(dir string) Config {
 				return Config{Dir: dir, Program: "tc_filter", Stdout: nil}
 			},
-			wantFiles: []string{"bpf/tc_filter.go", "bpf/tc_filter_stub.go", "Makefile"},
+			wantFiles: []string{"tinybpf.json", "bpf/tc_filter.go", "bpf/tc_filter_stub.go", "Makefile"},
 		},
 		{
 			name:    "missing name",
@@ -158,11 +161,12 @@ func TestRun(t *testing.T) {
 
 func TestBuildPlan(t *testing.T) {
 	files := buildPlan("/proj", "/proj/bpf", "myprobe")
-	if len(files) != 3 {
-		t.Fatalf("expected 3 planned files, got %d", len(files))
+	if len(files) != 4 {
+		t.Fatalf("expected 4 planned files, got %d", len(files))
 	}
 
 	wantPaths := []string{
+		filepath.Join("/proj", "tinybpf.json"),
 		filepath.Join("/proj/bpf", "myprobe.go"),
 		filepath.Join("/proj/bpf", "myprobe_stub.go"),
 		filepath.Join("/proj", "Makefile"),
@@ -173,13 +177,16 @@ func TestBuildPlan(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(files[0].content, "//export myprobe") {
+	if !strings.Contains(files[0].content, `"myprobe"`) {
+		t.Error("config file missing program name")
+	}
+	if !strings.Contains(files[1].content, "//export myprobe") {
 		t.Error("program file missing //export directive")
 	}
-	if !strings.Contains(files[1].content, "//go:build !tinygo") {
+	if !strings.Contains(files[2].content, "//go:build !tinygo") {
 		t.Error("stub file missing build constraint")
 	}
-	if !strings.Contains(files[2].content, "tinybpf build") {
+	if !strings.Contains(files[3].content, "tinybpf build") {
 		t.Error("Makefile missing build command")
 	}
 }

@@ -27,17 +27,23 @@ func runBuildWith(ctx context.Context, args []string, stdout, stderr io.Writer, 
 	var programs multiStringFlag
 	var sectionFlags multiStringFlag
 	var tinygoPath string
+	var configPath string
 	cfg := pipeline.Config{
 		Stdout: stdout,
 		Stderr: stderr,
 	}
 
 	fs := newFlagSet(stderr, "tinybpf build [flags] <package>", "Compile Go source to a BPF ELF object in one step.")
-	registerPipelineFlags(fs, &cfg, &programs, &sectionFlags)
+	registerPipelineFlags(fs, &cfg, &programs, &sectionFlags, &configPath)
 	fs.StringVar(&tinygoPath, "tinygo", "", "Path to tinygo binary (default: discovered from PATH).")
 
 	if code, ok := parseFlags(fs, args); !ok {
 		return code
+	}
+
+	cfgResult, cfgErr := loadProjectConfig(fs, configPath, &cfg, stderr)
+	if cfgErr != nil {
+		return cliErrorf(stderr, "%v", cfgErr)
 	}
 
 	if fs.NArg() != 1 {
@@ -45,6 +51,9 @@ func runBuildWith(ctx context.Context, args []string, stdout, stderr io.Writer, 
 	}
 	pkg := fs.Arg(0)
 
+	if tinygoPath == "" && cfgResult.tinygo != "" {
+		tinygoPath = cfgResult.tinygo
+	}
 	tinygo, err := findTinyGo(tinygoPath)
 	if err != nil {
 		return cliErrorf(stderr, "%v", err)
@@ -64,13 +73,17 @@ func runBuildWith(ctx context.Context, args []string, stdout, stderr io.Writer, 
 	}
 
 	cfg.Inputs = []string{irFile}
-	cfg.Programs = programs
+	if len(programs) > 0 {
+		cfg.Programs = programs
+	}
 
 	sections, secErr := pipeline.ParseSectionFlags(sectionFlags)
 	if secErr != nil {
 		return cliErrorf(stderr, "%v", secErr)
 	}
-	cfg.Sections = sections
+	if len(sections) > 0 {
+		cfg.Sections = sections
+	}
 
 	return runPipelineAndReport(ctx, cfg, stdout, stderr)
 }

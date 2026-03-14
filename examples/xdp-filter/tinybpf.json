@@ -1,0 +1,8 @@
+{
+  "build": {
+    "output": "build/filter.bpf.o",
+    "programs": {
+      "xdp_filter": "xdp"
+    }
+  }
+}

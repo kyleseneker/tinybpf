@@ -36,7 +36,6 @@ type Config struct {
 	Stdout       io.Writer
 	Stderr       io.Writer
 	Jobs         int
-	ConfigPath   string
 	CustomPasses []string
 	DumpIR       bool
 	ProgramType  string
@@ -174,7 +173,7 @@ func (rc *runContext) runOptStage() error {
 	if len(rc.cfg.CustomPasses) > 0 {
 		validated, vErr := llvm.AppendCustomPasses(optArgs, rc.cfg.CustomPasses)
 		if vErr != nil {
-			return diag.Wrap(diag.StageOpt, vErr, "custom pass validation failed; check linker-config.json")
+			return diag.Wrap(diag.StageOpt, vErr, "custom pass validation failed; check tinybpf.json custom_passes")
 		}
 		optArgs = validated
 	}

@@ -22,6 +22,7 @@ graph TD
 
 ```
 cmd/tinybpf/               CLI entrypoint
+config/                    Project config loading (tinybpf.json), validation, and merge
 diag/                      Structured error types with stage context and hints
 doctor/                    Toolchain diagnostic subcommand
 elfcheck/                  Post-link ELF validation
@@ -30,7 +31,7 @@ internal/
   testutil/                Test helpers (fake LLVM tools, sample IR)
 ir/                        LLVM IR parser, AST, serializer, and index
   testdata/                IR fixture files for parser/serializer tests
-llvm/                      Tool discovery, optimization profiles, process execution, config loading
+llvm/                      Tool discovery, optimization profiles, process execution
 pipeline/                  Orchestration, input normalization, BTF injection
 scaffold/                  Project scaffolding (tinybpf init)
 transform/                 TinyGo IR -> BPF IR rewriting
@@ -79,13 +80,17 @@ At tool discovery time, every resolved path is validated against an allowlist of
 
 Intermediate build artifacts are written to a directory created with `0700` permissions and cleaned up on exit unless `--keep-temp` is passed.
 
-### Custom opt passes via config
+### Project configuration
 
-The `--config` flag accepts a `linker-config.json` file containing an array of custom LLVM pass names:
+The `tinybpf.json` file stores project-level build settings (output path, CPU version, optimization profile, program-to-section mappings, custom passes, and toolchain paths). The CLI auto-discovers this file by walking parent directories from the current working directory, like `go.mod`. CLI flags override config file values for one-off invocations.
+
+Custom LLVM opt passes are specified in `build.custom_passes`:
 
 ```json
 {
-  "custom_passes": ["-inline", "-instcombine"]
+  "build": {
+    "custom_passes": ["inline", "instcombine"]
+  }
 }
 ```
 

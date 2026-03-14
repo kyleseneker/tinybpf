@@ -1,0 +1,8 @@
+{
+  "build": {
+    "output": "build/openat.bpf.o",
+    "programs": {
+      "kprobe_openat": "kprobe/do_sys_openat2"
+    }
+  }
+}

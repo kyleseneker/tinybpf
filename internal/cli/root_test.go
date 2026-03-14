@@ -266,12 +266,14 @@ func TestRegisterPipelineFlags(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	var cfg pipeline.Config
 	var programs, sections multiStringFlag
-	registerPipelineFlags(fs, &cfg, &programs, &sections)
+	var configPath string
+	registerPipelineFlags(fs, &cfg, &programs, &sections, &configPath)
 
 	expected := []struct {
 		name     string
 		defValue string
 	}{
+		{"config", ""},
 		{"output", "bpf.o"},
 		{"o", "bpf.o"},
 		{"cpu", "v3"},

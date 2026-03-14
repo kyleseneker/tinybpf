@@ -1,0 +1,8 @@
+{
+  "build": {
+    "output": "build/connect.bpf.o",
+    "programs": {
+      "handle_connect": "tracepoint/syscalls/sys_enter_connect"
+    }
+  }
+}

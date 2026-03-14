@@ -23,8 +23,6 @@ echo "[2/2] tinybpf build -> ${BUILD_DIR}/filter.bpf.o"
 (
   cd "${EXAMPLE_DIR}" && \
   "${TINYBPF_BIN}" build \
-    --output "${BUILD_DIR}/filter.bpf.o" \
-    --section xdp_filter=xdp \
     --cpu "${CPU}" \
     --verbose \
     ./bpf

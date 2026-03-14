@@ -90,12 +90,23 @@ func handle_connect(ctx unsafe.Pointer) int32 {
 }
 ```
 
+Configure (`tinybpf.json`):
+
+```json
+{
+  "build": {
+    "output": "build/connect.bpf.o",
+    "programs": {
+      "handle_connect": "tracepoint/syscalls/sys_enter_connect"
+    }
+  }
+}
+```
+
 Build:
 
 ```bash
-tinybpf build --output program.o \
-  --section handle_connect=tracepoint/syscalls/sys_enter_connect \
-  ./bpf
+tinybpf build --verbose ./bpf
 ```
 
 ### Examples
@@ -114,7 +125,32 @@ tinybpf build --output program.o \
 tinybpf init xdp_filter
 ```
 
-Generates a BPF source file, stub file for IDE compatibility, and a Makefile.
+Generates a `tinybpf.json` config file, BPF source file, stub file for IDE compatibility, and a Makefile.
+
+### Project configuration
+
+`tinybpf.json` stores project-level build settings. The CLI auto-discovers this file by walking parent directories from the working directory. CLI flags override config values for one-off invocations.
+
+```json
+{
+  "build": {
+    "output": "build/probe.bpf.o",
+    "cpu": "v3",
+    "opt_profile": "verifier-safe",
+    "btf": true,
+    "timeout": "30s",
+    "programs": {
+      "probe_connect": "kprobe/sys_connect"
+    },
+    "custom_passes": ["inline", "dce"]
+  },
+  "toolchain": {
+    "llvm_dir": "/usr/lib/llvm-20/bin"
+  }
+}
+```
+
+All fields are optional. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for details.
 
 ## CLI reference
 
@@ -152,7 +188,6 @@ tinybpf link --input <file> [flags]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--input`, `-i` | *(required)* | Input file `.ll`, `.bc`, `.o`, `.a` (repeatable) |
-| `--config` | | Path to `linker-config.json` for custom passes |
 | `--jobs`, `-j` | `1` | Parallel input normalization workers |
 
 Also accepts all [shared pipeline flags](#shared-pipeline-flags) and [tool path overrides](#tool-path-overrides).
@@ -193,6 +228,7 @@ These flags are accepted by both `build` and `link`.
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--config` | *(auto-discovered)* | Path to `tinybpf.json` project config |
 | `--output`, `-o` | `bpf.o` | Output ELF path |
 | `--program` | *(auto-detect)* | Program function to keep (repeatable) |
 | `--section` | | Program-to-section mapping `name=section` (repeatable) |

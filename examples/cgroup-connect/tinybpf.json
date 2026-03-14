@@ -1,0 +1,8 @@
+{
+  "build": {
+    "output": "build/connect.bpf.o",
+    "programs": {
+      "check_connect4": "cgroup/connect4"
+    }
+  }
+}
