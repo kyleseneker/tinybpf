@@ -10,7 +10,7 @@
 # Environment:
 #   TINYBPF_BIN  Path to a pre-built tinybpf binary (skips rebuild).
 #
-# Supported versions: 5.15, 6.1, 6.6, 6.12
+# Supported versions: 5.15, 6.1, 6.6, 6.12, 6.18
 # Requires: virtme-ng, qemu-system-x86_64, Go, TinyGo, LLVM tools
 set -euo pipefail
 

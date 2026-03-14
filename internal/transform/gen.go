@@ -31,7 +31,7 @@ type helper struct {
 }
 
 func main() {
-	version := flag.String("version", "v6.12", "kernel git tag to fetch bpf.h from")
+	version := flag.String("version", "v6.18", "kernel git tag to fetch bpf.h from")
 	file := flag.String("file", "", "local bpf.h file path (overrides -version)")
 	flag.Parse()
 

@@ -21,6 +21,7 @@ jobs:
           - "6.1"
           - "6.6"
           - "6.12"
+          - "6.18"
     steps:
       - name: Checkout
         uses: actions/checkout@v6

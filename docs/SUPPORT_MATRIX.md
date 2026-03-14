@@ -52,8 +52,9 @@ CO-RE relocations are tested across active LTS kernel versions via the `kernel-m
 |--------|---------|-------------|
 | 5.15 | Dec 2026 | Tested |
 | 6.1 | Dec 2027 | Tested |
-| 6.6 | Dec 2026 | Tested |
-| 6.12 (SLTS) | Dec 2026 | Tested |
+| 6.6 | Dec 2027 | Tested |
+| 6.12 | Dec 2028 | Tested |
+| 6.18 | Dec 2028 | Tested |
 
 CO-RE requires a kernel with BTF support (CONFIG_DEBUG_INFO_BTF=y), which is enabled by default on most distributions since kernel 5.4+.
 

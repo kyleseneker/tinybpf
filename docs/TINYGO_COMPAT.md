@@ -126,7 +126,7 @@ func main() {}
 
 ## Supported BPF helpers
 
-IDs from `___BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`. The helper list is frozen at 211 entries; new kernel extensions use kfuncs instead. Unrecognized helpers produce an error during transformation.
+IDs from `___BPF_FUNC_MAPPER` in `include/uapi/linux/bpf.h`, auto-generated via `go generate` (pinned to kernel v6.18). The helper list is frozen at 211 entries; new kernel extensions use kfuncs instead. Unrecognized helpers produce an error during transformation.
 
 ### Map operations
 
