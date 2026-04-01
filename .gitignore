@@ -37,5 +37,12 @@ Thumbs.db
 # LLVM intermediates (keep testdata fixtures)
 *.bpf.o
 
+# Example binaries (go build ./cmd/... outputs)
+examples/*/tracer
+examples/*/reader
+examples/*/loader
+examples/*/blocker
+examples/*/dropper
+
 # Internal planning docs
 docs/ROADMAP.md
