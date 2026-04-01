@@ -1056,8 +1056,8 @@ func TestWarnStackUsage(t *testing.T) {
 		wantMsg string
 	}{
 		{
-			name: "large alloca triggers warning",
-			body: `  %buf = alloca [400 x i8], align 1`,
+			name:    "large alloca triggers warning",
+			body:    `  %buf = alloca [400 x i8], align 1`,
 			wantMsg: "[transform] test_func: estimated stack usage ~400 bytes",
 		},
 		{
