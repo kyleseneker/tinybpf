@@ -1,6 +1,7 @@
 package transform
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"strings"
@@ -1045,5 +1046,56 @@ func TestCompactModuleEntries(t *testing.T) {
 		if kinds[i] != wantKinds[i] {
 			t.Errorf("entry %d kind = %d, want %d", i, kinds[i], wantKinds[i])
 		}
+	}
+}
+
+func TestWarnStackUsage(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantMsg string
+	}{
+		{
+			name: "large alloca triggers warning",
+			body: `  %buf = alloca [400 x i8], align 1`,
+			wantMsg: "[transform] test_func: estimated stack usage ~400 bytes",
+		},
+		{
+			name:    "small alloca no warning",
+			body:    `  %buf = alloca [16 x i8], align 1`,
+			wantMsg: "",
+		},
+		{
+			name: "multiple allocas sum",
+			body: `  %a = alloca [200 x i8], align 1
+  %b = alloca [200 x i8], align 1`,
+			wantMsg: "[transform] test_func: estimated stack usage ~400 bytes",
+		},
+		{
+			name:    "no alloca no warning",
+			body:    `  ret i32 0`,
+			wantMsg: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{
+				Functions: []*ir.Function{
+					{Name: "test_func", BodyRaw: strings.Split(tt.body, "\n")},
+				},
+			}
+			var buf bytes.Buffer
+			warnStackUsage(m, &buf)
+			got := buf.String()
+			if tt.wantMsg == "" {
+				if got != "" {
+					t.Errorf("expected no warning, got: %s", got)
+				}
+			} else {
+				if !strings.Contains(got, tt.wantMsg) {
+					t.Errorf("expected warning containing %q, got: %q", tt.wantMsg, got)
+				}
+			}
+		})
 	}
 }

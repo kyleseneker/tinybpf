@@ -54,6 +54,7 @@ func TransformModule(ctx context.Context, m *ir.Module, opts Options) error {
 		}
 		dumper.dump(s.name, m)
 	}
+	warnStackUsage(m, opts.Stdout)
 	return nil
 }
 

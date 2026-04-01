@@ -39,6 +39,8 @@ func buildModuleStages(opts Options) []moduleStage {
 const (
 	bpfDatalayoutValue = "e-m:e-p:64:64-i64:64-i128:128-n32:64-S128"
 	bpfTripleValue     = "bpf"
+	bpfStackLimit      = 512
+	stackWarnThreshold = 384
 )
 
 // moduleRewriteModule sets BPF target properties and strips invalid attributes in a single pass.
@@ -63,6 +65,7 @@ var (
 	reAttrAllocSize      = regexp.MustCompile(`allocsize\(\d+\)`)
 	reAttrAllocFamily    = regexp.MustCompile(`"alloc-family"="[^"]*"`)
 	reAttrMultiSpace     = regexp.MustCompile(`  +`)
+	allocaSizeRe         = regexp.MustCompile(`alloca \[(\d+) x i8\]`)
 )
 
 // stripAttributesModule removes target-specific attribute group entries that are invalid for BPF.
@@ -307,6 +310,9 @@ func rewriteHelpersModule(m *ir.Module) error {
 			retType := bline[loc[2]:loc[3]]
 			funcName := bline[loc[4]:loc[5]]
 			if strings.HasPrefix(funcName, "main.bpfCore") {
+				continue
+			}
+			if strings.HasPrefix(funcName, "main.bpfKfunc") {
 				continue
 			}
 			helperID, ok := helperIDs[funcName]
@@ -1377,10 +1383,58 @@ func collectCoreMemberIDs(m *ir.Module) map[int]bool {
 
 // finalizeModule adds a GPL license if missing and removes unreferenced definitions.
 func finalizeModule(m *ir.Module) error {
+	stripKfuncPrefixModule(m)
 	if err := addLicenseModule(m); err != nil {
 		return err
 	}
 	return cleanupModule(m)
+}
+
+// stripKfuncPrefixModule renames kfunc declarations and call sites from
+// @main.bpfKfunc* to @bpfKfunc*, and strips the trailing TinyGo context
+// pointer (ptr undef) from kfunc call arguments.
+func stripKfuncPrefixModule(m *ir.Module) {
+	var renames []mapRename
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if e.Removed || e.Kind != ir.TopDeclare || e.Declare == nil {
+			continue
+		}
+		if !strings.HasPrefix(e.Declare.Name, "main.bpfKfunc") {
+			continue
+		}
+		oldName := e.Declare.Name
+		newName := oldName[len("main."):]
+		renames = append(renames, mapRename{
+			oldRef: "@" + oldName,
+			newRef: "@" + newName,
+		})
+		e.Declare.Name = newName
+		e.Raw = strings.ReplaceAll(e.Raw, "@"+oldName, "@"+newName)
+	}
+	if len(renames) == 0 {
+		return
+	}
+	// Update call sites and strip trailing ptr undef from kfunc calls.
+	for _, fn := range m.Functions {
+		if fn.Removed {
+			continue
+		}
+		for i, bline := range fn.BodyRaw {
+			changed := false
+			for _, r := range renames {
+				if strings.Contains(bline, r.oldRef) {
+					bline = strings.ReplaceAll(bline, r.oldRef, r.newRef)
+					changed = true
+				}
+			}
+			if changed {
+				bline = strings.Replace(bline, ", ptr undef)", ")", 1)
+				bline = strings.Replace(bline, "(ptr undef)", "()", 1)
+				fn.BodyRaw[i] = bline
+			}
+		}
+	}
 }
 
 // addLicenseModule inserts a GPL license global if one is not already present.
@@ -1603,4 +1657,27 @@ func compactModuleEntries(m *ir.Module) {
 		m.Entries = m.Entries[:len(m.Entries)-1]
 	}
 	m.Entries = append(m.Entries, ir.TopLevelEntry{Kind: ir.TopBlank, Raw: ""})
+}
+
+// warnStackUsage estimates per-function stack usage from alloca instructions
+// and warns when it approaches the 512-byte BPF stack limit.
+func warnStackUsage(m *ir.Module, w io.Writer) {
+	for _, fn := range m.Functions {
+		if fn.Removed {
+			continue
+		}
+		var total int64
+		for _, bline := range fn.BodyRaw {
+			if locs := allocaSizeRe.FindStringSubmatch(bline); locs != nil {
+				n, err := strconv.ParseInt(locs[1], 10, 64)
+				if err == nil {
+					total += n
+				}
+			}
+		}
+		if total >= stackWarnThreshold {
+			fmt.Fprintf(w, "[transform] %s: estimated stack usage ~%d bytes (BPF limit is %d); consider reducing local variable size or using map storage\n",
+				fn.Name, total, bpfStackLimit)
+		}
+	}
 }
