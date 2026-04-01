@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -48,8 +49,8 @@ func main() {
 	}
 
 	fmt.Fprintln(os.Stdout, "press Ctrl+C to detach and exit")
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	<-sig
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	<-ctx.Done()
 	fmt.Fprintln(os.Stdout, "detaching XDP program")
 }

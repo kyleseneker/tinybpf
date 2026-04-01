@@ -14,6 +14,7 @@ Start here if you want to observe kernel events.
 | 2 | [kprobe-openat](../examples/kprobe-openat/) | Kprobe | Function tracing, `pt_regs`, architecture-specific offsets |
 | 3 | [fentry-open](../examples/fentry-open/) | Fentry | BTF-based tracing, requires kernel 5.5+ |
 | 4 | [rawtp-sched](../examples/rawtp-sched/) | Raw tracepoint | CO-RE portable structs, perf event array, `bpfCoreFieldExists` |
+| 5 | [percpu-counter](../examples/percpu-counter/) | Tracepoint | Per-CPU array map, lock-free counting, userspace aggregation |
 
 ### Networking and policy
 
@@ -24,6 +25,12 @@ Start here if you want to filter or control traffic.
 | 1 | [cgroup-connect](../examples/cgroup-connect/) | Cgroup | Hash map blocklist, connection allow/deny |
 | 2 | [xdp-filter](../examples/xdp-filter/) | XDP | Packet parsing, source IP blocklist, `XDP_DROP`/`XDP_PASS` |
 | 3 | [tc-filter](../examples/tc-filter/) | TC classifier | Port-based filtering, TC ingress attachment |
+
+### Security
+
+| Order | Example | Hook type | Concepts |
+|-------|---------|-----------|----------|
+| 1 | [lsm-file-open](../examples/lsm-file-open/) | LSM | Security audit hook, `CONFIG_BPF_LSM`, ring buffer |
 
 ## How to build any example
 
@@ -70,6 +77,7 @@ Running requires:
 |-----------|-------------|
 | Tracepoint, kprobe, fentry, raw tracepoint | `CAP_BPF` + `CAP_PERFMON` |
 | XDP, TC, cgroup | `CAP_BPF` + `CAP_NET_ADMIN` |
+| LSM | `CAP_BPF` + `CAP_MAC_ADMIN` |
 
 On macOS, build the BPF object locally and use a Linux VM for loading. See [Contributing](../CONTRIBUTING.md#vm-workflow) for the VM workflow.
 

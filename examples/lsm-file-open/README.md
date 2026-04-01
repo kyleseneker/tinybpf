@@ -1,28 +1,25 @@
 # lsm-file-open
 
-Audits every file open on the system using a BPF LSM (Linux Security Module) hook, demonstrating security-focused eBPF with tinybpf.
+Audits every file open on the system using a BPF LSM (Linux Security Module) hook. Captures PID, UID, and command name, writes events to a ring buffer, and logs them from userspace.
 
 ```mermaid
 graph LR
-    A["kernel: file_open()"] --> B["BPF LSM hook"]
-    B --> C["ring buffer"]
-    C --> D["userspace tracer"]
-    D --> E["stdout: pid, uid, comm"]
+    subgraph Kernel
+        A["file_open<br>LSM hook"] --> B["eBPF probe"]
+        B --> C["Ring buffer"]
+    end
+    subgraph Userspace
+        C --> D["Tracer<br>reads + logs events"]
+    end
 ```
 
-## What it does
-
-The BPF program attaches to the `file_open` LSM hook and emits an event to a ring buffer for every file open. The userspace tracer reads events and prints the process ID, user ID, and command name. The hook returns `0` (allow), so it observes without blocking.
-
-This is the pattern used by security tools like Tetragon and Falco for file access auditing.
+**Concepts:** LSM hooks, security auditing, ring buffer, `CONFIG_BPF_LSM`
 
 ## Prerequisites
 
-| Requirement | Details |
-|-------------|---------|
-| Kernel | 5.7+ with `CONFIG_BPF_LSM=y` and `bpf` in the `lsm=` boot parameter |
-| Capabilities | `CAP_BPF` + `CAP_MAC_ADMIN` (or root) |
-| Toolchain | TinyGo 0.40+, LLVM 20+, tinybpf |
+- Linux with BPF LSM enabled (kernel 5.7+, `CONFIG_BPF_LSM=y`, `bpf` in `lsm=` boot parameter)
+- Root or `CAP_BPF` + `CAP_MAC_ADMIN`
+- [Toolchain requirements](../../docs/getting-started.md#prerequisites)
 
 ### Enabling BPF LSM
 
@@ -38,31 +35,32 @@ cat /sys/kernel/security/lsm
 sudo update-grub && sudo reboot
 ```
 
-## Build
+## Build and run
 
 ```bash
-make example NAME=lsm-file-open
+./scripts/build.sh
+sudo ./scripts/run.sh
 ```
 
-## Run
+Trigger file opens in another terminal:
 
 ```bash
-sudo ./examples/lsm-file-open/scripts/run.sh
+cat /etc/hostname
 ```
 
 Expected output:
 
 ```
-attached LSM file_open hook from build/lsm.bpf.o
-press Ctrl+C to stop
-2025-01-15T10:30:00.123Z pid=1234 uid=1000 comm=cat
-2025-01-15T10:30:00.456Z pid=1235 uid=0 comm=systemd
+2026-01-15T10:30:00Z pid=1234 uid=1000 comm=cat
 ```
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---------|-----|
+| Symptom | Resolution |
+|---------|------------|
 | `attach LSM: invalid argument` | Kernel lacks `CONFIG_BPF_LSM=y` or `bpf` not in `lsm=` boot parameter |
-| `no programs found` | Rebuild with `make example NAME=lsm-file-open` |
-| No events appear | Trigger file opens in another terminal: `cat /etc/hostname` |
+| Permission denied | Run as root or grant `CAP_BPF` + `CAP_MAC_ADMIN` |
+| No events | Trigger file opens and check tracer stderr |
+| Build errors | Run `tinybpf doctor` |
+
+See [Troubleshooting](../../docs/troubleshooting.md) for general guidance.

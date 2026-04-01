@@ -22,17 +22,11 @@ graph LR
 - Root or `CAP_BPF` + `CAP_PERFMON`
 - [Toolchain requirements](../../docs/getting-started.md#prerequisites)
 
-## Build
+## Build and run
 
 ```bash
 ./scripts/build.sh
-```
-
-## Run
-
-```bash
-cd cmd/tracer
-go run . --object ../../build/sched.bpf.o
+sudo ./scripts/run.sh
 ```
 
 Trigger exec events in another terminal:
@@ -41,7 +35,11 @@ Trigger exec events in another terminal:
 ls
 ```
 
-The program stays attached until you press Ctrl+C.
+Expected output:
+
+```
+2026-01-15T10:30:00Z pid=1234 tgid=1234 comm=ls
+```
 
 ## CO-RE portability
 
