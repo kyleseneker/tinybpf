@@ -345,6 +345,86 @@ func TestCliErrorf(t *testing.T) {
 	}
 }
 
+func TestParseSectionFlags(t *testing.T) {
+	tests := []struct {
+		name     string
+		flags    []string
+		wantMap  map[string]string
+		wantErr  string
+	}{
+		{
+			name:    "nil input",
+			flags:   nil,
+			wantMap: nil,
+		},
+		{
+			name:    "empty input",
+			flags:   []string{},
+			wantMap: nil,
+		},
+		{
+			name:    "single mapping",
+			flags:   []string{"handler=kprobe/sys_connect"},
+			wantMap: map[string]string{"handler": "kprobe/sys_connect"},
+		},
+		{
+			name:    "multiple mappings",
+			flags:   []string{"a=xdp", "b=tc"},
+			wantMap: map[string]string{"a": "xdp", "b": "tc"},
+		},
+		{
+			name:    "whitespace trimmed",
+			flags:   []string{" handler = kprobe/sys_connect "},
+			wantMap: map[string]string{"handler": "kprobe/sys_connect"},
+		},
+		{
+			name:    "missing equals",
+			flags:   []string{"noequals"},
+			wantErr: "invalid --section",
+		},
+		{
+			name:    "empty name",
+			flags:   []string{"=kprobe/sys_connect"},
+			wantErr: "invalid --section",
+		},
+		{
+			name:    "empty section",
+			flags:   []string{"handler="},
+			wantErr: "invalid --section",
+		},
+		{
+			name:    "whitespace-only name",
+			flags:   []string{"  =kprobe/sys_connect"},
+			wantErr: "invalid --section",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseSectionFlags(tt.flags)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("expected %q in error, got: %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tt.wantMap) {
+				t.Fatalf("got %v, want %v", got, tt.wantMap)
+			}
+			for k, v := range tt.wantMap {
+				if got[k] != v {
+					t.Errorf("key %q: got %q, want %q", k, got[k], v)
+				}
+			}
+		})
+	}
+}
+
 func TestUsageErrorf(t *testing.T) {
 	tests := []struct {
 		name        string

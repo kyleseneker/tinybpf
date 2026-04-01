@@ -23,6 +23,9 @@ func TestExportedName(t *testing.T) {
 		{"a_b_c", "ABC"},
 		{"__leading_underscores", "LeadingUnderscores"},
 		{"trailing__double", "TrailingDouble"},
+		{"0init", "0init"},
+		{"123_bad", "123Bad"},
+		{"Already_upper", "AlreadyUpper"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {

@@ -332,10 +332,15 @@ func parseSectionFlags(flags []string) (map[string]string, error) {
 	m := make(map[string]string, len(flags))
 	for _, f := range flags {
 		parts := strings.SplitN(f, "=", 2)
-		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		if len(parts) != 2 {
 			return nil, fmt.Errorf("invalid --section %q: expected format name=section", f)
 		}
-		m[parts[0]] = parts[1]
+		name := strings.TrimSpace(parts[0])
+		section := strings.TrimSpace(parts[1])
+		if name == "" || section == "" {
+			return nil, fmt.Errorf("invalid --section %q: expected format name=section", f)
+		}
+		m[name] = section
 	}
 	return m, nil
 }

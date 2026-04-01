@@ -96,7 +96,12 @@ func exportedName(s string) string {
 		if part == "" {
 			continue
 		}
-		b.WriteByte(part[0] - 'a' + 'A')
+		c := part[0]
+		if c >= 'a' && c <= 'z' {
+			b.WriteByte(c - 'a' + 'A')
+		} else {
+			b.WriteByte(c)
+		}
 		b.WriteString(part[1:])
 	}
 	return b.String()
