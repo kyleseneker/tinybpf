@@ -9,8 +9,9 @@ import (
 
 // Objects holds the loaded BPF objects.
 type Objects struct {
-	prog *ebpf.Program
-	link link.Link
+	coll      *ebpf.Collection
+	link      link.Link
+	EventsMap *ebpf.Map
 }
 
 // Close detaches and releases all BPF resources.
@@ -18,8 +19,8 @@ func (o *Objects) Close() error {
 	if o.link != nil {
 		o.link.Close()
 	}
-	if o.prog != nil {
-		o.prog.Close()
+	if o.coll != nil {
+		o.coll.Close()
 	}
 	return nil
 }
@@ -50,5 +51,12 @@ func LoadAndAttach(objectPath string) (*Objects, error) {
 		return nil, fmt.Errorf("attach raw tracepoint: %w", err)
 	}
 
-	return &Objects{prog: prog, link: tp}, nil
+	events := coll.Maps["events"]
+	if events == nil {
+		tp.Close()
+		coll.Close()
+		return nil, fmt.Errorf("perf event map %q not found in object", "events")
+	}
+
+	return &Objects{coll: coll, link: tp, EventsMap: events}, nil
 }

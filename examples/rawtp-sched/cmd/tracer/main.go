@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"syscall"
 
 	schedloader "github.com/kyleseneker/tinybpf/examples/rawtp-sched/internal/loader"
+	"github.com/kyleseneker/tinybpf/examples/rawtp-sched/internal/reader"
 )
 
 func main() {
@@ -22,11 +24,14 @@ func main() {
 	}
 	defer loaded.Close()
 
-	fmt.Fprintf(os.Stdout, "attached raw tracepoint sched_process_exec from %s\n", objectPath)
-	fmt.Fprintln(os.Stdout, "press Ctrl+C to detach and exit")
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	<-sig
-	fmt.Fprintln(os.Stdout, "detaching raw tracepoint program")
+	fmt.Fprintf(os.Stdout, "attached raw tracepoint sched_process_exec from %s\n", objectPath)
+	fmt.Fprintln(os.Stdout, "press Ctrl+C to stop")
+
+	if err := reader.Run(ctx, loaded.EventsMap, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "reader error: %v\n", err)
+		os.Exit(1)
+	}
 }
