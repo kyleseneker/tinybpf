@@ -60,6 +60,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runInit(ctx, args[1:], stdout, stderr)
 	case "verify":
 		return runVerify(ctx, args[1:], stdout, stderr)
+	case "generate":
+		return runGenerate(ctx, args[1:], stdout, stderr)
 	case "clean-cache":
 		return runCleanCache(stdout, stderr)
 	case "version", "--version", "-version":
@@ -80,6 +82,7 @@ Usage:
   tinybpf link --input <file> [flags]   Link pre-compiled LLVM IR into a BPF ELF
   tinybpf init <name>               Scaffold a new BPF project
   tinybpf verify --input <file>     Validate a BPF ELF object
+  tinybpf generate <object.bpf.o>  Generate Go loader from BPF ELF
   tinybpf clean-cache               Remove cached build artifacts
   tinybpf doctor [flags]            Check toolchain installation
   tinybpf version                   Print version information
