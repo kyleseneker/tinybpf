@@ -44,8 +44,8 @@ All fields are optional.
 | Output | `output` | string | `"bpf.o"` | Output ELF path |
 | CPU | `cpu` | string | `"v3"` | BPF CPU version for `llc -mcpu` |
 | Optimization profile | `opt_profile` | string | `"default"` | Named optimization profile |
-| BTF | `btf` | bool | `false` | Enable BTF injection via `pahole` |
-| Cache | `cache` | bool | `true` | Enable content-addressed build cache |
+| BTF | `btf` | bool (optional) | `false` | Enable BTF injection via `pahole`. Omit to inherit CLI default. |
+| Cache | `cache` | bool (optional) | `true` | Enable content-addressed build cache. Omit to inherit CLI default. |
 | Timeout | `timeout` | string | `"30s"` | Per-stage timeout (Go duration format) |
 | Programs | `programs` | map[string]string | | Program function name to ELF section mapping |
 | Custom passes | `custom_passes` | []string | | Additional LLVM opt passes to append |

@@ -83,6 +83,7 @@ make e2e
 | `make vm` | Create and boot a QEMU VM |
 | `make sync` | Sync repo to VM |
 | `make e2e` | Run E2E validation (Linux, requires root) |
+| `make example NAME=<name>` | Build a specific example (BPF object + loader) |
 | `make clean` | Remove build artifacts |
 
 ## Project structure

@@ -87,6 +87,7 @@ internal/
 ```
 internal/
   cache/                   Content-addressed build cache for pipeline artifacts
+  codegen/                 Go loader code generation from BPF ELF objects (tinybpf generate)
   doctor/                  Toolchain diagnostic subcommand (tool discovery, version checks)
   scaffold/                Project scaffolding (tinybpf init)
   testutil/                Test helpers (fake LLVM tools, sample IR fixtures)
@@ -100,6 +101,8 @@ examples/
   kprobe-openat/           Kprobe tracing with pt_regs context
   fentry-open/             Fentry BTF-based tracing
   rawtp-sched/             Raw tracepoint + CO-RE + perf event array
+  lsm-file-open/           LSM security audit hook + ring buffer
+  percpu-counter/          Per-CPU array map + syscall counting
   cgroup-connect/          Cgroup connect4 + hash map policy
   xdp-filter/              XDP packet filter + hash map blocklist
   tc-filter/               TC classifier + port-based filtering

@@ -11,7 +11,7 @@ test:
 	go test ./...
 
 bench:
-	go test -bench=. -benchmem ./transform/
+	go test -bench=. -benchmem ./internal/transform/
 
 cover:
 	go test -coverprofile=coverage.out ./...
