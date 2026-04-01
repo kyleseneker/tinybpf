@@ -5,6 +5,8 @@ use (
 	./examples/cgroup-connect
 	./examples/fentry-open
 	./examples/kprobe-openat
+	./examples/lsm-file-open
+	./examples/percpu-counter
 	./examples/rawtp-sched
 	./examples/tc-filter
 	./examples/tracepoint-connect

@@ -1,0 +1,8 @@
+{
+  "build": {
+    "output": "build/lsm.bpf.o",
+    "programs": {
+      "lsm_file_open": "lsm/file_open"
+    }
+  }
+}
