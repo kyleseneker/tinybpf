@@ -14,6 +14,12 @@ func TestParseI32Initializer(t *testing.T) {
 	}{
 		{"valid 5 fields", "i32 27, i32 0, i32 0, i32 16777216, i32 0", 5, false},
 		{"valid 1 field", "i32 42", 1, false},
+		{"per-cpu hash 5 fields", "i32 9, i32 4, i32 8, i32 1024, i32 0", 5, false},
+		{"per-cpu array 5 fields", "i32 6, i32 0, i32 8, i32 256, i32 0", 5, false},
+		{"lru hash 5 fields", "i32 9, i32 4, i32 8, i32 1024, i32 0", 5, false},
+		{"prog array 5 fields", "i32 3, i32 4, i32 4, i32 8, i32 0", 5, false},
+		{"array of maps 7 fields", "i32 12, i32 4, i32 4, i32 16, i32 0, i32 0, i32 0", 7, false},
+		{"lpm trie 5 fields", "i32 11, i32 8, i32 8, i32 1024, i32 1", 5, false},
 		{"malformed value", "i32 abc, i32 1", 0, true},
 		{"empty string", "", 0, true},
 	}

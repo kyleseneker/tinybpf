@@ -427,6 +427,137 @@ declare i32 @main.bpfCoreFieldExists(ptr, ptr)`,
 			absent:   []string{"@main.bpfCoreFieldExists"},
 		},
 		{
+			name: "per-cpu hash map BTF rewrite",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+%main.bpfMapDef = type { i32, i32, i32, i32, i32 }
+
+@main.counters = global %main.bpfMapDef { i32 9, i32 4, i32 8, i32 1024, i32 0 }, align 4
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{`section ".maps"`, `@counters`},
+			absent:   []string{`@main.counters`},
+		},
+		{
+			name: "array-of-maps BTF rewrite",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+%main.bpfMapDef = type { i32, i32, i32, i32, i32, i32, i32 }
+
+@main.outer_map = global %main.bpfMapDef { i32 12, i32 4, i32 4, i32 16, i32 0, i32 0, i32 0 }, align 4
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{`section ".maps"`, `@outer_map`},
+			absent:   []string{`@main.outer_map`},
+		},
+		{
+			name: "ringbuf reserve and submit helpers",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  %0 = call ptr @main.bpfRingbufReserve(ptr %ctx, i64 16, i64 0, ptr undef)
+  call void @main.bpfRingbufSubmit(ptr %0, i64 0, ptr undef)
+  ret i32 0
+}
+
+declare ptr @main.bpfRingbufReserve(ptr, i64, i64, ptr)
+declare void @main.bpfRingbufSubmit(ptr, i64, ptr)`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"inttoptr (i64 131 to ptr)", "inttoptr (i64 132 to ptr)"},
+			absent:   []string{"@main.bpfRingbufReserve", "@main.bpfRingbufSubmit"},
+		},
+		{
+			name: "tail call helper rewrite",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+%main.bpfMapDef = type { i32, i32, i32, i32, i32 }
+
+@main.jmp_table = global %main.bpfMapDef { i32 3, i32 4, i32 4, i32 8, i32 0 }, align 4
+
+define i32 @dispatcher(ptr %ctx) {
+entry:
+  call void @main.bpfTailCall(ptr %ctx, ptr @main.jmp_table, i32 0, ptr undef)
+  ret i32 0
+}
+
+declare void @main.bpfTailCall(ptr, ptr, i32, ptr)`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"inttoptr (i64 12 to ptr)", `section ".maps"`, "@jmp_table"},
+			absent:   []string{"@main.bpfTailCall"},
+		},
+		{
+			name: "spinlock helper rewrite",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  call void @main.bpfSpinLock(ptr %ctx, ptr undef)
+  call void @main.bpfSpinUnlock(ptr %ctx, ptr undef)
+  ret i32 0
+}
+
+declare void @main.bpfSpinLock(ptr, ptr)
+declare void @main.bpfSpinUnlock(ptr, ptr)`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"inttoptr (i64 93 to ptr)", "inttoptr (i64 94 to ptr)"},
+			absent:   []string{"@main.bpfSpinLock", "@main.bpfSpinUnlock"},
+		},
+		{
+			name: "LSM section assignment",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @lsm_check(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts:     Options{Sections: map[string]string{"lsm_check": "lsm/bprm_check_security"}, Stdout: io.Discard},
+			contains: []string{`section "lsm/bprm_check_security"`},
+		},
+		{
+			name: "kfunc preserved as extern",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @my_func(ptr %ctx) {
+entry:
+  call void @main.bpfKfuncBpfIterTaskNext(ptr %ctx, ptr undef)
+  ret i32 0
+}
+
+declare void @main.bpfKfuncBpfIterTaskNext(ptr, ptr)`,
+			opts:     Options{Stdout: io.Discard},
+			contains: []string{"@bpfKfuncBpfIterTaskNext"},
+			absent:   []string{"inttoptr", "@main.bpfKfuncBpfIterTaskNext"},
+		},
+		{
+			name: "multi-program extraction with sections",
+			input: `target triple = "x86_64-unknown-linux-gnu"
+
+define i32 @prog_a(ptr %ctx) {
+entry:
+  ret i32 0
+}
+
+define i32 @prog_b(ptr %ctx) {
+entry:
+  ret i32 0
+}`,
+			opts: Options{
+				Programs: []string{"prog_a", "prog_b"},
+				Sections: map[string]string{"prog_a": "xdp", "prog_b": "tc"},
+				Stdout:   io.Discard,
+			},
+			contains: []string{`section "xdp"`, `section "tc"`, "@prog_a", "@prog_b"},
+		},
+		{
 			name: "dump dir writes snapshots",
 			input: `target triple = "x86_64-unknown-linux-gnu"
 

@@ -55,6 +55,18 @@ func TestValidateProgramType(t *testing.T) {
 			"",
 		},
 		{
+			"matching lsm",
+			"lsm",
+			map[string]string{"check": "lsm/bprm_check_security"},
+			"",
+		},
+		{
+			"matching lsm sleepable",
+			"lsm.s",
+			map[string]string{"check": "lsm.s/bprm_check_security"},
+			"",
+		},
+		{
 			"mismatched type",
 			"xdp",
 			map[string]string{"prog": "kprobe/do_sys_openat2"},
