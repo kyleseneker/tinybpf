@@ -79,6 +79,33 @@ tinybpf build --verbose ./bpf
 
 The output is a BPF ELF object at `build/my_probe.bpf.o`.
 
+## Generate Go loader code
+
+```bash
+make generate
+```
+
+Or directly:
+
+```bash
+tinybpf generate build/my_probe.bpf.o --package loader --output internal/loader/objects_bpf.go
+```
+
+This generates type-safe Go code with `Objects`, `Programs`, and `Maps` structs for loading your BPF object. Use the generated `Load()` function and attach the programs yourself:
+
+```go
+objs, err := loader.Load("build/my_probe.bpf.o")
+if err != nil {
+    log.Fatal(err)
+}
+defer objs.Close()
+
+// Attach using the typed program reference:
+kp, err := link.Kprobe("do_sys_openat2", objs.MyProbe, nil)
+```
+
+See [CLI Reference](cli-reference.md#generate) for all flags.
+
 ### What happens during a build
 
 ```mermaid

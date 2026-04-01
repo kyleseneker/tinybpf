@@ -137,7 +137,7 @@ package main
 
 // makefile returns a Makefile template that invokes tinybpf build.
 func makefile(programName string) string {
-	return `.PHONY: build clean
+	return `.PHONY: build generate clean
 
 BUILD_DIR := build
 BPF_OBJ   := $(BUILD_DIR)/` + programName + `.bpf.o
@@ -146,6 +146,9 @@ build: $(BPF_OBJ)
 
 $(BPF_OBJ): bpf/` + programName + `.go tinybpf.json | $(BUILD_DIR)
 	tinybpf build --verbose ./bpf
+
+generate: $(BPF_OBJ)
+	tinybpf generate $(BPF_OBJ)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
