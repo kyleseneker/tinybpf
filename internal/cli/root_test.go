@@ -347,10 +347,10 @@ func TestCliErrorf(t *testing.T) {
 
 func TestParseSectionFlags(t *testing.T) {
 	tests := []struct {
-		name     string
-		flags    []string
-		wantMap  map[string]string
-		wantErr  string
+		name    string
+		flags   []string
+		wantMap map[string]string
+		wantErr string
 	}{
 		{
 			name:    "nil input",

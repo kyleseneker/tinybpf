@@ -168,7 +168,7 @@ func testBPFELF(t *testing.T, progNames, mapNames []string) string {
 	}
 
 	code := []byte{0x95, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00} // BPF exit
-	mapData := make([]byte, 8)                                       // dummy map data
+	mapData := make([]byte, 8)                                     // dummy map data
 
 	// Layout: header(64) | code | mapData | symstrtab | symtab | shstrtab | sections
 	off := uint64(64)
@@ -226,19 +226,19 @@ func testBPFELF(t *testing.T, progNames, mapNames []string) string {
 	}
 
 	// Section name offsets in shstrtab
-	textNameOff := 1   // ".text"
-	mapsNameOff := 7   // ".maps"
-	symtabNameOff := 13 // ".symtab"
-	strtabNameOff := 21 // ".strtab"
+	textNameOff := 1      // ".text"
+	mapsNameOff := 7      // ".maps"
+	symtabNameOff := 13   // ".symtab"
+	strtabNameOff := 21   // ".strtab"
 	shstrtabNameOff := 29 // ".shstrtab"
 
 	var sections []byte
-	sections = append(sections, makeSH(0, 0, 0, 0, 0, 0, 0, 0)...)                                                         // 0: null
-	sections = append(sections, makeSH(textNameOff, 1, 6, codeOff, uint64(len(code)), 0, 0, 0)...)                          // 1: .text (PROGBITS | EXECINSTR)
-	sections = append(sections, makeSH(mapsNameOff, 1, 2, mapDataOff, uint64(len(mapData)), 0, 0, 0)...)                    // 2: .maps (PROGBITS | ALLOC)
-	sections = append(sections, makeSH(strtabNameOff, 3, 0, symstrtabOff, uint64(len(symstrtab)), 0, 0, 0)...)              // 3: .strtab
-	sections = append(sections, makeSH(symtabNameOff, 2, 0, symtabOff, uint64(len(syms)), strtabIdx, uint32(1), 24)...)     // 4: .symtab
-	sections = append(sections, makeSH(shstrtabNameOff, 3, 0, shstrtabOff2, uint64(len(shstrtab)), 0, 0, 0)...)             // 5: .shstrtab
+	sections = append(sections, makeSH(0, 0, 0, 0, 0, 0, 0, 0)...)                                                      // 0: null
+	sections = append(sections, makeSH(textNameOff, 1, 6, codeOff, uint64(len(code)), 0, 0, 0)...)                      // 1: .text (PROGBITS | EXECINSTR)
+	sections = append(sections, makeSH(mapsNameOff, 1, 2, mapDataOff, uint64(len(mapData)), 0, 0, 0)...)                // 2: .maps (PROGBITS | ALLOC)
+	sections = append(sections, makeSH(strtabNameOff, 3, 0, symstrtabOff, uint64(len(symstrtab)), 0, 0, 0)...)          // 3: .strtab
+	sections = append(sections, makeSH(symtabNameOff, 2, 0, symtabOff, uint64(len(syms)), strtabIdx, uint32(1), 24)...) // 4: .symtab
+	sections = append(sections, makeSH(shstrtabNameOff, 3, 0, shstrtabOff2, uint64(len(shstrtab)), 0, 0, 0)...)         // 5: .shstrtab
 
 	_ = numSyms
 
@@ -253,8 +253,8 @@ func testBPFELF(t *testing.T, progNames, mapNames []string) string {
 	binary.LittleEndian.PutUint16(hdr[52:54], 64)   // e_ehsize
 	binary.LittleEndian.PutUint16(hdr[58:60], 64)   // e_shentsize
 	binary.LittleEndian.PutUint64(hdr[40:48], shOff)
-	binary.LittleEndian.PutUint16(hdr[60:62], 6)    // e_shnum
-	binary.LittleEndian.PutUint16(hdr[62:64], 5)    // e_shstrndx
+	binary.LittleEndian.PutUint16(hdr[60:62], 6) // e_shnum
+	binary.LittleEndian.PutUint16(hdr[62:64], 5) // e_shstrndx
 
 	var out []byte
 	out = append(out, hdr...)
@@ -274,11 +274,11 @@ func testBPFELF(t *testing.T, progNames, mapNames []string) string {
 
 func TestExtractELFInfo(t *testing.T) {
 	tests := []struct {
-		name         string
-		setup        func(t *testing.T) string
-		wantProgs    []string
-		wantMaps     []string
-		wantErr      string
+		name      string
+		setup     func(t *testing.T) string
+		wantProgs []string
+		wantMaps  []string
+		wantErr   string
 	}{
 		{
 			name: "single program and map",

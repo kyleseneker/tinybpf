@@ -35,8 +35,8 @@ func bpfELFWithProgram(t *testing.T) string {
 	nullSym := make([]byte, 24)
 	progSym := make([]byte, 24)
 	binary.LittleEndian.PutUint32(progSym[0:4], 1)
-	progSym[4] = 0x12                                      // STT_FUNC | STB_GLOBAL
-	binary.LittleEndian.PutUint16(progSym[6:8], 1)         // st_shndx = 1 (.text)
+	progSym[4] = 0x12                              // STT_FUNC | STB_GLOBAL
+	binary.LittleEndian.PutUint16(progSym[6:8], 1) // st_shndx = 1 (.text)
 
 	off += uint64(len(nullSym) + len(progSym))
 	shstrtabOff := off

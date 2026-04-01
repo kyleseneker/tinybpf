@@ -22,8 +22,14 @@
 
 `tinybpf` lets you write both the kernel-side BPF program and the userspace loader in Go. No C, no CGo, no `bpf2go` code generation from C sources. One language, one toolchain.
 
-```
-Go source  ──>  TinyGo  ──>  LLVM IR  ──>  tinybpf  ──>  bpf.o  ──>  tinybpf generate  ──>  typed Go loader
+```mermaid
+graph LR
+    A["Go source"] --> B["TinyGo"]
+    B --> C["LLVM IR"]
+    C --> D["tinybpf"]
+    D --> E["bpf.o"]
+    E --> F["tinybpf generate"]
+    F --> G["typed Go loader"]
 ```
 
 The output is a standard BPF ELF object compatible with [`cilium/ebpf`](https://github.com/cilium/ebpf), [`libbpf`](https://github.com/libbpf/libbpf), and [`bpftool`](https://github.com/libbpf/bpftool). `tinybpf generate` then reads that object and produces type-safe Go structs for loading it -- no string-based map lookups, no `unsafe.Pointer` casts.

@@ -55,7 +55,7 @@ func runGenerate(_ context.Context, args []string, stdout, stderr io.Writer) int
 		return cliErrorf(stderr, "%v", err)
 	}
 
-	if err := os.WriteFile(output, src, 0o644); err != nil {
+	if err := os.WriteFile(output, src, 0o600); err != nil {
 		return cliErrorf(stderr, "write %s: %v", output, err)
 	}
 
