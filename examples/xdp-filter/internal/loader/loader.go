@@ -1,5 +1,5 @@
 // Package loader handles loading the compiled eBPF XDP object into the kernel
-// and attaching it to a network interface.
+// and attaching the XDP program to the specified network interface.
 package loader
 
 import (
@@ -10,58 +10,92 @@ import (
 	"github.com/cilium/ebpf/link"
 )
 
+// Objects contains all programs and maps from the BPF object.
+type Objects struct {
+	Programs
+	Maps
+}
+
+// Programs contains all BPF programs.
+type Programs struct {
+	XdpFilter *ebpf.Program `ebpf:"xdp_filter"`
+}
+
+// Maps contains all BPF maps.
+type Maps struct {
+	Blocklist *ebpf.Map `ebpf:"blocklist"`
+}
+
+// Load loads the BPF object from objectPath and returns populated Objects.
+func Load(objectPath string) (*Objects, error) {
+	spec, err := ebpf.LoadCollectionSpec(objectPath)
+	if err != nil {
+		return nil, fmt.Errorf("load BPF spec: %w", err)
+	}
+	var objs Objects
+	if err := spec.LoadAndAssign(&objs, nil); err != nil {
+		return nil, fmt.Errorf("load and assign: %w", err)
+	}
+	return &objs, nil
+}
+
+// Close releases all resources held by Objects.
+func (o *Objects) Close() {
+	if o == nil {
+		return
+	}
+	o.Programs.Close()
+	o.Maps.Close()
+}
+
+// Close releases all programs.
+func (p *Programs) Close() {
+	if p.XdpFilter != nil {
+		_ = p.XdpFilter.Close()
+	}
+}
+
+// Close releases all maps.
+func (m *Maps) Close() {
+	if m.Blocklist != nil {
+		_ = m.Blocklist.Close()
+	}
+}
+
 // Loaded holds the resources obtained after a successful load and attach.
 type Loaded struct {
-	Objects      *ebpf.Collection
+	Objects      *Objects
 	Link         link.Link
 	BlocklistMap *ebpf.Map
 }
 
 // LoadAndAttach loads the eBPF collection from objectPath and attaches the
-// XDP program to the given network interface.
+// XDP program to the specified network interface.
 func LoadAndAttach(objectPath, iface string) (*Loaded, error) {
-	spec, err := ebpf.LoadCollectionSpec(objectPath)
+	objs, err := Load(objectPath)
 	if err != nil {
-		return nil, fmt.Errorf("load collection spec: %w", err)
+		return nil, err
 	}
 
-	coll, err := ebpf.NewCollection(spec)
+	ifObj, err := net.InterfaceByName(iface)
 	if err != nil {
-		return nil, fmt.Errorf("new collection: %w", err)
-	}
-
-	prog := firstProgram(coll)
-	if prog == nil {
-		coll.Close()
-		return nil, fmt.Errorf("could not find XDP program in object")
-	}
-
-	ifaceObj, err := net.InterfaceByName(iface)
-	if err != nil {
-		coll.Close()
+		objs.Close()
 		return nil, fmt.Errorf("interface %q: %w", iface, err)
 	}
 
 	xdpLink, err := link.AttachXDP(link.XDPOptions{
-		Program:   prog,
-		Interface: ifaceObj.Index,
+		Program:   objs.XdpFilter,
+		Interface: ifObj.Index,
 	})
 	if err != nil {
-		coll.Close()
+		objs.Close()
 		return nil, fmt.Errorf("attach XDP to %s: %w", iface, err)
 	}
 
-	blocklist := coll.Maps["blocklist"]
-	if blocklist == nil {
-		_ = xdpLink.Close()
-		coll.Close()
-		return nil, fmt.Errorf("blocklist map not found in object")
-	}
-
 	return &Loaded{
-		Objects:      coll,
+		Objects:      objs,
 		Link:         xdpLink,
-		BlocklistMap: blocklist,
+		BlocklistMap: objs.Blocklist,
 	}, nil
 }
 
@@ -76,11 +110,4 @@ func (l *Loaded) Close() {
 	if l.Objects != nil {
 		l.Objects.Close()
 	}
-}
-
-func firstProgram(coll *ebpf.Collection) *ebpf.Program {
-	for _, p := range coll.Programs {
-		return p
-	}
-	return nil
 }
