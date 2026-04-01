@@ -1,0 +1,8 @@
+{
+  "build": {
+    "output": "build/counter.bpf.o",
+    "programs": {
+      "tracepoint_syscalls_sys_enter": "tracepoint/raw_syscalls/sys_enter"
+    }
+  }
+}
