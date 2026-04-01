@@ -78,7 +78,20 @@ This generates a `tinybpf.json`, a BPF source file in `bpf/`, a stub file for ID
 make
 ```
 
-The output is a BPF ELF object at `build/my_probe.bpf.o`, ready for any BPF loader.
+The output is a BPF ELF object at `build/my_probe.bpf.o`. Generate type-safe Go loader code from it:
+
+```bash
+make generate
+```
+
+This produces a Go file with typed `Objects`, `Programs`, and `Maps` structs that you can use directly with [`cilium/ebpf`](https://github.com/cilium/ebpf):
+
+```go
+objs, err := loader.Load("build/my_probe.bpf.o")
+defer objs.Close()
+
+kp, err := link.Kprobe("do_sys_openat2", objs.MyProbe, nil)
+```
 
 See [Getting Started](docs/getting-started.md) for a complete walkthrough.
 
@@ -129,6 +142,8 @@ See the [`Request`](https://pkg.go.dev/github.com/kyleseneker/tinybpf#Request) d
 | [kprobe-openat](examples/kprobe-openat/) | Kprobe | Function tracing, `pt_regs` context, architecture offsets |
 | [fentry-open](examples/fentry-open/) | Fentry | BTF-based tracing (kernel 5.5+) |
 | [rawtp-sched](examples/rawtp-sched/) | Raw tracepoint | CO-RE portable structs, perf event array |
+| [lsm-file-open](examples/lsm-file-open/) | LSM | Security audit hook, file open monitoring |
+| [percpu-counter](examples/percpu-counter/) | Tracepoint | Per-CPU array map, lock-free syscall counting |
 | [cgroup-connect](examples/cgroup-connect/) | Cgroup | Hash map blocklist, connection policy |
 | [xdp-filter](examples/xdp-filter/) | XDP | Packet parsing, source IP blocklist |
 | [tc-filter](examples/tc-filter/) | TC classifier | Port-based packet filtering |
