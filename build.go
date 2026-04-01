@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kyleseneker/tinybpf/diag"
+	"github.com/kyleseneker/tinybpf/internal/codegen"
 	"github.com/kyleseneker/tinybpf/internal/pipeline"
 )
 
@@ -63,10 +64,17 @@ func Build(ctx context.Context, req Request) (*Result, error) {
 		cleanTempDir = nil
 	}
 
-	return &Result{
+	result := &Result{
 		Output:  req.Output,
 		TempDir: artifacts.TempDir,
-	}, nil
+	}
+
+	if info, err := codegen.ExtractELFInfo(req.Output); err == nil {
+		result.Programs = info.Programs
+		result.Maps = info.Maps
+	}
+
+	return result, nil
 }
 
 // validateRequest validates the request and returns an error if the request is invalid.

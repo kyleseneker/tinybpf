@@ -95,6 +95,12 @@ type Result struct {
 	// TempDir is the directory containing intermediate artifacts,
 	// populated when KeepTemp is true or TempDir was specified.
 	TempDir string
+
+	// Programs lists the BPF program symbol names found in the output ELF.
+	Programs []string
+
+	// Maps lists the BPF map symbol names found in the output ELF.
+	Maps []string
 }
 
 // Toolchain configures explicit paths to LLVM and TinyGo binaries.

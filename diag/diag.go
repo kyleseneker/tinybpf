@@ -11,28 +11,34 @@ import (
 type Stage string
 
 const (
-	StageDiscover  Stage = "discover-tools"
-	StageInput     Stage = "input-normalization"
-	StageLink      Stage = "llvm-link"
-	StageTransform Stage = "transform"
-	StageOpt       Stage = "opt"
-	StageCodegen   Stage = "llc"
-	StageFinalize  Stage = "finalize"
-	StageBTF       Stage = "btf"
-	StageValidate  Stage = "elf-validate"
-	StageCompile   Stage = "tinygo-compile"
+	StageDiscover  Stage = "discover-tools"      // LLVM and TinyGo tool resolution
+	StageInput     Stage = "input-normalization" // input file format conversion
+	StageLink      Stage = "llvm-link"           // IR module linking
+	StageTransform Stage = "transform"           // AST-based IR transformation passes
+	StageOpt       Stage = "opt"                 // LLVM optimization pipeline
+	StageCodegen   Stage = "llc"                 // BPF bytecode generation
+	StageFinalize  Stage = "finalize"            // license injection and cleanup
+	StageBTF       Stage = "btf"                 // BTF metadata injection via pahole
+	StageValidate  Stage = "elf-validate"        // output ELF structure validation
+	StageCompile   Stage = "tinygo-compile"      // TinyGo compilation to LLVM IR
 )
 
 // Error is a structured pipeline error carrying stage context and a user-facing hint.
 type Error struct {
-	Stage   Stage
+	// Stage identifies which pipeline step produced the error.
+	Stage Stage
+	// Command is the shell command that failed (empty for non-command errors).
 	Command string
-	Stderr  string
-	Hint    string
-	Err     error
+	// Stderr is the captured standard error output from the failed command.
+	Stderr string
+	// Hint is a user-facing suggestion for resolving the error.
+	Hint string
+	// Err is the underlying error.
+	Err error
 }
 
-// Error formats the diagnostic into a multi-section string.
+// Error formats the diagnostic into a multi-section string with stage, command,
+// stderr snippet, and hint.
 func (e *Error) Error() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "stage %q failed", e.Stage)
@@ -53,7 +59,7 @@ func (e *Error) Error() string {
 	return b.String()
 }
 
-// Unwrap returns the underlying error for use with errors.Is/As.
+// Unwrap returns the underlying error for use with [errors.Is] and [errors.As].
 func (e *Error) Unwrap() error {
 	return e.Err
 }
@@ -73,13 +79,17 @@ func IsStage(err error, stage Stage) bool {
 
 // Errors aggregates multiple errors from a single stage so all problems are reported at once.
 type Errors struct {
-	Stage    Stage
+	// Stage identifies which pipeline step produced the errors.
+	Stage Stage
+	// PassName is the name of the specific pass within the stage (e.g. "rewrite-helpers").
 	PassName string
-	Errs     []error
-	Hint     string
+	// Errs contains the individual errors from the pass.
+	Errs []error
+	// Hint is a user-facing suggestion for resolving the errors.
+	Hint string
 }
 
-// Error formats the aggregated diagnostics into a numbered list.
+// Error formats the aggregated diagnostics into a numbered list with an optional hint.
 func (e *Errors) Error() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "stage %q failed: %d problem(s) in %s:", e.Stage, len(e.Errs), e.PassName)
@@ -93,7 +103,7 @@ func (e *Errors) Error() string {
 	return b.String()
 }
 
-// Unwrap returns the individual errors for use with errors.Is/As.
+// Unwrap returns the individual errors for use with [errors.Is] and [errors.As].
 func (e *Errors) Unwrap() []error {
 	return e.Errs
 }
