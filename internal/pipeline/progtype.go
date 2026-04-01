@@ -45,7 +45,6 @@ var knownProgramTypes = map[string]string{
 	"fmod_ret/":             "Fmod ret",
 	"freplace/":             "Freplace",
 	"iter/":                 "Iterator",
-	"struct_ops/":           "Struct ops",
 	"lsm/":                  "LSM",
 	"lsm.s/":                "LSM sleepable",
 	"syscall":               "Syscall",
