@@ -124,7 +124,7 @@ jobs:
         if: matrix.primary
         run: |
           cd examples/tracepoint-connect
-          tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o ../../testdata/tinygo_probe.ll ./bpf
+          tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o ../../internal/ir/testdata/tinygo_probe.ll ./bpf
 
       - name: Print LLVM versions
         run: |
@@ -166,13 +166,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/go-build/fuzz
-          key: fuzz-${{ runner.os }}-${{ hashFiles('transform/*_test.go') }}
+          key: fuzz-${{ runner.os }}-${{ hashFiles('internal/transform/*_test.go') }}
           restore-keys: fuzz-${{ runner.os }}-
 
       - name: Fuzz smoke
         if: matrix.primary
         run: |
-          fuzz_targets=$(grep -r '^func Fuzz' transform/ --include='*_test.go' -l | sort -u)
+          fuzz_targets=$(grep -r '^func Fuzz' internal/transform/ --include='*_test.go' -l | sort -u)
           for file in $fuzz_targets; do
             dir=$(dirname "$file")
             for target in $(grep -oP '^func \KFuzz\w+' "$file"); do
@@ -180,6 +180,56 @@ jobs:
               go test "./$dir" -run "^${target}\$" -fuzz "^${target}\$" -fuzztime 10s -timeout 30s
             done
           done
+
+  test-arm64:
+    runs-on: ubuntu-24.04-arm64
+    timeout-minutes: 15
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup toolchain
+        uses: ./.github/actions/setup-toolchain
+        with:
+          go-version: "1.25.x"
+
+      - name: Install LLVM toolchain
+        run: |
+          codename=$(lsb_release -cs)
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-20 main" | sudo tee /etc/apt/sources.list.d/llvm-20.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-20
+          echo "/usr/lib/llvm-20/bin" >> "$GITHUB_PATH"
+
+      - name: Test
+        run: go test -race -timeout 5m ./...
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -ldflags "-s -w" -trimpath -o tinybpf ./cmd/tinybpf
+
+  test-macos:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+          cache: false
+
+      - name: Test (unit tests only)
+        run: go test -timeout 5m ./...
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -ldflags "-s -w" -trimpath -o tinybpf ./cmd/tinybpf
 
   examples:
     runs-on: ubuntu-24.04
@@ -232,7 +282,7 @@ jobs:
           cache: false
 
       - name: Benchmark PR
-        run: go test -bench=. -benchmem -count=6 -timeout=5m ./transform/ | tee /tmp/bench-pr.txt
+        run: go test -bench=. -benchmem -count=6 -timeout=5m ./internal/transform/ | tee /tmp/bench-pr.txt
 
       - name: Checkout base
         uses: actions/checkout@v6
@@ -240,7 +290,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
 
       - name: Benchmark base
-        run: go test -bench=. -benchmem -count=6 -timeout=5m ./transform/ 2>&1 | tee /tmp/bench-base.txt || true
+        run: go test -bench=. -benchmem -count=6 -timeout=5m ./internal/transform/ 2>&1 | tee /tmp/bench-base.txt || true
 
       - name: Compare benchmarks
         run: |

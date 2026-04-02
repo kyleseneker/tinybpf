@@ -81,8 +81,8 @@ CO-RE requires a kernel with BTF support (`CONFIG_DEBUG_INFO_BTF=y`), which is e
 | OS | Architecture | Compilation | Kernel loading | Confidence |
 |----|-------------|-------------|----------------|------------|
 | Linux | amd64 | Yes | Yes | CI |
-| Linux | arm64 | Yes | Yes | Manual |
-| macOS | arm64 | Yes (through `llc`) | No (requires Linux) | Manual |
+| Linux | arm64 | Yes | Yes | CI |
+| macOS | arm64 | Yes (through `llc`) | No (requires Linux) | CI |
 
 **Confidence levels:** CI = continuously tested on every PR; Manual = validated by maintainers, not continuously tested.
 
