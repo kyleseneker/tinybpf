@@ -39,14 +39,16 @@ func TestExportedName(t *testing.T) {
 
 func TestGenerate(t *testing.T) {
 	tests := []struct {
-		name     string
-		pkg      string
-		info     *ELFInfo
-		contains []string
-		wantErr  string
+		name      string
+		pkg       string
+		info      *ELFInfo
+		embedPath string
+		contains  []string
+		absent    []string
+		wantErr   string
 	}{
 		{
-			name: "two programs and two maps",
+			name: "two programs and two maps (file path mode)",
 			pkg:  "loader",
 			info: &ELFInfo{
 				Programs: []string{"kprobe_openat", "xdp_filter"},
@@ -72,6 +74,7 @@ func TestGenerate(t *testing.T) {
 				"type Programs struct",
 				"type Maps struct",
 			},
+			absent: []string{"go:embed", "_bpfBytes"},
 		},
 		{
 			name: "single program no maps",
@@ -100,6 +103,26 @@ func TestGenerate(t *testing.T) {
 			},
 		},
 		{
+			name:      "embed mode",
+			pkg:       "loader",
+			embedPath: "build/probe.bpf.o",
+			info: &ELFInfo{
+				Programs: []string{"handler"},
+				Maps:     []string{"events"},
+			},
+			contains: []string{
+				"package loader",
+				`//go:embed build/probe.bpf.o`,
+				"var _bpfBytes []byte",
+				`_ "embed"`,
+				`"bytes"`,
+				"func Load() (*Objects, error)",
+				"LoadCollectionSpecFromReader",
+				"bytes.NewReader(_bpfBytes)",
+			},
+			absent: []string{"func Load(objectPath string)"},
+		},
+		{
 			name: "name collision between program and map",
 			pkg:  "test",
 			info: &ELFInfo{
@@ -119,7 +142,7 @@ func TestGenerate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			src, err := Generate(tt.pkg, tt.info)
+			src, err := Generate(tt.pkg, tt.info, tt.embedPath)
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Fatal("expected error")
@@ -136,6 +159,11 @@ func TestGenerate(t *testing.T) {
 			for _, s := range tt.contains {
 				if !strings.Contains(text, s) {
 					t.Errorf("generated source missing %q", s)
+				}
+			}
+			for _, s := range tt.absent {
+				if strings.Contains(text, s) {
+					t.Errorf("generated source should not contain %q", s)
 				}
 			}
 		})

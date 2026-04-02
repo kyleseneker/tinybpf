@@ -230,3 +230,39 @@ func TestRunGenerateOutputContent(t *testing.T) {
 		})
 	}
 }
+
+func TestComputeEmbedPath(t *testing.T) {
+	tests := []struct {
+		name       string
+		objectPath string
+		outputPath string
+		want       string
+	}{
+		{
+			name:       "object in subdirectory of output dir",
+			objectPath: "build/probe.bpf.o",
+			outputPath: "loader_bpf.go",
+			want:       filepath.Join("build", "probe.bpf.o"),
+		},
+		{
+			name:       "object in same directory as output",
+			objectPath: "probe.bpf.o",
+			outputPath: "loader_bpf.go",
+			want:       "probe.bpf.o",
+		},
+		{
+			name:       "object unreachable without dotdot",
+			objectPath: "../other/probe.bpf.o",
+			outputPath: "internal/loader/loader_bpf.go",
+			want:       "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := computeEmbedPath(tt.objectPath, tt.outputPath)
+			if got != tt.want {
+				t.Errorf("computeEmbedPath(%q, %q) = %q, want %q", tt.objectPath, tt.outputPath, got, tt.want)
+			}
+		})
+	}
+}

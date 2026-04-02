@@ -50,7 +50,8 @@ func runGenerate(_ context.Context, args []string, stdout, stderr io.Writer) int
 		return cliErrorf(stderr, "%v", err)
 	}
 
-	src, err := codegen.Generate(pkg, info)
+	embedPath := computeEmbedPath(objectPath, output)
+	src, err := codegen.Generate(pkg, info, embedPath)
 	if err != nil {
 		return cliErrorf(stderr, "%v", err)
 	}
@@ -61,4 +62,26 @@ func runGenerate(_ context.Context, args []string, stdout, stderr io.Writer) int
 
 	fmt.Fprintf(stdout, "wrote %s (%d programs, %d maps)\n", output, len(info.Programs), len(info.Maps))
 	return 0
+}
+
+// computeEmbedPath returns the relative path from the output file's directory
+// to the BPF object, suitable for a //go:embed directive.
+func computeEmbedPath(objectPath, outputPath string) string {
+	absObj, err := filepath.Abs(objectPath)
+	if err != nil {
+		return ""
+	}
+	absOut, err := filepath.Abs(outputPath)
+	if err != nil {
+		return ""
+	}
+	outDir := filepath.Dir(absOut)
+	rel, err := filepath.Rel(outDir, absObj)
+	if err != nil {
+		return ""
+	}
+	if strings.HasPrefix(rel, "..") {
+		return ""
+	}
+	return rel
 }
