@@ -3,7 +3,6 @@ package pipeline
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +30,7 @@ type pipelineEnv struct {
 	ToolDir string
 	Input   string
 	Output  string
-	Tools   ToolOverrides
+	Tools   llvm.ToolOverrides
 }
 
 func newPipelineEnv(t *testing.T) *pipelineEnv {
@@ -52,7 +51,7 @@ func newPipelineEnv(t *testing.T) *pipelineEnv {
 		ToolDir: toolDir,
 		Input:   input,
 		Output:  filepath.Join(tmp, "output.o"),
-		Tools: ToolOverrides{
+		Tools: llvm.ToolOverrides{
 			LLVMLink: filepath.Join(toolDir, "llvm-link"),
 			Opt:      filepath.Join(toolDir, "opt"),
 			LLC:      filepath.Join(toolDir, "llc"),
@@ -109,7 +108,7 @@ func TestRunValidation(t *testing.T) {
 				return Config{
 					Inputs: []string{p},
 					Output: filepath.Join(tmp, "out.o"),
-					Tools:  ToolOverrides{LLVMLink: testutil.BadPath("llvm-link")},
+					Tools:  llvm.ToolOverrides{LLVMLink: testutil.BadPath("llvm-link")},
 				}
 			}(),
 			stage: diag.StageDiscover,
@@ -176,15 +175,6 @@ func TestRunErrors(t *testing.T) {
 out=""
 for arg in "$@"; do case "$arg" in -o) n=1;; *) [ "${n:-}" = 1 ] && { out="$arg"; n=0; };; esac; done
 echo "not-an-elf" > "$out"; exit 0`)
-			},
-		},
-		{
-			name: "custom ValidateELF rejects",
-			setup: func(t *testing.T, _ *pipelineEnv, cfg *Config) {
-				t.Helper()
-				cfg.ValidateELF = func(string) error {
-					return fmt.Errorf("custom validator rejected")
-				}
 			},
 		},
 		{
@@ -283,13 +273,6 @@ func TestRunSuccess(t *testing.T) {
 			setup: func(t *testing.T, _ *pipelineEnv, cfg *Config) {
 				t.Helper()
 				cfg.CustomPasses = []string{"-inline", "-dse"}
-			},
-		},
-		{
-			name: "custom ValidateELF accepts",
-			setup: func(t *testing.T, _ *pipelineEnv, cfg *Config) {
-				t.Helper()
-				cfg.ValidateELF = func(string) error { return nil }
 			},
 		},
 	}
@@ -508,29 +491,6 @@ func TestApplyConfigDefaults(t *testing.T) {
 				t.Helper()
 				if cfg.Stderr == nil {
 					t.Error("Stderr should not be nil after defaults")
-				}
-			},
-		},
-		{
-			name: "ValidateELF defaults to non-nil",
-			cfg:  Config{},
-			check: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				if cfg.ValidateELF == nil {
-					t.Error("ValidateELF should not be nil after defaults")
-				}
-			},
-		},
-		{
-			name: "ValidateELF preserved when set",
-			cfg:  Config{ValidateELF: func(string) error { return nil }},
-			check: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				if cfg.ValidateELF == nil {
-					t.Error("ValidateELF should be preserved")
-				}
-				if err := cfg.ValidateELF("any"); err != nil {
-					t.Errorf("custom ValidateELF returned error: %v", err)
 				}
 			},
 		},

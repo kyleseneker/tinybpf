@@ -13,6 +13,7 @@ import (
 
 	"github.com/kyleseneker/tinybpf/diag"
 	"github.com/kyleseneker/tinybpf/internal/codegen"
+	"github.com/kyleseneker/tinybpf/internal/llvm"
 	"github.com/kyleseneker/tinybpf/internal/pipeline"
 )
 
@@ -121,7 +122,7 @@ func requestToPipelineConfig(req Request, inputs []string) pipeline.Config {
 		EnableBTF:    req.EnableBTF,
 		Programs:     req.Programs,
 		Sections:     req.Sections,
-		Tools: pipeline.ToolOverrides{
+		Tools: llvm.ToolOverrides{
 			LLVMLink: req.Toolchain.LLVMLink,
 			Opt:      req.Toolchain.Opt,
 			LLC:      req.Toolchain.LLC,

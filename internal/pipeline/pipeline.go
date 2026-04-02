@@ -33,7 +33,7 @@ type Config struct {
 	EnableBTF    bool
 	Programs     []string
 	Sections     map[string]string
-	Tools        ToolOverrides
+	Tools        llvm.ToolOverrides
 	Stdout       io.Writer
 	Stderr       io.Writer
 	Jobs         int
@@ -41,12 +41,7 @@ type Config struct {
 	DumpIR       bool
 	ProgramType  string
 	Cache        bool
-	ValidateELF  func(path string) error
 }
-
-// ToolOverrides allows callers to specify explicit LLVM binary paths,
-// bypassing PATH-based discovery.
-type ToolOverrides = llvm.ToolOverrides
 
 // Artifacts records the paths of intermediate and final build products.
 type Artifacts struct {
@@ -224,7 +219,7 @@ func (rc *runContext) finalizeAndValidate() error {
 	if err := rc.runCodegenAndFinalize(); err != nil {
 		return err
 	}
-	return rc.cfg.ValidateELF(rc.cfg.Output)
+	return elfcheck.Validate(rc.cfg.Output)
 }
 
 // runOptStage runs the opt pass with optional custom passes.
@@ -365,9 +360,6 @@ func applyConfigDefaults(cfg *Config) {
 	}
 	if cfg.Stderr == nil {
 		cfg.Stderr = io.Discard
-	}
-	if cfg.ValidateELF == nil {
-		cfg.ValidateELF = elfcheck.Validate
 	}
 }
 
