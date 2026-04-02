@@ -1,10 +1,84 @@
 package transform
 
 import (
+	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/kyleseneker/tinybpf/internal/ir"
 )
+
+func TestExtractProgramsModule(t *testing.T) {
+	tests := []struct {
+		name          string
+		funcs         []*ir.Function
+		entries       []ir.TopLevelEntry
+		programs      []string
+		verbose       bool
+		wantOutput    string
+		wantRemoved []bool
+	}{
+		{
+			name:       "verbose logs kept programs",
+			funcs:      []*ir.Function{{Name: "my_prog"}},
+			programs:   []string{"my_prog"},
+			verbose:    true,
+			wantOutput: "keeping program: my_prog",
+		},
+		{
+			name:       "auto-detect warns on multiple programs",
+			funcs:      []*ir.Function{{Name: "prog_a"}, {Name: "prog_b"}},
+			wantOutput: "auto-detected 2 programs",
+		},
+		{
+			name:  "marks runtime function entries removed",
+			funcs: []*ir.Function{{Name: "keep_me"}, {Name: "runtime.run"}},
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopFunction, Function: &ir.Function{Name: "keep_me"}},
+				{Kind: ir.TopFunction, Function: &ir.Function{Name: "runtime.run"}},
+			},
+			wantRemoved: []bool{false, true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Wire up entries to point to the same function objects
+			entries := tt.entries
+			if entries == nil {
+				for _, fn := range tt.funcs {
+					entries = append(entries, ir.TopLevelEntry{Kind: ir.TopFunction, Function: fn})
+				}
+			} else {
+				// Sync Function pointers between entries and funcs list
+				for i := range entries {
+					if entries[i].Function != nil {
+						for _, fn := range tt.funcs {
+							if fn.Name == entries[i].Function.Name {
+								entries[i].Function = fn
+							}
+						}
+					}
+				}
+			}
+			m := &ir.Module{Functions: tt.funcs, Entries: entries}
+
+			var buf bytes.Buffer
+			err := extractProgramsModule(m, tt.programs, tt.verbose, &buf)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if tt.wantOutput != "" && !strings.Contains(buf.String(), tt.wantOutput) {
+				t.Errorf("expected output containing %q, got: %q", tt.wantOutput, buf.String())
+			}
+			for i, want := range tt.wantRemoved {
+				if m.Entries[i].Removed != want {
+					t.Errorf("entry %d Removed = %v, want %v", i, m.Entries[i].Removed, want)
+				}
+			}
+		})
+	}
+}
 
 func TestBuildProgramSet(t *testing.T) {
 	tests := []struct {

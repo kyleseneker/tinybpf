@@ -1,6 +1,7 @@
 package transform
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/kyleseneker/tinybpf/internal/ir"
@@ -214,6 +215,7 @@ func TestParseLeadingInt(t *testing.T) {
 		{"abc", -1},
 		{"", -1},
 		{"123", -1},
+		{"999999999999999999999 = x", -1},
 	}
 	for _, tt := range tests {
 		if got := parseLeadingInt(tt.in); got != tt.want {
@@ -492,6 +494,24 @@ func TestCorePassModule(t *testing.T) {
 			name:    "empty module succeeds",
 			module:  &ir.Module{},
 			wantErr: false,
+		},
+		{
+			name: "unparsed bpfCore GEP propagates error",
+			module: func() *ir.Module {
+				fn := &ir.Function{
+					Name: "f",
+					BodyRaw: []string{
+						"entry:",
+						"  %0 = getelementptr %main.bpfCoreTaskStruct, ptr %p, i32 0",
+					},
+				}
+				return &ir.Module{
+					TypeDefs:  []*ir.TypeDef{{Name: "%main.bpfCoreTaskStruct", Fields: []string{"i32", "i64"}}},
+					Functions: []*ir.Function{fn},
+					Entries:   []ir.TopLevelEntry{{Kind: ir.TopFunction, Function: fn, Raw: "define i32 @f() {"}},
+				}
+			}(),
+			wantErr: true,
 		},
 	}
 	for _, tt := range tests {
@@ -789,3 +809,145 @@ func TestCollectCoreMemberIDs(t *testing.T) {
 		})
 	}
 }
+
+func TestRewriteCoreGEPInst(t *testing.T) {
+	tests := []struct {
+		name      string
+		inst      *ir.Instruction
+		coreTypes map[string]bool
+		wantOk    bool
+		wantErr   string
+	}{
+		{
+			name: "unparsed GEP on bpfCore type returns error",
+			inst: &ir.Instruction{
+				Kind: ir.InstOther,
+				Raw:  "  %0 = getelementptr %main.bpfCoreTaskStruct, ptr %p, i32 0",
+			},
+			coreTypes: map[string]bool{"%main.bpfCoreTaskStruct": true},
+			wantErr:   "does not match expected GEP pattern",
+		},
+		{
+			name: "GEP with too few indices returns error",
+			inst: &ir.Instruction{
+				Kind: ir.InstGEP,
+				GEP: &ir.GEPInst{
+					BaseType: "%main.bpfCoreTaskStruct",
+					Base:     "%p",
+					Indices:  []string{"i32 0"},
+				},
+				Raw: "  %0 = getelementptr %main.bpfCoreTaskStruct, ptr %p, i32 0",
+			},
+			coreTypes: map[string]bool{"%main.bpfCoreTaskStruct": true},
+			wantErr:   "too few indices",
+		},
+		{
+			name: "non-bpfCore GEP is skipped",
+			inst: &ir.Instruction{
+				Kind: ir.InstGEP,
+				GEP:  &ir.GEPInst{BaseType: "%main.otherType", Base: "%p", Indices: []string{"i32 0", "i32 1"}},
+				Raw:  "  %0 = getelementptr %main.otherType, ptr %p, i32 0, i32 1",
+			},
+			coreTypes: map[string]bool{"%main.bpfCoreTaskStruct": true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fn := &ir.Function{Name: "f"}
+			ok, err := rewriteCoreGEPInst(tt.inst, fn, tt.coreTypes, nil)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error = %q, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok != tt.wantOk {
+				t.Errorf("ok = %v, want %v", ok, tt.wantOk)
+			}
+		})
+	}
+}
+
+
+func TestSanitizeCoreFieldNamesModule(t *testing.T) {
+	tests := []struct {
+		name        string
+		entries     []ir.TopLevelEntry
+		wantContain []string
+		wantAbsent  []string
+	}{
+		{
+			name: "renames core type and member metadata",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopMetadata, Raw: `!5 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", elements: !{!7})`},
+				{Kind: ir.TopMetadata, Raw: `!7 = !DIDerivedType(tag: DW_TAG_member, name: "LoginUid", size: 32)`},
+			},
+			wantContain: []string{"task_struct", "login_uid"},
+		},
+		{
+			name: "no core types is no-op",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopMetadata, Raw: `!5 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.otherStruct")`},
+			},
+			wantAbsent: []string{"other_struct"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{Entries: tt.entries}
+			if err := sanitizeCoreFieldNamesModule(m); err != nil {
+				t.Fatal(err)
+			}
+			combined := ""
+			for _, e := range m.Entries {
+				combined += e.Raw + "\n"
+			}
+			for _, want := range tt.wantContain {
+				if !strings.Contains(combined, want) {
+					t.Errorf("expected %q in output, got:\n%s", want, combined)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(combined, absent) {
+					t.Errorf("unexpected %q in output, got:\n%s", absent, combined)
+				}
+			}
+		})
+	}
+}
+
+func TestRewriteCoreExistsInFunc(t *testing.T) {
+	tests := []struct {
+		name     string
+		bodyRaw  []string
+		wantErrs int
+	}{
+		{
+			name: "unparsed bpfCore Exists call produces error",
+			bodyRaw: []string{
+				"entry:",
+				"  call void @main.bpfCoreFieldExists(badargs)",
+			},
+			wantErrs: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fn := &ir.Function{Name: "f", BodyRaw: tt.bodyRaw}
+			ir.EnsureBlocks(fn)
+			ctx := &coreExistsContext{fieldOffsets: map[string][]int{}, fallbackIdx: map[int]int{}}
+			var errs []error
+			rewriteCoreExistsInFunc(fn, ctx, &errs)
+			if len(errs) != tt.wantErrs {
+				t.Errorf("got %d errors, want %d", len(errs), tt.wantErrs)
+			}
+		})
+	}
+}
+

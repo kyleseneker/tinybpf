@@ -314,6 +314,66 @@ func TestCollectMapDefs(t *testing.T) {
 	}
 }
 
+func TestCollectMapDefs_initializer(t *testing.T) {
+	// Tests the inline initializer (non-zeroinitializer) path
+	entries := []ir.TopLevelEntry{
+		{Kind: ir.TopGlobal, Global: &ir.Global{Name: "events"},
+			Raw: `@events = global %main.bpfMapDef { i32 27, i32 4, i32 8, i32 1024, i32 0 }, section ".maps", align 4`},
+	}
+	m := &ir.Module{Entries: entries}
+	got, err := collectMapDefs(m, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 map, got %d", len(got))
+	}
+	if got[0].values[0] != 27 {
+		t.Errorf("first field = %d, want 27", got[0].values[0])
+	}
+}
+
+func TestRewriteMapGlobalInModule_zeroinitializer(t *testing.T) {
+	// Tests the fallback path where reMapGlobal doesn't match but reMapGlobalZero does
+	raw := `@events = global %main.bpfMapDef zeroinitializer, section ".maps", align 4`
+	m := &ir.Module{
+		Entries: []ir.TopLevelEntry{
+			{Kind: ir.TopGlobal, Global: &ir.Global{Name: "events"}, Raw: raw},
+		},
+	}
+	rewriteMapGlobalInModule(m, 0, "events", "ptr, ptr, ptr, ptr, ptr")
+	if !strings.Contains(m.Entries[0].Raw, "zeroinitializer") {
+		t.Logf("raw: %s", m.Entries[0].Raw)
+		// Should have been rewritten
+	}
+	if !strings.Contains(m.Entries[0].Raw, "{ ptr, ptr, ptr, ptr, ptr }") {
+		t.Errorf("expected ptr fields in rewritten global, got: %s", m.Entries[0].Raw)
+	}
+}
+
+func TestMapBTFPassModule_error_propagation(t *testing.T) {
+	// mapBTFPassModule with a bad bpfMapDef type (too few fields) should propagate error
+	m := &ir.Module{
+		TypeDefs: []*ir.TypeDef{{Name: "%main.bpfMapDef", Fields: []string{"i32"}, Raw: "%main.bpfMapDef = type { i32 }"}},
+	}
+	err := mapBTFPassModule(m)
+	if err == nil {
+		t.Fatal("expected error from bad bpfMapDef field count")
+	}
+}
+
+func TestCollectMapRenames_emptyAfterDot(t *testing.T) {
+	// A map named "main." (dot at end) should not produce a rename with empty stripped name
+	entries := []ir.TopLevelEntry{
+		{Kind: ir.TopGlobal, Global: &ir.Global{Name: "main."}, Raw: `@main. = global %bpfMapDef section ".maps"`},
+	}
+	m := &ir.Module{Entries: entries}
+	got := collectMapRenames(m)
+	if len(got) != 0 {
+		t.Errorf("expected 0 renames for name ending in dot, got %d", len(got))
+	}
+}
+
 func TestCollectMapDefsMultiError(t *testing.T) {
 	tests := []struct {
 		name     string

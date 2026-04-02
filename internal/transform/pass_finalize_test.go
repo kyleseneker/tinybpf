@@ -61,83 +61,188 @@ func TestFinalizeModule(t *testing.T) {
 	}
 }
 
-func TestAddLicenseModule(t *testing.T) {
-	t.Run("adds license when missing", func(t *testing.T) {
-		fn := &ir.Function{Name: "my_func", Raw: "define i32 @my_func() {"}
-		m := &ir.Module{
-			Entries: []ir.TopLevelEntry{
-				{Kind: ir.TopGlobal, Raw: "@g = global i32 0"},
-				{Kind: ir.TopBlank, Raw: ""},
-				{Kind: ir.TopFunction, Function: fn},
-				{Kind: ir.TopBlank, Raw: ""},
-			},
-			Functions: []*ir.Function{fn},
-		}
-		if err := addLicenseModule(m); err != nil {
-			t.Fatal(err)
-		}
-		found := false
-		for _, g := range m.Globals {
-			if g.Section == "license" {
-				found = true
-			}
-		}
-		if !found {
-			t.Error("expected license global to be added")
-		}
-	})
-
-	t.Run("skips when license exists", func(t *testing.T) {
-		m := &ir.Module{
-			Globals: []*ir.Global{{Name: "_license", Section: "license"}},
-		}
-		before := len(m.Globals)
-		if err := addLicenseModule(m); err != nil {
-			t.Fatal(err)
-		}
-		if len(m.Globals) != before {
-			t.Error("should not add duplicate license")
-		}
-	})
-}
-
-func TestRemoveUnreferencedDeclares(t *testing.T) {
+func TestStripKfuncPrefixModule(t *testing.T) {
 	tests := []struct {
 		name         string
-		funcRaw      string
-		usedName     string
-		unusedName   string
-		wantUsedKept bool
-		wantUnusedRM bool
+		declName     string
+		declRaw      string
+		bodyRaw      []string
+		wantDeclName string
+		wantNoPrefix bool
+		wantStripArg bool
 	}{
 		{
-			name:         "keeps referenced and removes unreferenced declares",
-			funcRaw:      "define i32 @f() { call void @used() }",
-			usedName:     "used",
-			unusedName:   "unused",
-			wantUsedKept: true,
-			wantUnusedRM: true,
+			name:     "renames kfunc declares and strips context args",
+			declName: "main.bpfKfuncMyHelper",
+			declRaw:  "declare ptr @main.bpfKfuncMyHelper(ptr, i32, ptr)",
+			bodyRaw: []string{
+				"entry:",
+				"  %0 = call ptr @main.bpfKfuncMyHelper(ptr %ctx, i32 42, ptr undef)",
+			},
+			wantDeclName: "bpfKfuncMyHelper",
+			wantNoPrefix: true,
+			wantStripArg: true,
+		},
+		{
+			name:         "no kfuncs is no-op",
+			declName:     "main.bpfMapLookupElem",
+			declRaw:      "declare ptr @main.bpfMapLookupElem(ptr)",
+			bodyRaw:      []string{"entry:", "  ret void"},
+			wantDeclName: "main.bpfMapLookupElem",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fn := &ir.Function{Name: "f", Raw: tt.funcRaw}
-			used := &ir.Declare{Name: tt.usedName, Raw: "declare void @" + tt.usedName + "()"}
-			unused := &ir.Declare{Name: tt.unusedName, Raw: "declare void @" + tt.unusedName + "()"}
+			decl := &ir.Declare{Name: tt.declName, Raw: tt.declRaw}
+			fn := &ir.Function{
+				Name:    "my_prog",
+				Raw:     "define i32 @my_prog() {",
+				BodyRaw: tt.bodyRaw,
+			}
 			m := &ir.Module{
+				Functions: []*ir.Function{fn},
+				Declares:  []*ir.Declare{decl},
 				Entries: []ir.TopLevelEntry{
-					{Kind: ir.TopDeclare, Declare: used, Raw: used.Raw},
-					{Kind: ir.TopDeclare, Declare: unused, Raw: unused.Raw},
+					{Kind: ir.TopDeclare, Declare: decl, Raw: decl.Raw},
+					{Kind: ir.TopBlank, Raw: ""},
 					{Kind: ir.TopFunction, Function: fn, Raw: fn.Raw},
 				},
 			}
+			stripKfuncPrefixModule(m)
+
+			if decl.Name != tt.wantDeclName {
+				t.Errorf("declare name = %q, want %q", decl.Name, tt.wantDeclName)
+			}
+			if tt.wantNoPrefix && strings.Contains(m.Entries[0].Raw, "main.bpfKfunc") {
+				t.Error("declare Raw still contains main.bpfKfunc prefix")
+			}
+			if tt.wantStripArg {
+				ir.EnsureBlocks(fn)
+				for _, block := range fn.Blocks {
+					for _, inst := range block.Instructions {
+						if inst.Kind == ir.InstCall && inst.Call != nil &&
+							inst.Call.Callee == "@bpfKfuncMyHelper" {
+							if strings.Contains(inst.Call.Args, "ptr undef") {
+								t.Error("trailing ptr undef not stripped from kfunc call args")
+							}
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestAddLicenseModule(t *testing.T) {
+	tests := []struct {
+		name        string
+		globals     []*ir.Global
+		entries     []ir.TopLevelEntry
+		functions   []*ir.Function
+		wantAdded   bool
+		wantGlobals int
+	}{
+		{
+			name: "adds license when missing with func entry",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopGlobal, Raw: "@g = global i32 0"},
+				{Kind: ir.TopBlank, Raw: ""},
+				{Kind: ir.TopFunction, Function: &ir.Function{Name: "my_func", Raw: "define i32 @my_func() {"}},
+				{Kind: ir.TopBlank, Raw: ""},
+			},
+			functions:   []*ir.Function{{Name: "my_func", Raw: "define i32 @my_func() {"}},
+			wantAdded:   true,
+			wantGlobals: 1,
+		},
+		{
+			name:        "adds license when no func entry (appends)",
+			entries:     []ir.TopLevelEntry{{Kind: ir.TopGlobal, Raw: "@g = global i32 0"}},
+			wantAdded:   true,
+			wantGlobals: 1,
+		},
+		{
+			name:        "skips when license global exists",
+			globals:     []*ir.Global{{Name: "_license", Section: "license"}},
+			wantGlobals: 1,
+		},
+		{
+			name: "skips when license in entry Raw",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopGlobal, Global: &ir.Global{Name: "_license"}, Raw: `@_license = global [4 x i8] c"GPL\00", section "license"`},
+			},
+			wantGlobals: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{
+				Globals:   tt.globals,
+				Entries:   tt.entries,
+				Functions: tt.functions,
+			}
+			before := len(m.Globals)
+			if err := addLicenseModule(m); err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantAdded {
+				found := false
+				for _, g := range m.Globals {
+					if g.Section == "license" {
+						found = true
+					}
+				}
+				if !found {
+					t.Error("expected license global to be added")
+				}
+			} else if tt.wantGlobals > 0 {
+				if len(m.Globals) != before {
+					t.Error("should not add duplicate license")
+				}
+			}
+		})
+	}
+}
+
+func TestRemoveUnreferencedDeclares(t *testing.T) {
+	tests := []struct {
+		name        string
+		entries     []ir.TopLevelEntry
+		wantRemoved []bool
+	}{
+		{
+			name: "keeps referenced and removes unreferenced declares",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopDeclare, Declare: &ir.Declare{Name: "used", Raw: "declare void @used()"}, Raw: "declare void @used()"},
+				{Kind: ir.TopDeclare, Declare: &ir.Declare{Name: "unused", Raw: "declare void @unused()"}, Raw: "declare void @unused()"},
+				{Kind: ir.TopFunction, Function: &ir.Function{Name: "f", Raw: "define i32 @f() { call void @used() }"}, Raw: "define i32 @f() { call void @used() }"},
+			},
+			wantRemoved: []bool{false, true, false},
+		},
+		{
+			name: "declare with Removed flag propagates to entry",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopDeclare, Declare: &ir.Declare{Name: "already_removed", Removed: true, Raw: "declare void @already_removed()"}, Raw: "declare void @already_removed()"},
+			},
+			wantRemoved: []bool{true},
+		},
+		{
+			name: "removes attr comment preceding unreferenced declare",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopComment, Raw: "; Function Attrs: nounwind"},
+				{Kind: ir.TopDeclare, Declare: &ir.Declare{Name: "unused", Raw: "declare void @unused()"}, Raw: "declare void @unused()"},
+			},
+			wantRemoved: []bool{true, true},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{Entries: tt.entries}
 			refs := buildModuleIdentRefs(m)
 			removeUnreferencedDeclares(m, refs)
-			if m.Entries[0].Removed != !tt.wantUsedKept {
-				t.Errorf("used declare Removed = %v, want %v", m.Entries[0].Removed, !tt.wantUsedKept)
-			}
-			if m.Entries[1].Removed != tt.wantUnusedRM {
-				t.Errorf("unused declare Removed = %v, want %v", m.Entries[1].Removed, tt.wantUnusedRM)
+			for i, want := range tt.wantRemoved {
+				if m.Entries[i].Removed != want {
+					t.Errorf("entry %d Removed = %v, want %v", i, m.Entries[i].Removed, want)
+				}
 			}
 		})
 	}
