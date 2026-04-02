@@ -403,11 +403,11 @@ func TestFindSSADefInBlocks(t *testing.T) {
 
 func TestRenameInFunction(t *testing.T) {
 	tests := []struct {
-		name    string
-		fn      *ir.Function
-		old     string
-		new     string
-		wantRaw string
+		name     string
+		fn       *ir.Function
+		old      string
+		new      string
+		wantRaw  string
 		wantInst string // expected Raw of first instruction in first block
 	}{
 		{
@@ -524,6 +524,7 @@ func TestRenameInInstruction(t *testing.T) {
 			new:     "@new_fn",
 			wantRaw: "  call void @new_fn(ptr @new_fn)",
 			checkAST: func(t *testing.T, inst *ir.Instruction) {
+				t.Helper()
 				if inst.Call.Callee != "@new_fn" {
 					t.Errorf("Call.Callee = %q, want %q", inst.Call.Callee, "@new_fn")
 				}
@@ -550,6 +551,7 @@ func TestRenameInInstruction(t *testing.T) {
 			new:     "@new_global",
 			wantRaw: "  %1 = getelementptr inbounds i8, ptr @new_global, i32 0",
 			checkAST: func(t *testing.T, inst *ir.Instruction) {
+				t.Helper()
 				if inst.GEP.Base != "@new_global" {
 					t.Errorf("GEP.Base = %q, want %q", inst.GEP.Base, "@new_global")
 				}

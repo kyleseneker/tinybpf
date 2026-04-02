@@ -200,4 +200,3 @@ func SortedSections(m map[string]string) string {
 	}
 	return b.String()
 }
-

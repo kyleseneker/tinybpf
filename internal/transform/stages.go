@@ -175,6 +175,14 @@ func markGlobalRemoved(m *ir.Module, g *ir.Global) {
 	}
 }
 
+// allocSite records the location and parameters of a runtime.alloc call to replace.
+type allocSite struct {
+	blockIdx int
+	instIdx  int
+	varName  string
+	size     string
+}
+
 // replaceAllocModule converts runtime.alloc calls to stack allocas zeroed by memset.
 func replaceAllocModule(m *ir.Module) error {
 	needMemset := false
@@ -186,84 +194,13 @@ func replaceAllocModule(m *ir.Module) error {
 		}
 		ir.EnsureBlocks(fn)
 
-		type allocSite struct {
-			blockIdx int
-			instIdx  int
-			varName  string
-			size     string
-		}
-		var sites []allocSite
-
-		for bi, block := range fn.Blocks {
-			for ii, inst := range block.Instructions {
-				if inst.Kind != ir.InstCall || inst.Call == nil {
-					continue
-				}
-				if inst.Call.Callee != "@runtime.alloc" {
-					continue
-				}
-				// Extract size from first arg: "i64 N, ..."
-				firstArg := firstCommaArg(inst.Call.Args)
-				parts := strings.Fields(firstArg)
-				if len(parts) < 2 || parts[0] != "i64" {
-					errs = append(errs, fmt.Errorf("line references @runtime.alloc but does not match expected call pattern: %s",
-						strings.TrimSpace(inst.Raw)))
-					continue
-				}
-				if inst.SSAName == "" {
-					errs = append(errs, fmt.Errorf("line references @runtime.alloc but does not match expected call pattern: %s",
-						strings.TrimSpace(inst.Raw)))
-					continue
-				}
-				sites = append(sites, allocSite{
-					blockIdx: bi,
-					instIdx:  ii,
-					varName:  inst.SSAName,
-					size:     parts[1],
-				})
-			}
-		}
-
-		// Also check InstOther for unparsed @runtime.alloc references
-		for _, block := range fn.Blocks {
-			for _, inst := range block.Instructions {
-				if inst.Kind == ir.InstOther &&
-					strings.Contains(inst.Raw, "@runtime.alloc") {
-					errs = append(errs, fmt.Errorf("line references @runtime.alloc but does not match expected call pattern: %s",
-						strings.TrimSpace(inst.Raw)))
-				}
-			}
-		}
-
+		sites := collectAllocSites(fn, &errs)
 		if len(sites) == 0 {
 			continue
 		}
 		needMemset = true
 		fn.Modified = true
-
-		// Replace each alloc call with a memset call
-		for _, a := range sites {
-			inst := fn.Blocks[a.blockIdx].Instructions[a.instIdx]
-			inst.SSAName = ""
-			inst.Call.Callee = "@" + memsetIntrinsicName
-			inst.Call.RetType = "void"
-			inst.Call.Args = fmt.Sprintf("ptr align 4 %s, i8 0, i64 %s, i1 false", a.varName, a.size)
-			inst.Modified = true
-		}
-
-		// Insert alloca instructions at the top of the entry block
-		entryBlock := fn.Blocks[0]
-		newInsts := make([]*ir.Instruction, len(sites))
-		for j, a := range sites {
-			newInsts[j] = &ir.Instruction{
-				SSAName: a.varName,
-				Kind:    ir.InstAlloca,
-				Alloca:  &ir.AllocaInst{Type: fmt.Sprintf("[%s x i8]", a.size), Align: 4},
-				Raw:     fmt.Sprintf("  %s = alloca [%s x i8], align 4", a.varName, a.size),
-				Modified: true,
-			}
-		}
-		entryBlock.Instructions = append(newInsts, entryBlock.Instructions...)
+		applyAllocReplacements(fn, sites)
 	}
 
 	if err := diag.WrapErrors(diag.StageTransform, "replace-alloc", errs,
@@ -275,6 +212,69 @@ func replaceAllocModule(m *ir.Module) error {
 		insertMemsetDeclInModule(m)
 	}
 	return nil
+}
+
+// collectAllocSites finds all runtime.alloc call sites in a function and reports
+// unparseable references as errors.
+func collectAllocSites(fn *ir.Function, errs *[]error) []allocSite {
+	var sites []allocSite
+	for bi, block := range fn.Blocks {
+		for ii, inst := range block.Instructions {
+			if site, err := tryParseAllocSite(inst, bi, ii); err != nil {
+				*errs = append(*errs, err)
+			} else if site != nil {
+				sites = append(sites, *site)
+			}
+		}
+	}
+	return sites
+}
+
+// tryParseAllocSite checks whether inst is a runtime.alloc call and extracts
+// the alloc site parameters. Returns (nil, nil) for non-alloc instructions.
+func tryParseAllocSite(inst *ir.Instruction, bi, ii int) (*allocSite, error) {
+	allocErr := func() error {
+		return fmt.Errorf("line references @runtime.alloc but does not match expected call pattern: %s",
+			strings.TrimSpace(inst.Raw))
+	}
+	if inst.Kind == ir.InstOther && strings.Contains(inst.Raw, "@runtime.alloc") {
+		return nil, allocErr()
+	}
+	if inst.Kind != ir.InstCall || inst.Call == nil || inst.Call.Callee != "@runtime.alloc" {
+		return nil, nil
+	}
+	firstArg := firstCommaArg(inst.Call.Args)
+	parts := strings.Fields(firstArg)
+	if len(parts) < 2 || parts[0] != "i64" || inst.SSAName == "" {
+		return nil, allocErr()
+	}
+	return &allocSite{blockIdx: bi, instIdx: ii, varName: inst.SSAName, size: parts[1]}, nil
+}
+
+// applyAllocReplacements rewrites alloc call sites to memset calls and inserts
+// alloca instructions at the top of the entry block.
+func applyAllocReplacements(fn *ir.Function, sites []allocSite) {
+	for _, a := range sites {
+		inst := fn.Blocks[a.blockIdx].Instructions[a.instIdx]
+		inst.SSAName = ""
+		inst.Call.Callee = "@" + memsetIntrinsicName
+		inst.Call.RetType = "void"
+		inst.Call.Args = fmt.Sprintf("ptr align 4 %s, i8 0, i64 %s, i1 false", a.varName, a.size)
+		inst.Modified = true
+	}
+
+	entryBlock := fn.Blocks[0]
+	newInsts := make([]*ir.Instruction, len(sites))
+	for j, a := range sites {
+		newInsts[j] = &ir.Instruction{
+			SSAName:  a.varName,
+			Kind:     ir.InstAlloca,
+			Alloca:   &ir.AllocaInst{Type: fmt.Sprintf("[%s x i8]", a.size), Align: 4},
+			Raw:      fmt.Sprintf("  %s = alloca [%s x i8], align 4", a.varName, a.size),
+			Modified: true,
+		}
+	}
+	entryBlock.Instructions = append(newInsts, entryBlock.Instructions...)
 }
 
 // hasMemsetDecl reports whether the module already declares llvm.memset.p0.i64.
@@ -496,40 +496,15 @@ func rewriteCoreExistsModule(m *ir.Module) error {
 			continue
 		}
 		ir.EnsureBlocks(fn)
-		for bi, block := range fn.Blocks {
-			for ii, inst := range block.Instructions {
-				if inst.Kind == ir.InstCall && inst.Call != nil &&
-					strings.HasPrefix(inst.Call.Callee, "@main.bpfCore") &&
-					strings.HasSuffix(inst.Call.Callee, "Exists") {
-					funcName := strings.TrimPrefix(inst.Call.Callee, "@main.")
-					args := stripTrailingUndef(inst.Call.Args)
-
-					switch funcName {
-					case "bpfCoreFieldExists":
-						usedAccess, rwErr := rewriteFieldExistsInst(fn, inst, bi, ii, args, ctx)
-						if rwErr != nil {
-							errs = append(errs, rwErr)
-							continue
-						}
-						if usedAccess {
-							needAccessIdx = true
-						}
-						needField = true
-					case "bpfCoreTypeExists":
-						inst.Call.Callee = "@llvm.bpf.preserve.type.info.p0"
-						inst.Call.Args = args + ", i64 0"
-						inst.Modified = true
-						fn.Modified = true
-						needType = true
-					}
-				} else if inst.Kind == ir.InstOther &&
-					strings.Contains(inst.Raw, "@main.bpfCore") &&
-					strings.Contains(inst.Raw, "Exists") &&
-					strings.Contains(inst.Raw, "call") {
-					errs = append(errs, fmt.Errorf("bpfCore*Exists call does not match expected pattern: %s",
-						strings.TrimSpace(inst.Raw)))
-				}
-			}
+		f, ty, acc := rewriteCoreExistsInFunc(fn, ctx, &errs)
+		if f {
+			needField = true
+		}
+		if ty {
+			needType = true
+		}
+		if acc {
+			needAccessIdx = true
 		}
 	}
 
@@ -541,6 +516,47 @@ func rewriteCoreExistsModule(m *ir.Module) error {
 	addCoreExistsIntrinsics(m, needField, needType, needAccessIdx)
 	stripCoreExistsDeclsFromModule(m)
 	return nil
+}
+
+// rewriteCoreExistsInFunc processes a single function for CO-RE exists rewrites,
+// returning whether field, type, and access-index intrinsics are needed.
+func rewriteCoreExistsInFunc(fn *ir.Function, ctx *coreExistsContext, errs *[]error) (needField, needType, needAccessIdx bool) {
+	for bi, block := range fn.Blocks {
+		for ii, inst := range block.Instructions {
+			if inst.Kind == ir.InstCall && inst.Call != nil &&
+				strings.HasPrefix(inst.Call.Callee, "@main.bpfCore") &&
+				strings.HasSuffix(inst.Call.Callee, "Exists") {
+				funcName := strings.TrimPrefix(inst.Call.Callee, "@main.")
+				args := stripTrailingUndef(inst.Call.Args)
+
+				switch funcName {
+				case "bpfCoreFieldExists":
+					usedAccess, rwErr := rewriteFieldExistsInst(fn, inst, bi, ii, args, ctx)
+					if rwErr != nil {
+						*errs = append(*errs, rwErr)
+						continue
+					}
+					if usedAccess {
+						needAccessIdx = true
+					}
+					needField = true
+				case "bpfCoreTypeExists":
+					inst.Call.Callee = "@llvm.bpf.preserve.type.info.p0"
+					inst.Call.Args = args + ", i64 0"
+					inst.Modified = true
+					fn.Modified = true
+					needType = true
+				}
+			} else if inst.Kind == ir.InstOther &&
+				strings.Contains(inst.Raw, "@main.bpfCore") &&
+				strings.Contains(inst.Raw, "Exists") &&
+				strings.Contains(inst.Raw, "call") {
+				*errs = append(*errs, fmt.Errorf("bpfCore*Exists call does not match expected pattern: %s",
+					strings.TrimSpace(inst.Raw)))
+			}
+		}
+	}
+	return
 }
 
 // addCoreExistsIntrinsics adds LLVM intrinsic declarations required by CO-RE exists rewrites.
@@ -730,35 +746,49 @@ func discoverFallbackIdxFromAST(m *ir.Module) (map[int]int, error) {
 			continue
 		}
 		ir.EnsureBlocks(fn)
-		for bi, block := range fn.Blocks {
-			for ii, inst := range block.Instructions {
-				if inst.Kind != ir.InstCall || inst.Call == nil ||
-					inst.Call.Callee != "@main.bpfCoreFieldExists" {
-					continue
-				}
-				args := stripTrailingUndef(inst.Call.Args)
-				ptrArgMatch := reSSAValue.FindStringSubmatch(firstCommaArg(args))
-				if ptrArgMatch == nil {
-					continue
-				}
-				gepInst, _ := findSSADefInBlocks(fn.Blocks, ptrArgMatch[1], bi, ii)
-				if gepInst == nil || gepInst.Kind != ir.InstGEP || gepInst.GEP == nil {
-					continue
-				}
-				if gepInst.GEP.BaseType != "i8" || len(gepInst.GEP.Indices) == 0 {
-					continue
-				}
-				lastIdx := gepInst.GEP.Indices[len(gepInst.GEP.Indices)-1]
-				idxParts := strings.Fields(lastIdx)
-				byteOffset, err := strconv.Atoi(idxParts[len(idxParts)-1])
-				if err != nil {
-					return nil, err
-				}
-				offsetSet[byteOffset] = true
-			}
+		if err := collectFieldExistsOffsets(fn, offsetSet); err != nil {
+			return nil, err
 		}
 	}
 
+	return buildFallbackIdxMap(offsetSet), nil
+}
+
+// collectFieldExistsOffsets scans a function for bpfCoreFieldExists calls and
+// records the byte offsets of their GEP pointer arguments.
+func collectFieldExistsOffsets(fn *ir.Function, offsetSet map[int]bool) error {
+	for bi, block := range fn.Blocks {
+		for ii, inst := range block.Instructions {
+			if inst.Kind != ir.InstCall || inst.Call == nil ||
+				inst.Call.Callee != "@main.bpfCoreFieldExists" {
+				continue
+			}
+			args := stripTrailingUndef(inst.Call.Args)
+			ptrArgMatch := reSSAValue.FindStringSubmatch(firstCommaArg(args))
+			if ptrArgMatch == nil {
+				continue
+			}
+			gepInst, _ := findSSADefInBlocks(fn.Blocks, ptrArgMatch[1], bi, ii)
+			if gepInst == nil || gepInst.Kind != ir.InstGEP || gepInst.GEP == nil {
+				continue
+			}
+			if gepInst.GEP.BaseType != "i8" || len(gepInst.GEP.Indices) == 0 {
+				continue
+			}
+			lastIdx := gepInst.GEP.Indices[len(gepInst.GEP.Indices)-1]
+			idxParts := strings.Fields(lastIdx)
+			byteOffset, err := strconv.Atoi(idxParts[len(idxParts)-1])
+			if err != nil {
+				return err
+			}
+			offsetSet[byteOffset] = true
+		}
+	}
+	return nil
+}
+
+// buildFallbackIdxMap converts an offset set into a sorted offset-to-index map.
+func buildFallbackIdxMap(offsetSet map[int]bool) map[int]int {
 	offsets := make([]int, 0, len(offsetSet))
 	for off := range offsetSet {
 		offsets = append(offsets, off)
@@ -769,7 +799,7 @@ func discoverFallbackIdxFromAST(m *ir.Module) (map[int]int, error) {
 	for idx, off := range offsets {
 		idxByOffset[off] = idx
 	}
-	return idxByOffset, nil
+	return idxByOffset
 }
 
 // ensureFallbackArtifactsInModule creates a synthetic fallback type and metadata when no bpfCore typedef exists.
@@ -1495,26 +1525,31 @@ func stripKfuncPrefixModule(m *ir.Module) {
 	if len(renames) == 0 {
 		return
 	}
-	// Update call sites and strip trailing ptr undef from kfunc calls.
 	for _, fn := range m.Functions {
 		if fn.Removed {
 			continue
 		}
 		ir.EnsureBlocks(fn)
 		fn.Modified = true
-		for _, r := range renames {
-			renameInFunction(fn, r.oldRef, r.newRef)
-		}
-		// Strip trailing ptr undef from kfunc call args
-		for _, block := range fn.Blocks {
-			for _, inst := range block.Instructions {
-				if inst.Kind == ir.InstCall && inst.Call != nil {
-					for _, r := range renames {
-						if inst.Call.Callee == r.newRef {
-							inst.Call.Args = stripTrailingUndef(inst.Call.Args)
-							inst.Modified = true
-						}
-					}
+		applyKfuncRenames(fn, renames)
+	}
+}
+
+// applyKfuncRenames renames kfunc references in a function and strips the
+// trailing TinyGo context pointer from their call arguments.
+func applyKfuncRenames(fn *ir.Function, renames []mapRename) {
+	for _, r := range renames {
+		renameInFunction(fn, r.oldRef, r.newRef)
+	}
+	for _, block := range fn.Blocks {
+		for _, inst := range block.Instructions {
+			if inst.Kind != ir.InstCall || inst.Call == nil {
+				continue
+			}
+			for _, r := range renames {
+				if inst.Call.Callee == r.newRef {
+					inst.Call.Args = stripTrailingUndef(inst.Call.Args)
+					inst.Modified = true
 				}
 			}
 		}

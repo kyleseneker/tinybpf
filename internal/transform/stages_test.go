@@ -801,11 +801,11 @@ func TestCollectMapRenames(t *testing.T) {
 
 func TestApplyRenames(t *testing.T) {
 	tests := []struct {
-		name       string
-		entryRaw   string
-		funcRaw    string
-		bodyRaw    []string
-		renames    []mapRename
+		name        string
+		entryRaw    string
+		funcRaw     string
+		bodyRaw     []string
+		renames     []mapRename
 		wantInEntry string
 		wantAbsent  string
 	}{
@@ -985,10 +985,10 @@ func TestCollectMapDefsMultiError(t *testing.T) {
 
 func TestCollectCoreStructMetaIDs(t *testing.T) {
 	tests := []struct {
-		name       string
-		entries    []ir.TopLevelEntry
-		wantIn     []int
-		wantNotIn  []int
+		name      string
+		entries   []ir.TopLevelEntry
+		wantIn    []int
+		wantNotIn []int
 	}{
 		{
 			name: "collects core struct IDs only",
@@ -1049,11 +1049,11 @@ func TestCollectCoreMemberIDs(t *testing.T) {
 
 func TestFinalizeModule(t *testing.T) {
 	tests := []struct {
-		name             string
-		funcName         string
-		orphanDeclName   string
-		wantLicense      bool
-		wantOrphanGone   bool
+		name           string
+		funcName       string
+		orphanDeclName string
+		wantLicense    bool
+		wantOrphanGone bool
 	}{
 		{
 			name:           "adds license and removes orphan declares",
@@ -1225,9 +1225,9 @@ func TestRemoveUnusedAttrGroups(t *testing.T) {
 		wantRemoved []bool
 	}{
 		{
-			name:       "keeps referenced attr group, removes unused",
-			funcRaw:    "define i32 @f() #0 {",
-			attrGroups: []struct{ id, body string }{{"0", "nounwind"}, {"1", "readonly"}},
+			name:        "keeps referenced attr group, removes unused",
+			funcRaw:     "define i32 @f() #0 {",
+			attrGroups:  []struct{ id, body string }{{"0", "nounwind"}, {"1", "readonly"}},
 			wantRemoved: []bool{false, true},
 		},
 	}
@@ -1328,10 +1328,10 @@ func TestIsAttrComment(t *testing.T) {
 
 func TestCollectUsedAttrIDsFromModule(t *testing.T) {
 	tests := []struct {
-		name      string
-		funcRaw   string
-		attrIDs   []string
-		wantUsed  []string
+		name       string
+		funcRaw    string
+		attrIDs    []string
+		wantUsed   []string
 		wantUnused []string
 	}{
 		{

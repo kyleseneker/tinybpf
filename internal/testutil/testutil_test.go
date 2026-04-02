@@ -57,9 +57,9 @@ func TestFakeToolDir(t *testing.T) {
 
 func TestFakeLLVMArgs(t *testing.T) {
 	tests := []struct {
-		name     string
-		dir      string
-		wantLen  int
+		name    string
+		dir     string
+		wantLen int
 	}{
 		{
 			name:    "returns 6 args",
