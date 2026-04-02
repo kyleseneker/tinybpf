@@ -21,7 +21,8 @@ runs:
     - name: Install TinyGo
       shell: bash
       run: |
-        wget -qO /tmp/tinygo.deb "https://github.com/tinygo-org/tinygo/releases/download/v${{ inputs.tinygo-version }}/tinygo_${{ inputs.tinygo-version }}_amd64.deb"
+        arch=$(dpkg --print-architecture)
+        wget -qO /tmp/tinygo.deb "https://github.com/tinygo-org/tinygo/releases/download/v${{ inputs.tinygo-version }}/tinygo_${{ inputs.tinygo-version }}_${arch}.deb"
         sudo dpkg -i /tmp/tinygo.deb
 
     - name: Print versions
