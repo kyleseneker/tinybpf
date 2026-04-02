@@ -3,7 +3,6 @@ package transform
 //go:generate go run gen.go
 
 import (
-	"regexp"
 	"strings"
 )
 
@@ -36,9 +35,6 @@ func snakeToCamel(s string) string {
 	}
 	return b.String()
 }
-
-// helperCallRe matches call instructions targeting main.bpf* helper wrappers.
-var helperCallRe = regexp.MustCompile(`call\s+(\w+)\s+@(main\.bpf\w+)\(([^)]*)\)`)
 
 // stripTrailingUndef removes the TinyGo context pointer from a helper argument list.
 func stripTrailingUndef(args string) string {

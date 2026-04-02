@@ -7,18 +7,6 @@ import (
 	"strings"
 )
 
-// reCoreGEP matches getelementptr instructions on bpfCore-annotated struct types.
-var reCoreGEP = regexp.MustCompile(
-	`^(\s*(%[\w.]+)\s*=\s*)getelementptr\s+(?:[A-Za-z0-9_().]+\s+)*(%main\.bpfCore[\w.]*),\s*ptr\s+(%[\w.]+),\s*i32\s+0,\s*i32\s+(\d+)(.*)$`)
-
-// reCoreExistsCall matches calls to bpfCoreFieldExists or bpfCoreTypeExists.
-var reCoreExistsCall = regexp.MustCompile(
-	`(call\s+i32\s+)@main\.(bpfCoreFieldExists|bpfCoreTypeExists)\(([^)]*)\)`)
-
-// reByteGEP matches byte-level getelementptr instructions emitted by TinyGo for field addresses.
-var reByteGEP = regexp.MustCompile(
-	`^\s*(%[\w.]+)\s*=\s*getelementptr\s+(?:[A-Za-z0-9_().]+\s+)*i8,\s*ptr\s+(%[\w.]+),\s*i64\s+(\d+)`)
-
 // reSSAValue extracts an SSA value token such as "%4" from IR operands.
 var reSSAValue = regexp.MustCompile(`(%[\w.]+)`)
 

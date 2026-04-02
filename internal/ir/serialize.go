@@ -188,6 +188,13 @@ func serializeFunctionModified(b *strings.Builder, fn *Function) {
 	b.WriteString("\n}")
 }
 
+// SerializeInstruction returns the text representation of a modified instruction.
+func SerializeInstruction(inst *Instruction) string {
+	var b strings.Builder
+	serializeInstruction(&b, inst)
+	return b.String()
+}
+
 // serializeInstruction dispatches to the appropriate instruction serializer by kind.
 func serializeInstruction(b *strings.Builder, inst *Instruction) {
 	switch inst.Kind {

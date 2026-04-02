@@ -184,61 +184,86 @@ func replaceAllocModule(m *ir.Module) error {
 		if fn.Removed {
 			continue
 		}
+		ir.EnsureBlocks(fn)
+
 		type allocSite struct {
-			bodyIdx int
-			varName string
-			size    string
-			indent  string
+			blockIdx int
+			instIdx  int
+			varName  string
+			size     string
 		}
 		var sites []allocSite
-		entryIdx := -1
 
-		for i, bline := range fn.BodyRaw {
-			trimmed := strings.TrimSpace(bline)
-			if trimmed == "entry:" && entryIdx < 0 {
-				entryIdx = i
+		for bi, block := range fn.Blocks {
+			for ii, inst := range block.Instructions {
+				if inst.Kind != ir.InstCall || inst.Call == nil {
+					continue
+				}
+				if inst.Call.Callee != "@runtime.alloc" {
+					continue
+				}
+				// Extract size from first arg: "i64 N, ..."
+				firstArg := firstCommaArg(inst.Call.Args)
+				parts := strings.Fields(firstArg)
+				if len(parts) < 2 || parts[0] != "i64" {
+					errs = append(errs, fmt.Errorf("line references @runtime.alloc but does not match expected call pattern: %s",
+						strings.TrimSpace(inst.Raw)))
+					continue
+				}
+				if inst.SSAName == "" {
+					errs = append(errs, fmt.Errorf("line references @runtime.alloc but does not match expected call pattern: %s",
+						strings.TrimSpace(inst.Raw)))
+					continue
+				}
+				sites = append(sites, allocSite{
+					blockIdx: bi,
+					instIdx:  ii,
+					varName:  inst.SSAName,
+					size:     parts[1],
+				})
 			}
-			if !strings.Contains(bline, "@runtime.alloc") {
-				continue
+		}
+
+		// Also check InstOther for unparsed @runtime.alloc references
+		for _, block := range fn.Blocks {
+			for _, inst := range block.Instructions {
+				if inst.Kind == ir.InstOther &&
+					strings.Contains(inst.Raw, "@runtime.alloc") {
+					errs = append(errs, fmt.Errorf("line references @runtime.alloc but does not match expected call pattern: %s",
+						strings.TrimSpace(inst.Raw)))
+				}
 			}
-			match := reAllocCall.FindStringSubmatch(bline)
-			if match == nil {
-				errs = append(errs, fmt.Errorf("line references @runtime.alloc but does not match expected call pattern: %s", trimmed))
-				continue
-			}
-			sites = append(sites, allocSite{
-				bodyIdx: i,
-				varName: match[2],
-				size:    match[3],
-				indent:  match[1],
-			})
 		}
 
 		if len(sites) == 0 {
 			continue
 		}
 		needMemset = true
+		fn.Modified = true
 
+		// Replace each alloc call with a memset call
 		for _, a := range sites {
-			fn.BodyRaw[a.bodyIdx] = fmt.Sprintf(
-				"%scall void @%s(ptr align 4 %s, i8 0, i64 %s, i1 false)",
-				a.indent, memsetIntrinsicName, a.varName, a.size)
+			inst := fn.Blocks[a.blockIdx].Instructions[a.instIdx]
+			inst.SSAName = ""
+			inst.Call.Callee = "@" + memsetIntrinsicName
+			inst.Call.RetType = "void"
+			inst.Call.Args = fmt.Sprintf("ptr align 4 %s, i8 0, i64 %s, i1 false", a.varName, a.size)
+			inst.Modified = true
 		}
 
-		insertAt := 0
-		if entryIdx >= 0 {
-			insertAt = entryIdx + 1
-		}
-		allocas := make([]string, len(sites))
+		// Insert alloca instructions at the top of the entry block
+		entryBlock := fn.Blocks[0]
+		newInsts := make([]*ir.Instruction, len(sites))
 		for j, a := range sites {
-			allocas[j] = fmt.Sprintf("  %s = alloca [%s x i8], align 4", a.varName, a.size)
+			newInsts[j] = &ir.Instruction{
+				SSAName: a.varName,
+				Kind:    ir.InstAlloca,
+				Alloca:  &ir.AllocaInst{Type: fmt.Sprintf("[%s x i8]", a.size), Align: 4},
+				Raw:     fmt.Sprintf("  %s = alloca [%s x i8], align 4", a.varName, a.size),
+				Modified: true,
+			}
 		}
-
-		newBody := make([]string, 0, len(fn.BodyRaw)+len(allocas))
-		newBody = append(newBody, fn.BodyRaw[:insertAt]...)
-		newBody = append(newBody, allocas...)
-		newBody = append(newBody, fn.BodyRaw[insertAt:]...)
-		fn.BodyRaw = newBody
+		entryBlock.Instructions = append(newInsts, entryBlock.Instructions...)
 	}
 
 	if err := diag.WrapErrors(diag.StageTransform, "replace-alloc", errs,
@@ -295,38 +320,45 @@ func rewriteHelpersModule(m *ir.Module) error {
 		if fn.Removed {
 			continue
 		}
-		for i, bline := range fn.BodyRaw {
-			if !strings.Contains(bline, "@main.bpf") {
-				continue
-			}
-			loc := helperCallRe.FindStringSubmatchIndex(bline)
-			if loc == nil {
-				if strings.Contains(bline, "call") {
+		ir.EnsureBlocks(fn)
+		for _, block := range fn.Blocks {
+			for _, inst := range block.Instructions {
+				if inst.Kind == ir.InstCall && inst.Call != nil &&
+					strings.HasPrefix(inst.Call.Callee, "@main.bpf") {
+					if err := rewriteHelperInst(inst, fn); err != nil {
+						errs = append(errs, err)
+					}
+				} else if inst.Kind == ir.InstOther &&
+					strings.Contains(inst.Raw, "@main.bpf") &&
+					strings.Contains(inst.Raw, "call") {
+					// Parser couldn't parse this call — report as error
 					errs = append(errs, fmt.Errorf("line references @main.bpf* but does not match expected call pattern: %s",
-						strings.TrimSpace(bline)))
+						strings.TrimSpace(inst.Raw)))
 				}
-				continue
 			}
-			retType := bline[loc[2]:loc[3]]
-			funcName := bline[loc[4]:loc[5]]
-			if strings.HasPrefix(funcName, "main.bpfCore") {
-				continue
-			}
-			if strings.HasPrefix(funcName, "main.bpfKfunc") {
-				continue
-			}
-			helperID, ok := helperIDs[funcName]
-			if !ok {
-				errs = append(errs, unknownHelperErr(funcName))
-				continue
-			}
-			args := stripTrailingUndef(strings.TrimSpace(bline[loc[6]:loc[7]]))
-			replacement := fmt.Sprintf("call %s inttoptr (i64 %d to ptr)(%s)", retType, helperID, args)
-			fn.BodyRaw[i] = bline[:loc[0]] + replacement + bline[loc[1]:]
 		}
 	}
 	return diag.WrapErrors(diag.StageTransform, "rewrite-helpers", errs,
 		"check that helper names match kernel BPF helpers")
+}
+
+// rewriteHelperInst rewrites a single BPF helper call instruction from Go-style to inttoptr-based.
+func rewriteHelperInst(inst *ir.Instruction, fn *ir.Function) error {
+	callee := inst.Call.Callee
+	funcName := strings.TrimPrefix(callee, "@")
+	if strings.HasPrefix(funcName, "main.bpfCore") || strings.HasPrefix(funcName, "main.bpfKfunc") {
+		return nil
+	}
+	helperID, ok := helperIDs[funcName]
+	if !ok {
+		return unknownHelperErr(funcName)
+	}
+	args := stripTrailingUndef(inst.Call.Args)
+	inst.Call.Callee = fmt.Sprintf("inttoptr (i64 %d to ptr)", helperID)
+	inst.Call.Args = args
+	inst.Modified = true
+	fn.Modified = true
+	return nil
 }
 
 // unknownHelperErr returns an error for an unrecognized BPF helper, with a suggestion if possible.
@@ -369,13 +401,16 @@ func rewriteCoreAccessModule(m *ir.Module) error {
 		if fn.Removed {
 			continue
 		}
-		for i, bline := range fn.BodyRaw {
-			ok, err := rewriteCoreGEP(fn, i, bline, coreTypes, typeMeta)
-			if err != nil {
-				errs = append(errs, err)
-			}
-			if ok {
-				modified = true
+		ir.EnsureBlocks(fn)
+		for _, block := range fn.Blocks {
+			for _, inst := range block.Instructions {
+				ok, err := rewriteCoreGEPInst(inst, fn, coreTypes, typeMeta)
+				if err != nil {
+					errs = append(errs, err)
+				}
+				if ok {
+					modified = true
+				}
 			}
 		}
 	}
@@ -393,29 +428,54 @@ func rewriteCoreAccessModule(m *ir.Module) error {
 	return nil
 }
 
-// rewriteCoreGEP rewrites a single bpfCore GEP line to a preserve_struct_access_index call.
-func rewriteCoreGEP(fn *ir.Function, i int, bline string, coreTypes map[string]bool, typeMeta map[string]int) (bool, error) {
-	if !strings.Contains(bline, "getelementptr") || !strings.Contains(bline, "bpfCore") {
+// rewriteCoreGEPInst rewrites a single bpfCore GEP instruction to a preserve_struct_access_index call.
+func rewriteCoreGEPInst(inst *ir.Instruction, fn *ir.Function, coreTypes map[string]bool, typeMeta map[string]int) (bool, error) {
+	if inst.Kind != ir.InstGEP || inst.GEP == nil {
+		// Check for unparsed GEPs on bpfCore types
+		if inst.Kind == ir.InstOther &&
+			strings.Contains(inst.Raw, "getelementptr") &&
+			strings.Contains(inst.Raw, "bpfCore") {
+			return false, fmt.Errorf("getelementptr on bpfCore type does not match expected GEP pattern: %s",
+				strings.TrimSpace(inst.Raw))
+		}
 		return false, nil
 	}
-	match := reCoreGEP.FindStringSubmatch(bline)
-	if match == nil {
-		return false, fmt.Errorf("getelementptr on bpfCore type does not match expected GEP pattern: %s",
-			strings.TrimSpace(bline))
+
+	if !strings.Contains(inst.GEP.BaseType, "bpfCore") {
+		return false, nil
 	}
-	typeName := match[3]
+	typeName := inst.GEP.BaseType
 	if !coreTypes[typeName] {
 		return false, nil
 	}
 
-	repl := fmt.Sprintf("%s%s", match[1], preserveStructAccessCall(match[4], typeName, match[5], match[5]))
+	// Extract the field index from the last GEP index (e.g. "i32 1" -> "1")
+	if len(inst.GEP.Indices) < 2 {
+		return false, fmt.Errorf("getelementptr on bpfCore type has too few indices: %s",
+			strings.TrimSpace(inst.Raw))
+	}
+	lastIdx := inst.GEP.Indices[len(inst.GEP.Indices)-1]
+	idxParts := strings.Fields(lastIdx)
+	gepIndex := idxParts[len(idxParts)-1]
+
+	base := inst.GEP.Base
+
+	// Convert GEP to a call instruction
+	inst.Kind = ir.InstCall
+	inst.Call = &ir.CallInst{
+		RetType: "ptr",
+		Callee:  coreIntrinsicName,
+		Args:    fmt.Sprintf("ptr elementtype(%s) %s, i32 %s, i32 %s", typeName, base, gepIndex, gepIndex),
+	}
+	inst.GEP = nil
 	if metaID, ok := typeMeta[typeName]; ok {
-		repl += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
+		inst.Metadata = append(inst.Metadata, ir.MetaAttach{
+			Key: "llvm.preserve.access.index", Value: fmt.Sprintf("!%d", metaID),
+		})
 	}
-	if dbg := extractDBG(match[6]); dbg != "" {
-		repl += ", " + dbg
-	}
-	fn.BodyRaw[i] = repl
+	// Preserve existing !dbg metadata
+	inst.Modified = true
+	fn.Modified = true
 	return true, nil
 }
 
@@ -435,37 +495,40 @@ func rewriteCoreExistsModule(m *ir.Module) error {
 		if fn.Removed {
 			continue
 		}
-		for i, bline := range fn.BodyRaw {
-			if !strings.Contains(bline, "@main.bpfCore") {
-				continue
-			}
-			match := reCoreExistsCall.FindStringSubmatchIndex(bline)
-			if match == nil {
-				if strings.Contains(bline, "Exists") && strings.Contains(bline, "call") {
-					errs = append(errs, fmt.Errorf("bpfCore*Exists call does not match expected pattern: %s",
-						strings.TrimSpace(bline)))
-				}
-				continue
-			}
-			callPrefix := bline[match[0]:match[3]]
-			funcName := bline[match[4]:match[5]]
-			args := stripTrailingUndef(strings.TrimSpace(bline[match[6]:match[7]]))
+		ir.EnsureBlocks(fn)
+		for bi, block := range fn.Blocks {
+			for ii, inst := range block.Instructions {
+				if inst.Kind == ir.InstCall && inst.Call != nil &&
+					strings.HasPrefix(inst.Call.Callee, "@main.bpfCore") &&
+					strings.HasSuffix(inst.Call.Callee, "Exists") {
+					funcName := strings.TrimPrefix(inst.Call.Callee, "@main.")
+					args := stripTrailingUndef(inst.Call.Args)
 
-			switch funcName {
-			case "bpfCoreFieldExists":
-				usedAccess, rwErr := rewriteFieldExistsInBody(fn.BodyRaw, i, match, callPrefix, args, ctx)
-				if rwErr != nil {
-					errs = append(errs, rwErr)
-					continue
+					switch funcName {
+					case "bpfCoreFieldExists":
+						usedAccess, rwErr := rewriteFieldExistsInst(fn, inst, bi, ii, args, ctx)
+						if rwErr != nil {
+							errs = append(errs, rwErr)
+							continue
+						}
+						if usedAccess {
+							needAccessIdx = true
+						}
+						needField = true
+					case "bpfCoreTypeExists":
+						inst.Call.Callee = "@llvm.bpf.preserve.type.info.p0"
+						inst.Call.Args = args + ", i64 0"
+						inst.Modified = true
+						fn.Modified = true
+						needType = true
+					}
+				} else if inst.Kind == ir.InstOther &&
+					strings.Contains(inst.Raw, "@main.bpfCore") &&
+					strings.Contains(inst.Raw, "Exists") &&
+					strings.Contains(inst.Raw, "call") {
+					errs = append(errs, fmt.Errorf("bpfCore*Exists call does not match expected pattern: %s",
+						strings.TrimSpace(inst.Raw)))
 				}
-				if usedAccess {
-					needAccessIdx = true
-				}
-				needField = true
-			case "bpfCoreTypeExists":
-				repl := fmt.Sprintf("%s@llvm.bpf.preserve.type.info.p0(%s, i64 0)", callPrefix, args)
-				fn.BodyRaw[i] = bline[:match[0]] + repl + bline[match[1]:]
-				needType = true
 			}
 		}
 	}
@@ -666,32 +729,33 @@ func discoverFallbackIdxFromAST(m *ir.Module) (map[int]int, error) {
 		if fn.Removed {
 			continue
 		}
-		for i, bline := range fn.BodyRaw {
-			if !strings.Contains(bline, "@main.bpfCoreFieldExists(") {
-				continue
+		ir.EnsureBlocks(fn)
+		for bi, block := range fn.Blocks {
+			for ii, inst := range block.Instructions {
+				if inst.Kind != ir.InstCall || inst.Call == nil ||
+					inst.Call.Callee != "@main.bpfCoreFieldExists" {
+					continue
+				}
+				args := stripTrailingUndef(inst.Call.Args)
+				ptrArgMatch := reSSAValue.FindStringSubmatch(firstCommaArg(args))
+				if ptrArgMatch == nil {
+					continue
+				}
+				gepInst, _ := findSSADefInBlocks(fn.Blocks, ptrArgMatch[1], bi, ii)
+				if gepInst == nil || gepInst.Kind != ir.InstGEP || gepInst.GEP == nil {
+					continue
+				}
+				if gepInst.GEP.BaseType != "i8" || len(gepInst.GEP.Indices) == 0 {
+					continue
+				}
+				lastIdx := gepInst.GEP.Indices[len(gepInst.GEP.Indices)-1]
+				idxParts := strings.Fields(lastIdx)
+				byteOffset, err := strconv.Atoi(idxParts[len(idxParts)-1])
+				if err != nil {
+					return nil, err
+				}
+				offsetSet[byteOffset] = true
 			}
-			match := reCoreExistsCall.FindStringSubmatchIndex(bline)
-			if match == nil {
-				continue
-			}
-			args := stripTrailingUndef(strings.TrimSpace(bline[match[6]:match[7]]))
-			ptrArgMatch := reSSAValue.FindStringSubmatch(firstCommaArg(args))
-			if ptrArgMatch == nil {
-				continue
-			}
-			gepIdx := findSSADefInBody(fn.BodyRaw, ptrArgMatch[1], i)
-			if gepIdx < 0 {
-				continue
-			}
-			gepMatch := reByteGEP.FindStringSubmatch(fn.BodyRaw[gepIdx])
-			if gepMatch == nil {
-				continue
-			}
-			byteOffset, err := strconv.Atoi(gepMatch[3])
-			if err != nil {
-				return nil, err
-			}
-			offsetSet[byteOffset] = true
 		}
 	}
 
@@ -797,54 +861,71 @@ func appendMetaEntryToModule(m *ir.Module, raw string) {
 	m.Entries = append(m.Entries, ir.TopLevelEntry{Kind: ir.TopMetadata, Raw: raw})
 }
 
-// rewriteFieldExistsInBody rewrites a single bpfCoreFieldExists call to a preserve.field.info intrinsic.
-func rewriteFieldExistsInBody(
-	bodyRaw []string, callIdx int, match []int,
-	callPrefix, args string, ctx *coreExistsContext,
+// rewriteFieldExistsInst rewrites a single bpfCoreFieldExists call instruction to a preserve.field.info intrinsic.
+func rewriteFieldExistsInst(
+	fn *ir.Function, inst *ir.Instruction,
+	blockIdx, instIdx int,
+	args string, ctx *coreExistsContext,
 ) (bool, error) {
-	line := bodyRaw[callIdx]
-
 	ptrArgMatch := reSSAValue.FindStringSubmatch(firstCommaArg(args))
 	if ptrArgMatch == nil {
 		return false, fmt.Errorf("cannot extract pointer arg from bpfCoreFieldExists args %q", args)
 	}
 	ptrArg := ptrArgMatch[1]
 
-	gepIdx := findSSADefInBody(bodyRaw, ptrArg, callIdx)
-	if gepIdx >= 0 {
-		if gepMatch := reByteGEP.FindStringSubmatch(bodyRaw[gepIdx]); gepMatch != nil {
-			return rewriteFieldExistsGEPInBody(bodyRaw, callIdx, gepIdx, match, callPrefix, args, ptrArg, gepMatch, ctx)
-		}
+	// Search backward for the GEP instruction that defines the pointer argument
+	gepInst, _ := findSSADefInBlocks(fn.Blocks, ptrArg, blockIdx, instIdx)
+	if gepInst != nil && gepInst.Kind == ir.InstGEP && gepInst.GEP != nil &&
+		gepInst.GEP.BaseType == "i8" && len(gepInst.GEP.Indices) > 0 {
+		return rewriteFieldExistsGEPInst(fn, inst, gepInst, ptrArg, args, ctx)
 	}
 
 	typeName := ctx.soleType()
-	if typeName == "" {
-		accessCall := preserveStructAccessCall(ptrArg, ctx.fallbackType, strconv.Itoa(ctx.fallbackIdx[0]), strconv.Itoa(ctx.fallbackIdx[0]))
-		if ctx.fallbackMeta > 0 {
-			accessCall += fmt.Sprintf(", !llvm.preserve.access.index !%d", ctx.fallbackMeta)
-		}
-		repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)", callPrefix, accessCall, bpfFieldExists)
-		bodyRaw[callIdx] = line[:match[0]] + repl + line[match[1]:]
-		return true, nil
-	}
-	accessCall := preserveStructAccessCall(ptrArg, typeName, "0", "0")
-	if metaID, ok := ctx.typeMeta[typeName]; ok {
-		accessCall += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
-	}
-	repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)", callPrefix, accessCall, bpfFieldExists)
-	bodyRaw[callIdx] = line[:match[0]] + repl + line[match[1]:]
+	accessCallArgs, accessMeta := buildFieldExistsAccessCall(ptrArg, typeName, 0, ctx)
+
+	inst.Call.Callee = "@llvm.bpf.preserve.field.info.p0"
+	inst.Call.Args = fmt.Sprintf("%s, i64 %d", accessCallArgs, bpfFieldExists)
+	inst.Metadata = append(inst.Metadata, accessMeta...)
+	inst.Modified = true
+	fn.Modified = true
 	return true, nil
 }
 
-// rewriteFieldExistsGEPInBody rewrites a bpfCoreFieldExists call whose pointer comes from a byte GEP.
-func rewriteFieldExistsGEPInBody(
-	bodyRaw []string, callIdx, gepIdx int,
-	match []int, callPrefix, args, ptrArg string,
-	gepMatch []string, ctx *coreExistsContext,
+// buildFieldExistsAccessCall constructs the inner preserve_struct_access_index call arguments
+// and metadata for a field exists rewrite.
+func buildFieldExistsAccessCall(ptrArg, typeName string, fieldIdx int, ctx *coreExistsContext) (string, []ir.MetaAttach) {
+	var meta []ir.MetaAttach
+	useType := typeName
+	useIdx := strconv.Itoa(fieldIdx)
+
+	if typeName == "" {
+		useType = ctx.fallbackType
+		useIdx = strconv.Itoa(ctx.fallbackIdx[0])
+	}
+
+	callText := preserveStructAccessCall(ptrArg, useType, useIdx, useIdx)
+
+	if typeName == "" && ctx.fallbackMeta > 0 {
+		callText += fmt.Sprintf(", !llvm.preserve.access.index !%d", ctx.fallbackMeta)
+	} else if typeName != "" {
+		if metaID, ok := ctx.typeMeta[typeName]; ok {
+			callText += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
+		}
+	}
+
+	return callText, meta
+}
+
+// rewriteFieldExistsGEPInst rewrites a bpfCoreFieldExists call whose pointer comes from a byte GEP instruction.
+func rewriteFieldExistsGEPInst(
+	fn *ir.Function, callInst, gepInst *ir.Instruction,
+	ptrArg, args string, ctx *coreExistsContext,
 ) (bool, error) {
-	line := bodyRaw[callIdx]
-	base := gepMatch[2]
-	byteOffset, _ := strconv.Atoi(gepMatch[3])
+	// Extract byte offset from the GEP's last index
+	lastIdx := gepInst.GEP.Indices[len(gepInst.GEP.Indices)-1]
+	idxParts := strings.Fields(lastIdx)
+	byteOffset, _ := strconv.Atoi(idxParts[len(idxParts)-1])
+	base := gepInst.GEP.Base
 
 	typeName, fieldIdx := ctx.resolveField(byteOffset)
 	usedFallback := false
@@ -858,30 +939,36 @@ func rewriteFieldExistsGEPInBody(
 		}
 	}
 
-	if !usedFallback {
-		gepRepl := fmt.Sprintf("  %s = %s", ptrArg,
-			preserveStructAccessCall(base, typeName, strconv.Itoa(fieldIdx), strconv.Itoa(fieldIdx)))
-		if metaID, ok := ctx.typeMeta[typeName]; ok {
-			gepRepl += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
-		}
-		if dbg := extractDBG(bodyRaw[gepIdx]); dbg != "" {
-			gepRepl += ", " + dbg
-		}
-		bodyRaw[gepIdx] = gepRepl
-	} else {
-		gepRepl := fmt.Sprintf("  %s = %s", ptrArg,
-			preserveStructAccessCall(base, ctx.fallbackType, strconv.Itoa(fieldIdx), strconv.Itoa(fieldIdx)))
-		if ctx.fallbackMeta > 0 {
-			gepRepl += fmt.Sprintf(", !llvm.preserve.access.index !%d", ctx.fallbackMeta)
-		}
-		if dbg := extractDBG(bodyRaw[gepIdx]); dbg != "" {
-			gepRepl += ", " + dbg
-		}
-		bodyRaw[gepIdx] = gepRepl
+	// Rewrite the GEP instruction to a preserve_struct_access_index call
+	resolvedType := typeName
+	if usedFallback {
+		resolvedType = ctx.fallbackType
 	}
+	gepInst.Kind = ir.InstCall
+	gepInst.Call = &ir.CallInst{
+		RetType: "ptr",
+		Callee:  coreIntrinsicName,
+		Args:    fmt.Sprintf("ptr elementtype(%s) %s, i32 %s, i32 %s", resolvedType, base, strconv.Itoa(fieldIdx), strconv.Itoa(fieldIdx)),
+	}
+	gepInst.GEP = nil
+	if !usedFallback {
+		if metaID, ok := ctx.typeMeta[typeName]; ok {
+			gepInst.Metadata = append(gepInst.Metadata, ir.MetaAttach{
+				Key: "llvm.preserve.access.index", Value: fmt.Sprintf("!%d", metaID),
+			})
+		}
+	} else if ctx.fallbackMeta > 0 {
+		gepInst.Metadata = append(gepInst.Metadata, ir.MetaAttach{
+			Key: "llvm.preserve.access.index", Value: fmt.Sprintf("!%d", ctx.fallbackMeta),
+		})
+	}
+	gepInst.Modified = true
 
-	repl := fmt.Sprintf("%s@llvm.bpf.preserve.field.info.p0(%s, i64 %d)", callPrefix, args, bpfFieldExists)
-	bodyRaw[callIdx] = line[:match[0]] + repl + line[match[1]:]
+	// Rewrite the call instruction to use preserve.field.info
+	callInst.Call.Callee = "@llvm.bpf.preserve.field.info.p0"
+	callInst.Call.Args = fmt.Sprintf("%s, i64 %d", args, bpfFieldExists)
+	callInst.Modified = true
+	fn.Modified = true
 	return true, nil
 }
 
@@ -1069,19 +1156,12 @@ func applyRenames(m *ir.Module, renames []mapRename) {
 	}
 }
 
-// applyRenamesToFunction replaces old references with new ones in a function's raw lines.
+// applyRenamesToFunction replaces old references with new ones in a function's instructions.
 func applyRenamesToFunction(fn *ir.Function, renames []mapRename) {
+	ir.EnsureBlocks(fn)
+	fn.Modified = true
 	for _, r := range renames {
-		if strings.Contains(fn.Raw, r.oldRef) {
-			fn.Raw = strings.ReplaceAll(fn.Raw, r.oldRef, r.newRef)
-		}
-	}
-	for j, bline := range fn.BodyRaw {
-		for _, r := range renames {
-			if strings.Contains(bline, r.oldRef) {
-				fn.BodyRaw[j] = strings.ReplaceAll(fn.BodyRaw[j], r.oldRef, r.newRef)
-			}
-		}
+		renameInFunction(fn, r.oldRef, r.newRef)
 	}
 }
 
@@ -1420,18 +1500,22 @@ func stripKfuncPrefixModule(m *ir.Module) {
 		if fn.Removed {
 			continue
 		}
-		for i, bline := range fn.BodyRaw {
-			changed := false
-			for _, r := range renames {
-				if strings.Contains(bline, r.oldRef) {
-					bline = strings.ReplaceAll(bline, r.oldRef, r.newRef)
-					changed = true
+		ir.EnsureBlocks(fn)
+		fn.Modified = true
+		for _, r := range renames {
+			renameInFunction(fn, r.oldRef, r.newRef)
+		}
+		// Strip trailing ptr undef from kfunc call args
+		for _, block := range fn.Blocks {
+			for _, inst := range block.Instructions {
+				if inst.Kind == ir.InstCall && inst.Call != nil {
+					for _, r := range renames {
+						if inst.Call.Callee == r.newRef {
+							inst.Call.Args = stripTrailingUndef(inst.Call.Args)
+							inst.Modified = true
+						}
+					}
 				}
-			}
-			if changed {
-				bline = strings.Replace(bline, ", ptr undef)", ")", 1)
-				bline = strings.Replace(bline, "(ptr undef)", "()", 1)
-				fn.BodyRaw[i] = bline
 			}
 		}
 	}
@@ -1666,12 +1750,19 @@ func warnStackUsage(m *ir.Module, w io.Writer) {
 		if fn.Removed {
 			continue
 		}
+		ir.EnsureBlocks(fn)
 		var total int64
-		for _, bline := range fn.BodyRaw {
-			if locs := allocaSizeRe.FindStringSubmatch(bline); locs != nil {
-				n, err := strconv.ParseInt(locs[1], 10, 64)
-				if err == nil {
-					total += n
+		for _, block := range fn.Blocks {
+			for _, inst := range block.Instructions {
+				if inst.Kind != ir.InstAlloca || inst.Alloca == nil {
+					continue
+				}
+				// Extract array size from types like "[16 x i8]"
+				if locs := allocaSizeRe.FindStringSubmatch(inst.Raw); locs != nil {
+					n, err := strconv.ParseInt(locs[1], 10, 64)
+					if err == nil {
+						total += n
+					}
 				}
 			}
 		}

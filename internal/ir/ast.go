@@ -1,6 +1,8 @@
 // Package ir provides a lightweight AST and round-trip parser for the subset of LLVM IR that TinyGo emits.
 package ir
 
+import "strings"
+
 // Module is the top-level AST for a parsed .ll file.
 type Module struct {
 	Entries []TopLevelEntry
@@ -179,4 +181,46 @@ type NamedMetadata struct {
 	Name string // e.g. "llvm.dbg.cu"
 	Refs []string
 	Raw  string
+}
+
+// EnsureBlocks populates fn.Blocks from fn.BodyRaw when Blocks is empty.
+// This allows code that constructs a Function with only BodyRaw (e.g. tests)
+// to work with block-based transforms.
+func EnsureBlocks(fn *Function) {
+	if len(fn.Blocks) > 0 || len(fn.BodyRaw) == 0 {
+		return
+	}
+	var curBlock *BasicBlock
+	for _, bline := range fn.BodyRaw {
+		trimmed := strings.TrimSpace(bline)
+
+		depth := strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
+		if depth < 0 && trimmed == "}" {
+			break
+		}
+
+		if trimmed == "" || strings.HasPrefix(trimmed, ";") || strings.HasPrefix(trimmed, "#dbg_") {
+			if curBlock != nil {
+				curBlock.Instructions = append(curBlock.Instructions, &Instruction{
+					Kind: InstOther,
+					Raw:  bline,
+				})
+			}
+			continue
+		}
+
+		if isLabel(trimmed) {
+			label := trimmed[:len(trimmed)-1]
+			curBlock = &BasicBlock{Label: label}
+			fn.Blocks = append(fn.Blocks, curBlock)
+			continue
+		}
+
+		inst := parseInstruction(bline, trimmed)
+		if curBlock == nil {
+			curBlock = &BasicBlock{Label: ""}
+			fn.Blocks = append(fn.Blocks, curBlock)
+		}
+		curBlock.Instructions = append(curBlock.Instructions, inst)
+	}
 }

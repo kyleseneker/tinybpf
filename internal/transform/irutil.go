@@ -66,10 +66,6 @@ var (
 	reTrailingMeta = regexp.MustCompile(`\s*!\w+\s*!\d+\s*$`)
 )
 
-var reAllocCall = regexp.MustCompile(
-	`(\s*)(%\w+)\s*=\s*call\s+.*@runtime\.alloc\(i64\s+(\d+)`,
-)
-
 const (
 	memsetIntrinsicName = "llvm.memset.p0.i64"
 	memsetDecl          = "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)"
@@ -121,6 +117,70 @@ func findSSADefInBody(bodyRaw []string, ssaName string, startIdx int) int {
 	return -1
 }
 
+// instPosition identifies an instruction's location within a function's blocks.
+type instPosition struct {
+	block int
+	inst  int
+}
+
+// findSSADefInBlocks searches backward from (blockIdx, instIdx) for an instruction
+// that defines ssaName, within a 30-instruction window.
+func findSSADefInBlocks(blocks []*ir.BasicBlock, ssaName string, blockIdx, instIdx int) (*ir.Instruction, instPosition) {
+	count := 0
+	for bi := blockIdx; bi >= 0 && count < 30; bi-- {
+		startInst := len(blocks[bi].Instructions) - 1
+		if bi == blockIdx {
+			startInst = instIdx - 1
+		}
+		for ii := startInst; ii >= 0 && count < 30; ii-- {
+			count++
+			inst := blocks[bi].Instructions[ii]
+			if inst.SSAName == ssaName {
+				return inst, instPosition{bi, ii}
+			}
+		}
+	}
+	return nil, instPosition{-1, -1}
+}
+
+// renameInFunction replaces all occurrences of old with new in a function's
+// define line and all instructions, handling both AST-modified and raw instructions.
+func renameInFunction(fn *ir.Function, old, new string) {
+	if strings.Contains(fn.Raw, old) {
+		fn.Raw = strings.ReplaceAll(fn.Raw, old, new)
+	}
+	for _, block := range fn.Blocks {
+		for _, inst := range block.Instructions {
+			renameInInstruction(inst, old, new)
+		}
+	}
+}
+
+// renameInInstruction replaces all occurrences of old with new in an instruction,
+// updating both the Raw text and AST fields if the instruction was modified.
+func renameInInstruction(inst *ir.Instruction, old, new string) {
+	if !strings.Contains(inst.Raw, old) && !inst.Modified {
+		return
+	}
+	inst.Raw = strings.ReplaceAll(inst.Raw, old, new)
+	if inst.Modified {
+		switch inst.Kind {
+		case ir.InstCall:
+			if inst.Call != nil {
+				inst.Call.Callee = strings.ReplaceAll(inst.Call.Callee, old, new)
+				inst.Call.Args = strings.ReplaceAll(inst.Call.Args, old, new)
+			}
+		case ir.InstGEP:
+			if inst.GEP != nil {
+				inst.GEP.Base = strings.ReplaceAll(inst.GEP.Base, old, new)
+				for j, idx := range inst.GEP.Indices {
+					inst.GEP.Indices[j] = strings.ReplaceAll(idx, old, new)
+				}
+			}
+		}
+	}
+}
+
 // findFirstFuncEntry returns the index of the first non-removed declare or function entry, or -1.
 func findFirstFuncEntry(m *ir.Module) int {
 	for i, e := range m.Entries {
@@ -134,9 +194,24 @@ func findFirstFuncEntry(m *ir.Module) int {
 // entryTextLines returns the raw text lines that should be scanned for references in the given entry.
 func entryTextLines(e ir.TopLevelEntry) []string {
 	if e.Kind == ir.TopFunction && e.Function != nil {
-		lines := make([]string, 0, 1+len(e.Function.BodyRaw))
-		lines = append(lines, e.Function.Raw)
-		lines = append(lines, e.Function.BodyRaw...)
+		fn := e.Function
+		if fn.Modified && len(fn.Blocks) > 0 {
+			lines := make([]string, 0, 1+len(fn.Blocks)*4)
+			lines = append(lines, fn.Raw)
+			for _, block := range fn.Blocks {
+				for _, inst := range block.Instructions {
+					if inst.Modified {
+						lines = append(lines, ir.SerializeInstruction(inst))
+					} else {
+						lines = append(lines, inst.Raw)
+					}
+				}
+			}
+			return lines
+		}
+		lines := make([]string, 0, 1+len(fn.BodyRaw))
+		lines = append(lines, fn.Raw)
+		lines = append(lines, fn.BodyRaw...)
 		return lines
 	}
 	return []string{e.Raw}
