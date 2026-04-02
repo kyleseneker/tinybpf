@@ -34,9 +34,9 @@ type openEvent struct {
 }
 
 type ptRegs struct {
-	_        [8]byte  // x0: dfd
-	Filename uint64   // x1: filename pointer
-	Flags    uint64   // x2: flags
+	_        [8]byte // x0: dfd
+	Filename uint64  // x1: filename pointer
+	Flags    uint64  // x2: flags
 	_        [168]byte
 }
 

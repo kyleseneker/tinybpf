@@ -51,32 +51,32 @@ func TestPreserveStructAccessCall(t *testing.T) {
 
 func TestSoleType(t *testing.T) {
 	tests := []struct {
-		name         string
-		fieldOffsets map[string][]int
-		want         string
+		name  string
+		types map[string]FieldLayout
+		want  string
 	}{
 		{
-			name:         "single type",
-			fieldOffsets: map[string][]int{"%main.bpfCoreTaskStruct": {0, 4}},
-			want:         "%main.bpfCoreTaskStruct",
+			name:  "single type",
+			types: map[string]FieldLayout{"%main.bpfCoreTaskStruct": {Offsets: []int{0, 4}, MetaID: -1}},
+			want:  "%main.bpfCoreTaskStruct",
 		},
 		{
 			name: "multiple types",
-			fieldOffsets: map[string][]int{
-				"%main.bpfCoreTaskStruct": {0, 4},
-				"%main.bpfCoreFileStruct": {0, 8},
+			types: map[string]FieldLayout{
+				"%main.bpfCoreTaskStruct": {Offsets: []int{0, 4}, MetaID: -1},
+				"%main.bpfCoreFileStruct": {Offsets: []int{0, 8}, MetaID: -1},
 			},
 			want: "",
 		},
 		{
-			name:         "empty",
-			fieldOffsets: map[string][]int{},
-			want:         "",
+			name:  "empty",
+			types: map[string]FieldLayout{},
+			want:  "",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := &coreExistsContext{fieldOffsets: tt.fieldOffsets}
+			ctx := &coreExistsContext{types: tt.types}
 			if got := ctx.soleType(); got != tt.want {
 				t.Errorf("soleType() = %q, want %q", got, tt.want)
 			}
@@ -86,37 +86,37 @@ func TestSoleType(t *testing.T) {
 
 func TestResolveField(t *testing.T) {
 	tests := []struct {
-		name         string
-		fieldOffsets map[string][]int
-		byteOffset   int
-		wantType     string
-		wantIdx      int
+		name       string
+		types      map[string]FieldLayout
+		byteOffset int
+		wantType   string
+		wantIdx    int
 	}{
 		{
-			name:         "found",
-			fieldOffsets: map[string][]int{"%main.bpfCoreA": {0, 4, 8}},
-			byteOffset:   4,
-			wantType:     "%main.bpfCoreA",
-			wantIdx:      1,
+			name:       "found",
+			types:      map[string]FieldLayout{"%main.bpfCoreA": {Offsets: []int{0, 4, 8}, MetaID: -1}},
+			byteOffset: 4,
+			wantType:   "%main.bpfCoreA",
+			wantIdx:    1,
 		},
 		{
-			name:         "not found",
-			fieldOffsets: map[string][]int{"%main.bpfCoreA": {0, 4, 8}},
-			byteOffset:   12,
-			wantType:     "",
-			wantIdx:      -1,
+			name:       "not found",
+			types:      map[string]FieldLayout{"%main.bpfCoreA": {Offsets: []int{0, 4, 8}, MetaID: -1}},
+			byteOffset: 12,
+			wantType:   "",
+			wantIdx:    -1,
 		},
 		{
-			name:         "empty",
-			fieldOffsets: map[string][]int{},
-			byteOffset:   0,
-			wantType:     "",
-			wantIdx:      -1,
+			name:       "empty",
+			types:      map[string]FieldLayout{},
+			byteOffset: 0,
+			wantType:   "",
+			wantIdx:    -1,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := &coreExistsContext{fieldOffsets: tt.fieldOffsets}
+			ctx := &coreExistsContext{types: tt.types}
 			gotType, gotIdx := ctx.resolveField(tt.byteOffset)
 			if gotType != tt.wantType || gotIdx != tt.wantIdx {
 				t.Errorf("resolveField(%d) = (%q, %d), want (%q, %d)",
@@ -128,29 +128,25 @@ func TestResolveField(t *testing.T) {
 
 func TestTypeNames(t *testing.T) {
 	tests := []struct {
-		name         string
-		fieldOffsets map[string][]int
-		want         string
+		name  string
+		types map[string]FieldLayout
+		want  string
 	}{
 		{
-			name:         "empty",
-			fieldOffsets: map[string][]int{},
-			want:         "none",
+			name:  "empty",
+			types: map[string]FieldLayout{},
+			want:  "none",
 		},
 		{
-			name:         "single",
-			fieldOffsets: map[string][]int{"T": {0, 4}},
-			want:         "T[0 4]",
+			name:  "single",
+			types: map[string]FieldLayout{"T": {Offsets: []int{0, 4}, MetaID: -1}},
+			want:  "T[0 4]",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := &coreExistsContext{fieldOffsets: tt.fieldOffsets}
-			got := ctx.typeNames()
-			if tt.name == "empty" && got != tt.want {
-				t.Errorf("typeNames() = %q, want %q", got, tt.want)
-			}
-			if tt.name == "single" && got != tt.want {
+			ctx := &coreExistsContext{types: tt.types}
+			if got := ctx.typeNames(); got != tt.want {
 				t.Errorf("typeNames() = %q, want %q", got, tt.want)
 			}
 		})
@@ -267,29 +263,6 @@ func TestIRTypeSize(t *testing.T) {
 		}
 		if got != tt.want {
 			t.Errorf("irTypeSize(%q) = %d, want %d", tt.in, got, tt.want)
-		}
-	}
-}
-
-func TestCumulativeOffsets(t *testing.T) {
-	tests := []struct {
-		sizes []int
-		want  []int
-	}{
-		{[]int{4, 4, 16}, []int{0, 4, 8}},
-		{[]int{8}, []int{0}},
-		{[]int{1, 2, 4}, []int{0, 1, 3}},
-	}
-	for _, tt := range tests {
-		got := cumulativeOffsets(tt.sizes)
-		if len(got) != len(tt.want) {
-			t.Errorf("cumulativeOffsets(%v) = %v, want %v", tt.sizes, got, tt.want)
-			continue
-		}
-		for i := range got {
-			if got[i] != tt.want[i] {
-				t.Errorf("cumulativeOffsets(%v)[%d] = %d, want %d", tt.sizes, i, got[i], tt.want[i])
-			}
 		}
 	}
 }
@@ -874,7 +847,6 @@ func TestRewriteCoreGEPInst(t *testing.T) {
 	}
 }
 
-
 func TestSanitizeCoreFieldNamesModule(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -941,7 +913,7 @@ func TestRewriteCoreExistsInFunc(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			fn := &ir.Function{Name: "f", BodyRaw: tt.bodyRaw}
 			ir.EnsureBlocks(fn)
-			ctx := &coreExistsContext{fieldOffsets: map[string][]int{}, fallbackIdx: map[int]int{}}
+			ctx := &coreExistsContext{types: map[string]FieldLayout{}, fallbackIdx: map[int]int{}}
 			var errs []error
 			rewriteCoreExistsInFunc(fn, ctx, &errs)
 			if len(errs) != tt.wantErrs {
@@ -950,4 +922,3 @@ func TestRewriteCoreExistsInFunc(t *testing.T) {
 		})
 	}
 }
-

@@ -10,12 +10,12 @@ import (
 
 func TestExtractProgramsModule(t *testing.T) {
 	tests := []struct {
-		name          string
-		funcs         []*ir.Function
-		entries       []ir.TopLevelEntry
-		programs      []string
-		verbose       bool
-		wantOutput    string
+		name        string
+		funcs       []*ir.Function
+		entries     []ir.TopLevelEntry
+		programs    []string
+		verbose     bool
+		wantOutput  string
 		wantRemoved []bool
 	}{
 		{

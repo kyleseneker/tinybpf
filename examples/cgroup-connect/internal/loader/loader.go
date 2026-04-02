@@ -63,8 +63,8 @@ func (m *Maps) Close() {
 
 // Loaded holds the resources obtained after a successful load and attach.
 type Loaded struct {
-	Objects        *Objects
-	Link           link.Link
+	Objects         *Objects
+	Link            link.Link
 	BlockedAddrsMap *ebpf.Map
 }
 
@@ -87,8 +87,8 @@ func LoadAndAttach(objectPath, cgroupPath string) (*Loaded, error) {
 	}
 
 	return &Loaded{
-		Objects:        objs,
-		Link:           cgLink,
+		Objects:         objs,
+		Link:            cgLink,
 		BlockedAddrsMap: objs.BlockedAddrs,
 	}, nil
 }

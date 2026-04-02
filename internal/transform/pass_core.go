@@ -22,8 +22,6 @@ const (
 	bpfFieldExists         = 2
 )
 
-// --- Core utility types and functions (formerly core.go) ---
-
 // extractDBG pulls a !dbg !N reference from trailing GEP text.
 func extractDBG(s string) string {
 	idx := strings.Index(s, "!dbg ")
@@ -43,10 +41,16 @@ func preserveStructAccessCall(base, elementType, gepIndex, diIndex string) strin
 		coreIntrinsicName, elementType, base, gepIndex, diIndex)
 }
 
+// FieldLayout holds the computed byte offsets and DWARF metadata ID for a
+// bpfCore struct type.
+type FieldLayout struct {
+	Offsets []int // byte offset of each field
+	MetaID  int   // DICompositeType metadata ID, or -1 if unknown
+}
+
 // coreExistsContext holds precomputed data for rewriting bpfCore*Exists calls.
 type coreExistsContext struct {
-	fieldOffsets map[string][]int
-	typeMeta     map[string]int
+	types        map[string]FieldLayout
 	fallbackIdx  map[int]int
 	fallbackType string
 	fallbackMeta int
@@ -54,8 +58,8 @@ type coreExistsContext struct {
 
 // soleType returns the single bpfCore type name if exactly one is known.
 func (c *coreExistsContext) soleType() string {
-	if len(c.fieldOffsets) == 1 {
-		for typeName := range c.fieldOffsets {
+	if len(c.types) == 1 {
+		for typeName := range c.types {
 			return typeName
 		}
 	}
@@ -64,8 +68,8 @@ func (c *coreExistsContext) soleType() string {
 
 // resolveField finds the bpfCore struct type with a field at byteOffset and returns the type name and index.
 func (c *coreExistsContext) resolveField(byteOffset int) (string, int) {
-	for typeName, offsets := range c.fieldOffsets {
-		if idx := fieldIndexFromOffset(offsets, byteOffset); idx >= 0 {
+	for typeName, layout := range c.types {
+		if idx := fieldIndexFromOffset(layout.Offsets, byteOffset); idx >= 0 {
 			return typeName, idx
 		}
 	}
@@ -74,12 +78,12 @@ func (c *coreExistsContext) resolveField(byteOffset int) (string, int) {
 
 // typeNames returns a summary of known types and their offsets for diagnostics.
 func (c *coreExistsContext) typeNames() string {
-	if len(c.fieldOffsets) == 0 {
+	if len(c.types) == 0 {
 		return "none"
 	}
 	var parts []string
-	for name, offsets := range c.fieldOffsets {
-		parts = append(parts, fmt.Sprintf("%s%v", name, offsets))
+	for name, layout := range c.types {
+		parts = append(parts, fmt.Sprintf("%s%v", name, layout.Offsets))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -167,17 +171,6 @@ func irTypeSize(t string) (int, error) {
 		return n * elemSize, nil
 	}
 	return 0, fmt.Errorf("unsupported IR type: %s", t)
-}
-
-// cumulativeOffsets converts field sizes to cumulative byte offsets (e.g. [4,4,16] -> [0,4,8]).
-func cumulativeOffsets(sizes []int) []int {
-	offsets := make([]int, len(sizes))
-	off := 0
-	for i, s := range sizes {
-		offsets[i] = off
-		off += s
-	}
-	return offsets
 }
 
 // irTypeAlign returns the natural ABI alignment in bytes for an LLVM IR type
@@ -481,7 +474,8 @@ func addCoreExistsIntrinsics(m *ir.Module, needField, needType, needAccessIdx bo
 	}
 }
 
-// buildCoreExistsCtxFromAST gathers bpfCore type offsets and metadata needed for CO-RE exists rewrites.
+// buildCoreExistsCtxFromAST gathers bpfCore type offsets and metadata needed
+// for CO-RE exists rewrites.
 func buildCoreExistsCtxFromAST(m *ir.Module) (*coreExistsContext, error) {
 	coreTypes := make(map[string]bool)
 	for _, td := range m.TypeDefs {
@@ -490,24 +484,9 @@ func buildCoreExistsCtxFromAST(m *ir.Module) (*coreExistsContext, error) {
 		}
 	}
 
-	var fieldOffsets map[string][]int
-	var typeMeta map[string]int
-
-	if len(coreTypes) > 0 {
-		fieldOffsets = make(map[string][]int, len(coreTypes))
-		for _, td := range m.TypeDefs {
-			if !coreTypes[td.Name] {
-				continue
-			}
-			offsets, err := alignedFieldOffsets(td.Fields)
-			if err != nil {
-				return nil, fmt.Errorf("type %s: %w", td.Name, err)
-			}
-			fieldOffsets[td.Name] = offsets
-		}
-		typeMeta = findCoreTypeMetaFromAST(m, coreTypes)
-	} else {
-		fieldOffsets, typeMeta = discoverFieldOffsetsFromMeta(m)
+	types, err := discoverCoreFieldLayouts(m, coreTypes)
+	if err != nil {
+		return nil, err
 	}
 
 	fallbackIdx, err := discoverFallbackIdxFromAST(m)
@@ -516,10 +495,38 @@ func buildCoreExistsCtxFromAST(m *ir.Module) (*coreExistsContext, error) {
 	}
 
 	return &coreExistsContext{
-		fieldOffsets: fieldOffsets,
-		typeMeta:     typeMeta,
-		fallbackIdx:  fallbackIdx,
+		types:       types,
+		fallbackIdx: fallbackIdx,
 	}, nil
+}
+
+// discoverCoreFieldLayouts computes field layouts for bpfCore types using two
+// strategies tried in order:
+//  1. IR type definitions — when coreTypes is non-empty, alignedFieldOffsets
+//     computes offsets from parsed typedef fields.
+//  2. DWARF debug metadata — when no typedef exists, discoverFieldLayoutsFromMeta
+//     reads DW_TAG_member offset attributes from metadata nodes.
+func discoverCoreFieldLayouts(m *ir.Module, coreTypes map[string]bool) (map[string]FieldLayout, error) {
+	if len(coreTypes) > 0 {
+		typeMeta := findCoreTypeMetaFromAST(m, coreTypes)
+		layouts := make(map[string]FieldLayout, len(coreTypes))
+		for _, td := range m.TypeDefs {
+			if !coreTypes[td.Name] {
+				continue
+			}
+			offsets, err := alignedFieldOffsets(td.Fields)
+			if err != nil {
+				return nil, fmt.Errorf("type %s: %w", td.Name, err)
+			}
+			metaID := -1
+			if id, ok := typeMeta[td.Name]; ok {
+				metaID = id
+			}
+			layouts[td.Name] = FieldLayout{Offsets: offsets, MetaID: metaID}
+		}
+		return layouts, nil
+	}
+	return discoverFieldLayoutsFromMeta(m), nil
 }
 
 // findCoreTypeMetaFromAST maps bpfCore type names to their DICompositeType metadata IDs.
@@ -547,14 +554,13 @@ func findCoreTypeMetaFromAST(m *ir.Module, coreTypes map[string]bool) map[string
 	return meta
 }
 
-// discoverFieldOffsetsFromMeta derives bpfCore field offsets from DW_TAG_member metadata when no typedef exists.
-func discoverFieldOffsetsFromMeta(m *ir.Module) (map[string][]int, map[string]int) {
+// discoverFieldLayoutsFromMeta derives bpfCore field layouts from DW_TAG_member metadata when no typedef exists.
+func discoverFieldLayoutsFromMeta(m *ir.Module) map[string]FieldLayout {
 	metaByID := make(map[int]*ir.MetadataNode, len(m.MetadataNodes))
 	for _, mn := range m.MetadataNodes {
 		metaByID[mn.ID] = mn
 	}
-	fieldOffsets := make(map[string][]int)
-	typeMeta := make(map[string]int)
+	layouts := make(map[string]FieldLayout)
 
 	for _, mn := range m.MetadataNodes {
 		if mn.Kind != "DICompositeType" {
@@ -600,10 +606,9 @@ func discoverFieldOffsetsFromMeta(m *ir.Module) (map[string][]int, map[string]in
 			continue
 		}
 		typeName := "%" + name
-		fieldOffsets[typeName] = offsets
-		typeMeta[typeName] = mn.ID
+		layouts[typeName] = FieldLayout{Offsets: offsets, MetaID: mn.ID}
 	}
-	return fieldOffsets, typeMeta
+	return layouts
 }
 
 // resolveMetaRefsFromAST follows a metadata elements reference to collect the contained member IDs.
@@ -709,7 +714,7 @@ func buildFallbackIdxMap(offsetSet map[int]bool) map[int]int {
 
 // ensureFallbackArtifactsInModule creates a synthetic fallback type and metadata when no bpfCore typedef exists.
 func ensureFallbackArtifactsInModule(m *ir.Module, ctx *coreExistsContext) {
-	if len(ctx.fieldOffsets) != 0 || len(ctx.fallbackIdx) == 0 {
+	if len(ctx.types) != 0 || len(ctx.fallbackIdx) == 0 {
 		return
 	}
 
@@ -843,8 +848,8 @@ func buildFieldExistsAccessCall(ptrArg, typeName string, fieldIdx int, ctx *core
 	if typeName == "" && ctx.fallbackMeta > 0 {
 		callText += fmt.Sprintf(", !llvm.preserve.access.index !%d", ctx.fallbackMeta)
 	} else if typeName != "" {
-		if metaID, ok := ctx.typeMeta[typeName]; ok {
-			callText += fmt.Sprintf(", !llvm.preserve.access.index !%d", metaID)
+		if layout, ok := ctx.types[typeName]; ok && layout.MetaID >= 0 {
+			callText += fmt.Sprintf(", !llvm.preserve.access.index !%d", layout.MetaID)
 		}
 	}
 
@@ -856,7 +861,6 @@ func rewriteFieldExistsGEPInst(
 	fn *ir.Function, callInst, gepInst *ir.Instruction,
 	ptrArg, args string, ctx *coreExistsContext,
 ) (bool, error) {
-	// Extract byte offset from the GEP's last index
 	lastIdx := gepInst.GEP.Indices[len(gepInst.GEP.Indices)-1]
 	idxParts := strings.Fields(lastIdx)
 	byteOffset, _ := strconv.Atoi(idxParts[len(idxParts)-1])
@@ -874,7 +878,6 @@ func rewriteFieldExistsGEPInst(
 		}
 	}
 
-	// Rewrite the GEP instruction to a preserve_struct_access_index call
 	resolvedType := typeName
 	if usedFallback {
 		resolvedType = ctx.fallbackType
@@ -887,9 +890,9 @@ func rewriteFieldExistsGEPInst(
 	}
 	gepInst.GEP = nil
 	if !usedFallback {
-		if metaID, ok := ctx.typeMeta[typeName]; ok {
+		if layout, ok := ctx.types[typeName]; ok && layout.MetaID >= 0 {
 			gepInst.Metadata = append(gepInst.Metadata, ir.MetaAttach{
-				Key: "llvm.preserve.access.index", Value: fmt.Sprintf("!%d", metaID),
+				Key: "llvm.preserve.access.index", Value: fmt.Sprintf("!%d", layout.MetaID),
 			})
 		}
 	} else if ctx.fallbackMeta > 0 {
@@ -899,7 +902,6 @@ func rewriteFieldExistsGEPInst(
 	}
 	gepInst.Modified = true
 
-	// Rewrite the call instruction to use preserve.field.info
 	callInst.Call.Callee = "@llvm.bpf.preserve.field.info.p0"
 	callInst.Call.Args = fmt.Sprintf("%s, i64 %d", args, bpfFieldExists)
 	callInst.Modified = true
