@@ -311,6 +311,271 @@ func TestEntryTextLines(t *testing.T) {
 	}
 }
 
+func TestFindSSADefInBlocks(t *testing.T) {
+	blocks := []*ir.BasicBlock{
+		{
+			Label: "entry",
+			Instructions: []*ir.Instruction{
+				{SSAName: "%0", Kind: ir.InstAlloca, Raw: "  %0 = alloca i32"},
+				{SSAName: "%1", Kind: ir.InstOther, Raw: "  %1 = load i32, ptr %0"},
+			},
+		},
+		{
+			Label: "body",
+			Instructions: []*ir.Instruction{
+				{SSAName: "%2", Kind: ir.InstOther, Raw: "  %2 = add i32 %1, 1"},
+				{SSAName: "%3", Kind: ir.InstCall, Raw: "  %3 = call i32 @foo(i32 %2)"},
+				{SSAName: "", Kind: ir.InstOther, Raw: "  store i32 %3, ptr %0"},
+			},
+		},
+	}
+	tests := []struct {
+		name      string
+		ssaName   string
+		blockIdx  int
+		instIdx   int
+		wantFound bool
+		wantBlock int
+		wantInst  int
+	}{
+		{
+			name:      "found in same block",
+			ssaName:   "%2",
+			blockIdx:  1,
+			instIdx:   2,
+			wantFound: true,
+			wantBlock: 1,
+			wantInst:  0,
+		},
+		{
+			name:      "found in previous block",
+			ssaName:   "%1",
+			blockIdx:  1,
+			instIdx:   1,
+			wantFound: true,
+			wantBlock: 0,
+			wantInst:  1,
+		},
+		{
+			name:      "not found",
+			ssaName:   "%99",
+			blockIdx:  1,
+			instIdx:   2,
+			wantFound: false,
+			wantBlock: -1,
+			wantInst:  -1,
+		},
+		{
+			name:      "window limit",
+			ssaName:   "%0",
+			blockIdx:  1,
+			instIdx:   2,
+			wantFound: true,
+			wantBlock: 0,
+			wantInst:  0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst, pos := findSSADefInBlocks(blocks, tt.ssaName, tt.blockIdx, tt.instIdx)
+			if tt.wantFound {
+				if inst == nil {
+					t.Fatalf("findSSADefInBlocks(_, %q, %d, %d) returned nil, want non-nil",
+						tt.ssaName, tt.blockIdx, tt.instIdx)
+				}
+				if pos.block != tt.wantBlock || pos.inst != tt.wantInst {
+					t.Errorf("findSSADefInBlocks(_, %q, %d, %d) pos = {%d, %d}, want {%d, %d}",
+						tt.ssaName, tt.blockIdx, tt.instIdx, pos.block, pos.inst, tt.wantBlock, tt.wantInst)
+				}
+			} else {
+				if inst != nil {
+					t.Errorf("findSSADefInBlocks(_, %q, %d, %d) = non-nil, want nil",
+						tt.ssaName, tt.blockIdx, tt.instIdx)
+				}
+				if pos.block != -1 || pos.inst != -1 {
+					t.Errorf("findSSADefInBlocks(_, %q, %d, %d) pos = {%d, %d}, want {-1, -1}",
+						tt.ssaName, tt.blockIdx, tt.instIdx, pos.block, pos.inst)
+				}
+			}
+		})
+	}
+}
+
+func TestRenameInFunction(t *testing.T) {
+	tests := []struct {
+		name    string
+		fn      *ir.Function
+		old     string
+		new     string
+		wantRaw string
+		wantInst string // expected Raw of first instruction in first block
+	}{
+		{
+			name: "rename in define line",
+			fn: &ir.Function{
+				Raw:    "define i32 @old_func(ptr %ctx) {",
+				Blocks: []*ir.BasicBlock{{Label: "entry", Instructions: []*ir.Instruction{}}},
+			},
+			old:     "@old_func",
+			new:     "@new_func",
+			wantRaw: "define i32 @new_func(ptr %ctx) {",
+		},
+		{
+			name: "rename in instruction Raw",
+			fn: &ir.Function{
+				Raw: "define void @caller() {",
+				Blocks: []*ir.BasicBlock{
+					{
+						Label: "entry",
+						Instructions: []*ir.Instruction{
+							{Kind: ir.InstOther, Raw: "  call void @old_func()"},
+						},
+					},
+				},
+			},
+			old:      "@old_func",
+			new:      "@new_func",
+			wantRaw:  "define void @caller() {",
+			wantInst: "  call void @new_func()",
+		},
+		{
+			name: "rename in modified instruction AST fields",
+			fn: &ir.Function{
+				Raw: "define void @caller() {",
+				Blocks: []*ir.BasicBlock{
+					{
+						Label: "entry",
+						Instructions: []*ir.Instruction{
+							{
+								Kind:     ir.InstCall,
+								Modified: true,
+								Raw:      "  call void @old_func(ptr @old_func)",
+								Call: &ir.CallInst{
+									RetType: "void",
+									Callee:  "@old_func",
+									Args:    "ptr @old_func",
+								},
+							},
+						},
+					},
+				},
+			},
+			old:      "@old_func",
+			new:      "@new_func",
+			wantRaw:  "define void @caller() {",
+			wantInst: "  call void @new_func(ptr @new_func)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			renameInFunction(tt.fn, tt.old, tt.new)
+			if tt.fn.Raw != tt.wantRaw {
+				t.Errorf("fn.Raw = %q, want %q", tt.fn.Raw, tt.wantRaw)
+			}
+			if tt.wantInst != "" {
+				inst := tt.fn.Blocks[0].Instructions[0]
+				if inst.Raw != tt.wantInst {
+					t.Errorf("inst.Raw = %q, want %q", inst.Raw, tt.wantInst)
+				}
+			}
+			// Check AST fields were updated for modified instructions
+			if tt.name == "rename in modified instruction AST fields" {
+				call := tt.fn.Blocks[0].Instructions[0].Call
+				if call.Callee != "@new_func" {
+					t.Errorf("Call.Callee = %q, want %q", call.Callee, "@new_func")
+				}
+				if call.Args != "ptr @new_func" {
+					t.Errorf("Call.Args = %q, want %q", call.Args, "ptr @new_func")
+				}
+			}
+		})
+	}
+}
+
+func TestRenameInInstruction(t *testing.T) {
+	tests := []struct {
+		name     string
+		inst     *ir.Instruction
+		old      string
+		new      string
+		wantRaw  string
+		checkAST func(t *testing.T, inst *ir.Instruction)
+	}{
+		{
+			name:    "unmodified instruction updates Raw",
+			inst:    &ir.Instruction{Kind: ir.InstOther, Raw: "  call void @old_fn()"},
+			old:     "@old_fn",
+			new:     "@new_fn",
+			wantRaw: "  call void @new_fn()",
+		},
+		{
+			name: "modified InstCall updates Callee and Args",
+			inst: &ir.Instruction{
+				Kind:     ir.InstCall,
+				Modified: true,
+				Raw:      "  call void @old_fn(ptr @old_fn)",
+				Call: &ir.CallInst{
+					RetType: "void",
+					Callee:  "@old_fn",
+					Args:    "ptr @old_fn",
+				},
+			},
+			old:     "@old_fn",
+			new:     "@new_fn",
+			wantRaw: "  call void @new_fn(ptr @new_fn)",
+			checkAST: func(t *testing.T, inst *ir.Instruction) {
+				if inst.Call.Callee != "@new_fn" {
+					t.Errorf("Call.Callee = %q, want %q", inst.Call.Callee, "@new_fn")
+				}
+				if inst.Call.Args != "ptr @new_fn" {
+					t.Errorf("Call.Args = %q, want %q", inst.Call.Args, "ptr @new_fn")
+				}
+			},
+		},
+		{
+			name: "modified InstGEP updates Base",
+			inst: &ir.Instruction{
+				Kind:     ir.InstGEP,
+				Modified: true,
+				Raw:      "  %1 = getelementptr inbounds i8, ptr @old_global, i32 0",
+				GEP: &ir.GEPInst{
+					Inbounds: true,
+					BaseType: "i8",
+					PtrType:  "ptr",
+					Base:     "@old_global",
+					Indices:  []string{"i32 0"},
+				},
+			},
+			old:     "@old_global",
+			new:     "@new_global",
+			wantRaw: "  %1 = getelementptr inbounds i8, ptr @new_global, i32 0",
+			checkAST: func(t *testing.T, inst *ir.Instruction) {
+				if inst.GEP.Base != "@new_global" {
+					t.Errorf("GEP.Base = %q, want %q", inst.GEP.Base, "@new_global")
+				}
+			},
+		},
+		{
+			name:    "instruction without match no change",
+			inst:    &ir.Instruction{Kind: ir.InstOther, Raw: "  ret void"},
+			old:     "@nonexistent",
+			new:     "@replacement",
+			wantRaw: "  ret void",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			renameInInstruction(tt.inst, tt.old, tt.new)
+			if tt.inst.Raw != tt.wantRaw {
+				t.Errorf("inst.Raw = %q, want %q", tt.inst.Raw, tt.wantRaw)
+			}
+			if tt.checkAST != nil {
+				tt.checkAST(t, tt.inst)
+			}
+		})
+	}
+}
+
 func TestExtractQuotedName(t *testing.T) {
 	tests := []struct {
 		input    string

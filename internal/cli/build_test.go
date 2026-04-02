@@ -48,24 +48,39 @@ func TestRunBuild(t *testing.T) {
 }
 
 func TestRunBuildHappyPath(t *testing.T) {
-	ir := testIR("my_prog")
-	dir := t.TempDir()
-	toolDir := fakeToolDir(t)
-
-	irFile := filepath.Join(dir, "program.ll")
-	if err := os.WriteFile(irFile, []byte(ir), 0o644); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name       string
+		funcName   string
+		wantStdout string
+	}{
+		{
+			name:       "link produces output file",
+			funcName:   "my_prog",
+			wantStdout: "wrote",
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ir := testIR(tt.funcName)
+			dir := t.TempDir()
+			toolDir := fakeToolDir(t)
 
-	args := append([]string{
-		"link", "--input", irFile, "--output", filepath.Join(dir, "out.o"), "--verbose",
-	}, fakeLLVMArgs(toolDir)...)
+			irFile := filepath.Join(dir, "program.ll")
+			if err := os.WriteFile(irFile, []byte(ir), 0o644); err != nil {
+				t.Fatal(err)
+			}
 
-	stdout, stderr, code := runCLI(t, args...)
-	if code != 0 {
-		t.Fatalf("exit code: got %d, want 0, stderr=%s", code, stderr)
-	}
-	if !strings.Contains(stdout, "wrote") {
-		t.Fatalf("expected 'wrote' in stdout, got: %s", stdout)
+			args := append([]string{
+				"link", "--input", irFile, "--output", filepath.Join(dir, "out.o"), "--verbose",
+			}, fakeLLVMArgs(toolDir)...)
+
+			stdout, stderr, code := runCLI(t, args...)
+			if code != 0 {
+				t.Fatalf("exit code: got %d, want 0, stderr=%s", code, stderr)
+			}
+			if !strings.Contains(stdout, tt.wantStdout) {
+				t.Fatalf("expected %q in stdout, got: %s", tt.wantStdout, stdout)
+			}
+		})
 	}
 }

@@ -39,53 +39,119 @@ func TestBuildModuleStagesOrder(t *testing.T) {
 }
 
 func TestModuleRewriteModule(t *testing.T) {
-	ag := &ir.AttrGroup{
-		ID:   "0",
-		Body: `{ "target-cpu"="generic" nounwind }`,
+	tests := []struct {
+		name       string
+		triple     string
+		dataLayout string
+		attrBody   string
+		wantTriple string
+		wantStrip  string
+	}{
+		{
+			name:       "retargets and strips target-cpu",
+			triple:     "x86_64-unknown-linux-gnu",
+			dataLayout: "e-m:o",
+			attrBody:   `{ "target-cpu"="generic" nounwind }`,
+			wantTriple: "bpf",
+			wantStrip:  "target-cpu",
+		},
 	}
-	m := &ir.Module{
-		Triple:     "x86_64-unknown-linux-gnu",
-		DataLayout: "e-m:o",
-		AttrGroups: []*ir.AttrGroup{ag},
-	}
-	if err := moduleRewriteModule(m); err != nil {
-		t.Fatal(err)
-	}
-	if m.Triple != "bpf" {
-		t.Errorf("triple = %q, want %q", m.Triple, "bpf")
-	}
-	if strings.Contains(ag.Body, "target-cpu") {
-		t.Error("target-cpu not stripped")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ag := &ir.AttrGroup{
+				ID:   "0",
+				Body: tt.attrBody,
+			}
+			m := &ir.Module{
+				Triple:     tt.triple,
+				DataLayout: tt.dataLayout,
+				AttrGroups: []*ir.AttrGroup{ag},
+			}
+			if err := moduleRewriteModule(m); err != nil {
+				t.Fatal(err)
+			}
+			if m.Triple != tt.wantTriple {
+				t.Errorf("triple = %q, want %q", m.Triple, tt.wantTriple)
+			}
+			if strings.Contains(ag.Body, tt.wantStrip) {
+				t.Errorf("%s not stripped", tt.wantStrip)
+			}
+		})
 	}
 }
 
 func TestRetargetModule(t *testing.T) {
-	m := &ir.Module{Triple: "x86_64-unknown-linux-gnu", DataLayout: "e-m:o"}
-	if err := retargetModule(m); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name       string
+		triple     string
+		dataLayout string
+		wantTriple string
+	}{
+		{
+			name:       "x86 to bpf",
+			triple:     "x86_64-unknown-linux-gnu",
+			dataLayout: "e-m:o",
+			wantTriple: "bpf",
+		},
+		{
+			name:       "already bpf",
+			triple:     "bpf",
+			dataLayout: "",
+			wantTriple: "bpf",
+		},
 	}
-	if m.Triple != "bpf" {
-		t.Errorf("triple = %q, want %q", m.Triple, "bpf")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{Triple: tt.triple, DataLayout: tt.dataLayout}
+			if err := retargetModule(m); err != nil {
+				t.Fatal(err)
+			}
+			if m.Triple != tt.wantTriple {
+				t.Errorf("triple = %q, want %q", m.Triple, tt.wantTriple)
+			}
+		})
 	}
 }
 
 func TestStripAttributesModule(t *testing.T) {
-	ag := &ir.AttrGroup{
-		ID:   "0",
-		Body: `{ "target-cpu"="generic" "target-features"="+neon" nounwind }`,
+	tests := []struct {
+		name         string
+		attrBody     string
+		wantAbsent   []string
+		wantModified bool
+	}{
+		{
+			name:         "strips target-cpu and target-features",
+			attrBody:     `{ "target-cpu"="generic" "target-features"="+neon" nounwind }`,
+			wantAbsent:   []string{"target-cpu", "target-features"},
+			wantModified: true,
+		},
+		{
+			name:         "no target attrs leaves body unchanged",
+			attrBody:     `{ nounwind }`,
+			wantAbsent:   []string{"target-cpu", "target-features"},
+			wantModified: false,
+		},
 	}
-	m := &ir.Module{AttrGroups: []*ir.AttrGroup{ag}}
-	if err := stripAttributesModule(m); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(ag.Body, "target-cpu") {
-		t.Error("target-cpu not stripped")
-	}
-	if strings.Contains(ag.Body, "target-features") {
-		t.Error("target-features not stripped")
-	}
-	if !ag.Modified {
-		t.Error("expected Modified = true")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ag := &ir.AttrGroup{
+				ID:   "0",
+				Body: tt.attrBody,
+			}
+			m := &ir.Module{AttrGroups: []*ir.AttrGroup{ag}}
+			if err := stripAttributesModule(m); err != nil {
+				t.Fatal(err)
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(ag.Body, absent) {
+					t.Errorf("%s not stripped", absent)
+				}
+			}
+			if ag.Modified != tt.wantModified {
+				t.Errorf("Modified = %v, want %v", ag.Modified, tt.wantModified)
+			}
+		})
 	}
 }
 
@@ -143,71 +209,111 @@ func TestBuildProgramSet(t *testing.T) {
 }
 
 func TestMarkRuntimeGlobalsRemoved(t *testing.T) {
-	rt := &ir.Global{Name: "runtime.scheduler"}
-	str := &ir.Global{Name: ".string"}
-	core := &ir.Global{Name: "__bpf_core_foo"}
-	user := &ir.Global{Name: "my_global"}
-	m := &ir.Module{
-		Globals: []*ir.Global{rt, str, core, user},
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopGlobal, Global: rt},
-			{Kind: ir.TopGlobal, Global: str},
-			{Kind: ir.TopGlobal, Global: core},
-			{Kind: ir.TopGlobal, Global: user},
+	tests := []struct {
+		name        string
+		globalNames []string
+		wantRemoved []bool
+	}{
+		{
+			name:        "removes runtime, string, and core globals but keeps user globals",
+			globalNames: []string{"runtime.scheduler", ".string", "__bpf_core_foo", "my_global"},
+			wantRemoved: []bool{true, true, true, false},
 		},
 	}
-	markRuntimeGlobalsRemoved(m)
-	if !m.Entries[0].Removed {
-		t.Error("runtime.scheduler should be removed")
-	}
-	if !m.Entries[1].Removed {
-		t.Error(".string should be removed")
-	}
-	if !m.Entries[2].Removed {
-		t.Error("__bpf_core_foo should be removed")
-	}
-	if m.Entries[3].Removed {
-		t.Error("my_global should not be removed")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var globals []*ir.Global
+			var entries []ir.TopLevelEntry
+			for _, name := range tt.globalNames {
+				g := &ir.Global{Name: name}
+				globals = append(globals, g)
+				entries = append(entries, ir.TopLevelEntry{Kind: ir.TopGlobal, Global: g})
+			}
+			m := &ir.Module{Globals: globals, Entries: entries}
+			markRuntimeGlobalsRemoved(m)
+			for i, want := range tt.wantRemoved {
+				if m.Entries[i].Removed != want {
+					t.Errorf("%s: Removed = %v, want %v", tt.globalNames[i], m.Entries[i].Removed, want)
+				}
+			}
+		})
 	}
 }
 
 func TestMarkGlobalRemoved(t *testing.T) {
-	g := &ir.Global{Name: "runtime.scheduler"}
-	m := &ir.Module{
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopGlobal, Global: g},
-			{Kind: ir.TopFunction},
+	tests := []struct {
+		name         string
+		globalName   string
+		wantRemoved0 bool
+		wantRemoved1 bool
+	}{
+		{
+			name:         "marks matching global entry removed",
+			globalName:   "runtime.scheduler",
+			wantRemoved0: true,
+			wantRemoved1: false,
 		},
 	}
-	markGlobalRemoved(m, g)
-	if !m.Entries[0].Removed {
-		t.Error("expected entry 0 to be removed")
-	}
-	if m.Entries[1].Removed {
-		t.Error("entry 1 should not be removed")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := &ir.Global{Name: tt.globalName}
+			m := &ir.Module{
+				Entries: []ir.TopLevelEntry{
+					{Kind: ir.TopGlobal, Global: g},
+					{Kind: ir.TopFunction},
+				},
+			}
+			markGlobalRemoved(m, g)
+			if m.Entries[0].Removed != tt.wantRemoved0 {
+				t.Errorf("entry 0 Removed = %v, want %v", m.Entries[0].Removed, tt.wantRemoved0)
+			}
+			if m.Entries[1].Removed != tt.wantRemoved1 {
+				t.Errorf("entry 1 Removed = %v, want %v", m.Entries[1].Removed, tt.wantRemoved1)
+			}
+		})
 	}
 }
 
 func TestReplaceAllocMultiError(t *testing.T) {
-	fn := &ir.Function{
-		Name: "f",
-		BodyRaw: []string{
-			"entry:",
-			"  call void @runtime.alloc(badpattern1)",
-			"  call void @runtime.alloc(badpattern2)",
+	tests := []struct {
+		name      string
+		bodyRaw   []string
+		wantErrs  int
+		wantError bool
+	}{
+		{
+			name: "two bad patterns produce two errors",
+			bodyRaw: []string{
+				"entry:",
+				"  call void @runtime.alloc(badpattern1)",
+				"  call void @runtime.alloc(badpattern2)",
+			},
+			wantErrs:  2,
+			wantError: true,
 		},
 	}
-	m := &ir.Module{Functions: []*ir.Function{fn}}
-	err := replaceAllocModule(m)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	var merr *diag.Errors
-	if !errors.As(err, &merr) {
-		t.Fatalf("expected *diag.Errors, got %T", err)
-	}
-	if len(merr.Errs) != 2 {
-		t.Fatalf("expected 2 errors, got %d", len(merr.Errs))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fn := &ir.Function{Name: "f", BodyRaw: tt.bodyRaw}
+			m := &ir.Module{Functions: []*ir.Function{fn}}
+			err := replaceAllocModule(m)
+			if !tt.wantError {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			var merr *diag.Errors
+			if !errors.As(err, &merr) {
+				t.Fatalf("expected *diag.Errors, got %T", err)
+			}
+			if len(merr.Errs) != tt.wantErrs {
+				t.Fatalf("expected %d errors, got %d", tt.wantErrs, len(merr.Errs))
+			}
+		})
 	}
 }
 
@@ -316,9 +422,24 @@ func TestRewriteHelpersMultiError(t *testing.T) {
 }
 
 func TestCorePassModule(t *testing.T) {
-	m := &ir.Module{}
-	if err := corePassModule(m); err != nil {
-		t.Fatalf("corePassModule on empty module: %v", err)
+	tests := []struct {
+		name    string
+		module  *ir.Module
+		wantErr bool
+	}{
+		{
+			name:    "empty module succeeds",
+			module:  &ir.Module{},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := corePassModule(tt.module)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("corePassModule() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -435,33 +556,59 @@ func TestFindMaxMetaIDFromModule(t *testing.T) {
 }
 
 func TestAppendMetaEntryToModule(t *testing.T) {
-	m := &ir.Module{}
-	appendMetaEntryToModule(m, "!0 = !{}")
-	if len(m.Entries) != 1 || m.Entries[0].Raw != "!0 = !{}" {
-		t.Errorf("unexpected entries: %v", m.Entries)
+	tests := []struct {
+		name    string
+		raw     string
+		wantLen int
+		wantRaw string
+	}{
+		{
+			name:    "appends single metadata entry",
+			raw:     "!0 = !{}",
+			wantLen: 1,
+			wantRaw: "!0 = !{}",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{}
+			appendMetaEntryToModule(m, tt.raw)
+			if len(m.Entries) != tt.wantLen || m.Entries[0].Raw != tt.wantRaw {
+				t.Errorf("unexpected entries: %v", m.Entries)
+			}
+		})
 	}
 }
 
 func TestStripCoreExistsDeclsFromModule(t *testing.T) {
-	fieldDecl := &ir.Declare{Name: "main.bpfCoreFieldExists"}
-	typeDecl := &ir.Declare{Name: "main.bpfCoreTypeExists"}
-	otherDecl := &ir.Declare{Name: "main.bpfGetCurrentPidTgid"}
-	m := &ir.Module{
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopDeclare, Declare: fieldDecl},
-			{Kind: ir.TopDeclare, Declare: typeDecl},
-			{Kind: ir.TopDeclare, Declare: otherDecl},
+	tests := []struct {
+		name        string
+		declNames   []string
+		wantRemoved []bool
+	}{
+		{
+			name:        "strips core exists decls but keeps others",
+			declNames:   []string{"main.bpfCoreFieldExists", "main.bpfCoreTypeExists", "main.bpfGetCurrentPidTgid"},
+			wantRemoved: []bool{true, true, false},
 		},
 	}
-	stripCoreExistsDeclsFromModule(m)
-	if !m.Entries[0].Removed {
-		t.Error("bpfCoreFieldExists not removed")
-	}
-	if !m.Entries[1].Removed {
-		t.Error("bpfCoreTypeExists not removed")
-	}
-	if m.Entries[2].Removed {
-		t.Error("unrelated declare should not be removed")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var entries []ir.TopLevelEntry
+			for _, name := range tt.declNames {
+				entries = append(entries, ir.TopLevelEntry{
+					Kind:    ir.TopDeclare,
+					Declare: &ir.Declare{Name: name},
+				})
+			}
+			m := &ir.Module{Entries: entries}
+			stripCoreExistsDeclsFromModule(m)
+			for i, want := range tt.wantRemoved {
+				if m.Entries[i].Removed != want {
+					t.Errorf("%s: Removed = %v, want %v", tt.declNames[i], m.Entries[i].Removed, want)
+				}
+			}
+		})
 	}
 }
 
@@ -519,25 +666,53 @@ func TestAddIntrinsicDeclToModule(t *testing.T) {
 }
 
 func TestSectionsPassModule(t *testing.T) {
-	fn := &ir.Function{Name: "probe_connect", Raw: "define i32 @probe_connect() {"}
-	g := &ir.Global{Name: "counter", Linkage: "global", Initializer: "0", Raw: "@counter = global i32 0"}
-	m := &ir.Module{
-		Globals:   []*ir.Global{g},
-		Functions: []*ir.Function{fn},
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopGlobal, Global: g, Raw: g.Raw},
-			{Kind: ir.TopFunction, Function: fn, Raw: fn.Raw},
+	tests := []struct {
+		name           string
+		funcName       string
+		funcRaw        string
+		globalName     string
+		globalLinkage  string
+		globalInit     string
+		globalRaw      string
+		sections       map[string]string
+		wantGlobalSect string
+		wantFuncHasSec bool
+	}{
+		{
+			name:           "assigns sections to globals and functions",
+			funcName:       "probe_connect",
+			funcRaw:        "define i32 @probe_connect() {",
+			globalName:     "counter",
+			globalLinkage:  "global",
+			globalInit:     "0",
+			globalRaw:      "@counter = global i32 0",
+			sections:       map[string]string{"probe_connect": "tracepoint/tcp/tcp_connect"},
+			wantGlobalSect: ".data",
+			wantFuncHasSec: true,
 		},
 	}
-	sections := map[string]string{"probe_connect": "tracepoint/tcp/tcp_connect"}
-	if err := sectionsPassModule(m, sections); err != nil {
-		t.Fatal(err)
-	}
-	if g.Section != ".data" {
-		t.Errorf("global section = %q, want %q", g.Section, ".data")
-	}
-	if !strings.Contains(fn.Raw, "section") {
-		t.Error("function should have a section after sectionsPassModule")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fn := &ir.Function{Name: tt.funcName, Raw: tt.funcRaw}
+			g := &ir.Global{Name: tt.globalName, Linkage: tt.globalLinkage, Initializer: tt.globalInit, Raw: tt.globalRaw}
+			m := &ir.Module{
+				Globals:   []*ir.Global{g},
+				Functions: []*ir.Function{fn},
+				Entries: []ir.TopLevelEntry{
+					{Kind: ir.TopGlobal, Global: g, Raw: g.Raw},
+					{Kind: ir.TopFunction, Function: fn, Raw: fn.Raw},
+				},
+			}
+			if err := sectionsPassModule(m, tt.sections); err != nil {
+				t.Fatal(err)
+			}
+			if g.Section != tt.wantGlobalSect {
+				t.Errorf("global section = %q, want %q", g.Section, tt.wantGlobalSect)
+			}
+			if tt.wantFuncHasSec && !strings.Contains(fn.Raw, "section") {
+				t.Error("function should have a section after sectionsPassModule")
+			}
+		})
 	}
 }
 
@@ -564,9 +739,24 @@ func TestClassifyGlobalSectionFromAST(t *testing.T) {
 }
 
 func TestMapBTFPassModule(t *testing.T) {
-	m := &ir.Module{}
-	if err := mapBTFPassModule(m); err != nil {
-		t.Fatalf("mapBTFPassModule on empty module: %v", err)
+	tests := []struct {
+		name    string
+		module  *ir.Module
+		wantErr bool
+	}{
+		{
+			name:    "empty module succeeds",
+			module:  &ir.Module{},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := mapBTFPassModule(tt.module)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("mapBTFPassModule() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
 	}
 }
 
@@ -610,27 +800,56 @@ func TestCollectMapRenames(t *testing.T) {
 }
 
 func TestApplyRenames(t *testing.T) {
-	fn := &ir.Function{
-		Raw:     "define i32 @f(ptr @main.events) {",
-		BodyRaw: []string{"  store ptr @main.events, ptr %0"},
-	}
-	m := &ir.Module{
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopGlobal, Raw: `@main.events = global i32 0`},
-			{Kind: ir.TopFunction, Function: fn, Raw: fn.Raw},
+	tests := []struct {
+		name       string
+		entryRaw   string
+		funcRaw    string
+		bodyRaw    []string
+		renames    []mapRename
+		wantInEntry string
+		wantAbsent  string
+	}{
+		{
+			name:        "renames refs in entries, function, and body",
+			entryRaw:    `@main.events = global i32 0`,
+			funcRaw:     "define i32 @f(ptr @main.events) {",
+			bodyRaw:     []string{"  store ptr @main.events, ptr %0"},
+			renames:     []mapRename{{oldRef: "@main.events", newRef: "@events"}},
+			wantInEntry: "@events",
+			wantAbsent:  "@main.events",
 		},
 	}
-	renames := []mapRename{{oldRef: "@main.events", newRef: "@events"}}
-	applyRenames(m, renames)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fn := &ir.Function{
+				Raw:     tt.funcRaw,
+				BodyRaw: tt.bodyRaw,
+			}
+			m := &ir.Module{
+				Entries: []ir.TopLevelEntry{
+					{Kind: ir.TopGlobal, Raw: tt.entryRaw},
+					{Kind: ir.TopFunction, Function: fn, Raw: fn.Raw},
+				},
+			}
+			applyRenames(m, tt.renames)
 
-	if !strings.Contains(m.Entries[0].Raw, "@events") {
-		t.Error("entry raw not renamed")
-	}
-	if strings.Contains(fn.Raw, "@main.events") {
-		t.Error("function raw not renamed")
-	}
-	if strings.Contains(fn.BodyRaw[0], "@main.events") {
-		t.Error("function body not renamed")
+			if !strings.Contains(m.Entries[0].Raw, tt.wantInEntry) {
+				t.Error("entry raw not renamed")
+			}
+			if strings.Contains(fn.Raw, tt.wantAbsent) {
+				t.Error("function raw not renamed")
+			}
+			if len(fn.Blocks) == 0 {
+				t.Fatal("expected blocks to be populated")
+			}
+			for _, block := range fn.Blocks {
+				for _, inst := range block.Instructions {
+					if strings.Contains(inst.Raw, tt.wantAbsent) {
+						t.Error("instruction body not renamed")
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -722,92 +941,162 @@ func TestCollectMapDefs(t *testing.T) {
 }
 
 func TestCollectMapDefsMultiError(t *testing.T) {
-	m := &ir.Module{
-		Entries: []ir.TopLevelEntry{
-			{
-				Kind:   ir.TopGlobal,
-				Global: &ir.Global{Name: "map_a"},
-				Raw:    `@map_a = global %main.bpfMapDef { i32 1, i32 2 }, section ".maps"`,
+	tests := []struct {
+		name     string
+		entries  []ir.TopLevelEntry
+		fc       int
+		wantErrs int
+	}{
+		{
+			name: "two malformed maps produce two errors",
+			entries: []ir.TopLevelEntry{
+				{
+					Kind:   ir.TopGlobal,
+					Global: &ir.Global{Name: "map_a"},
+					Raw:    `@map_a = global %main.bpfMapDef { i32 1, i32 2 }, section ".maps"`,
+				},
+				{
+					Kind:   ir.TopGlobal,
+					Global: &ir.Global{Name: "map_b"},
+					Raw:    `@map_b = global %main.bpfMapDef { i32 1, i32 2, i32 3 }, section ".maps"`,
+				},
 			},
-			{
-				Kind:   ir.TopGlobal,
-				Global: &ir.Global{Name: "map_b"},
-				Raw:    `@map_b = global %main.bpfMapDef { i32 1, i32 2, i32 3 }, section ".maps"`,
-			},
+			fc:       5,
+			wantErrs: 2,
 		},
 	}
-	_, err := collectMapDefs(m, 5)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	var merr *diag.Errors
-	if !errors.As(err, &merr) {
-		t.Fatalf("expected *diag.Errors, got %T", err)
-	}
-	if len(merr.Errs) != 2 {
-		t.Fatalf("expected 2 errors, got %d: %v", len(merr.Errs), merr.Errs)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{Entries: tt.entries}
+			_, err := collectMapDefs(m, tt.fc)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			var merr *diag.Errors
+			if !errors.As(err, &merr) {
+				t.Fatalf("expected *diag.Errors, got %T", err)
+			}
+			if len(merr.Errs) != tt.wantErrs {
+				t.Fatalf("expected %d errors, got %d: %v", tt.wantErrs, len(merr.Errs), merr.Errs)
+			}
+		})
 	}
 }
 
 func TestCollectCoreStructMetaIDs(t *testing.T) {
-	m := &ir.Module{
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopMetadata, Raw: `!5 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", elements: !6)`},
-			{Kind: ir.TopMetadata, Raw: `!6 = !{!7}`},
-			{Kind: ir.TopMetadata, Raw: `!7 = !DIDerivedType(tag: DW_TAG_member, name: "Pid")`},
+	tests := []struct {
+		name       string
+		entries    []ir.TopLevelEntry
+		wantIn     []int
+		wantNotIn  []int
+	}{
+		{
+			name: "collects core struct IDs only",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopMetadata, Raw: `!5 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", elements: !6)`},
+				{Kind: ir.TopMetadata, Raw: `!6 = !{!7}`},
+				{Kind: ir.TopMetadata, Raw: `!7 = !DIDerivedType(tag: DW_TAG_member, name: "Pid")`},
+			},
+			wantIn:    []int{5},
+			wantNotIn: []int{6, 7},
 		},
 	}
-	ids := collectCoreStructMetaIDs(m)
-	if !ids[5] {
-		t.Error("expected ID 5 in core struct meta IDs")
-	}
-	if ids[6] || ids[7] {
-		t.Error("non-core-struct entries should not be included")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{Entries: tt.entries}
+			ids := collectCoreStructMetaIDs(m)
+			for _, id := range tt.wantIn {
+				if !ids[id] {
+					t.Errorf("expected ID %d in core struct meta IDs", id)
+				}
+			}
+			for _, id := range tt.wantNotIn {
+				if ids[id] {
+					t.Errorf("ID %d should not be in core struct meta IDs", id)
+				}
+			}
+		})
 	}
 }
 
 func TestCollectCoreMemberIDs(t *testing.T) {
-	m := &ir.Module{
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopMetadata, Raw: `!5 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", elements: !6)`},
-			{Kind: ir.TopMetadata, Raw: `!6 = !{!7, !8}`},
+	tests := []struct {
+		name    string
+		entries []ir.TopLevelEntry
+		wantIn  []int
+	}{
+		{
+			name: "collects elements ref ID",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopMetadata, Raw: `!5 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", elements: !6)`},
+				{Kind: ir.TopMetadata, Raw: `!6 = !{!7, !8}`},
+			},
+			wantIn: []int{6},
 		},
 	}
-	ids := collectCoreMemberIDs(m)
-	if !ids[6] {
-		t.Error("expected ID 6 in core member IDs")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{Entries: tt.entries}
+			ids := collectCoreMemberIDs(m)
+			for _, id := range tt.wantIn {
+				if !ids[id] {
+					t.Errorf("expected ID %d in core member IDs", id)
+				}
+			}
+		})
 	}
 }
 
 func TestFinalizeModule(t *testing.T) {
-	fn := &ir.Function{Name: "my_func", Raw: "define i32 @my_func() {"}
-	orphanDecl := &ir.Declare{Name: "unused_func", Raw: "declare void @unused_func()"}
-	m := &ir.Module{
-		Functions: []*ir.Function{fn},
-		Declares:  []*ir.Declare{orphanDecl},
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopDeclare, Declare: orphanDecl, Raw: orphanDecl.Raw},
-			{Kind: ir.TopBlank, Raw: ""},
-			{Kind: ir.TopFunction, Function: fn, Raw: fn.Raw},
-			{Kind: ir.TopBlank, Raw: ""},
+	tests := []struct {
+		name             string
+		funcName         string
+		orphanDeclName   string
+		wantLicense      bool
+		wantOrphanGone   bool
+	}{
+		{
+			name:           "adds license and removes orphan declares",
+			funcName:       "my_func",
+			orphanDeclName: "unused_func",
+			wantLicense:    true,
+			wantOrphanGone: true,
 		},
 	}
-	if err := finalizeModule(m); err != nil {
-		t.Fatal(err)
-	}
-	hasLicense := false
-	for _, g := range m.Globals {
-		if g.Section == "license" {
-			hasLicense = true
-		}
-	}
-	if !hasLicense {
-		t.Error("expected license global after finalizeModule")
-	}
-	for _, e := range m.Entries {
-		if e.Kind == ir.TopDeclare && !e.Removed && e.Declare != nil && e.Declare.Name == "unused_func" {
-			t.Error("unreferenced declare should be cleaned up")
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fn := &ir.Function{Name: tt.funcName, Raw: "define i32 @" + tt.funcName + "() {"}
+			orphanDecl := &ir.Declare{Name: tt.orphanDeclName, Raw: "declare void @" + tt.orphanDeclName + "()"}
+			m := &ir.Module{
+				Functions: []*ir.Function{fn},
+				Declares:  []*ir.Declare{orphanDecl},
+				Entries: []ir.TopLevelEntry{
+					{Kind: ir.TopDeclare, Declare: orphanDecl, Raw: orphanDecl.Raw},
+					{Kind: ir.TopBlank, Raw: ""},
+					{Kind: ir.TopFunction, Function: fn, Raw: fn.Raw},
+					{Kind: ir.TopBlank, Raw: ""},
+				},
+			}
+			if err := finalizeModule(m); err != nil {
+				t.Fatal(err)
+			}
+			hasLicense := false
+			for _, g := range m.Globals {
+				if g.Section == "license" {
+					hasLicense = true
+				}
+			}
+			if hasLicense != tt.wantLicense {
+				t.Errorf("license present = %v, want %v", hasLicense, tt.wantLicense)
+			}
+			if tt.wantOrphanGone {
+				for _, e := range m.Entries {
+					if e.Kind == ir.TopDeclare && !e.Removed && e.Declare != nil && e.Declare.Name == tt.orphanDeclName {
+						t.Error("unreferenced declare should be cleaned up")
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -852,87 +1141,147 @@ func TestAddLicenseModule(t *testing.T) {
 }
 
 func TestRemoveUnreferencedDeclares(t *testing.T) {
-	fn := &ir.Function{Name: "f", Raw: "define i32 @f() { call void @used() }"}
-	used := &ir.Declare{Name: "used", Raw: "declare void @used()"}
-	unused := &ir.Declare{Name: "unused", Raw: "declare void @unused()"}
-	m := &ir.Module{
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopDeclare, Declare: used, Raw: used.Raw},
-			{Kind: ir.TopDeclare, Declare: unused, Raw: unused.Raw},
-			{Kind: ir.TopFunction, Function: fn, Raw: fn.Raw},
+	tests := []struct {
+		name         string
+		funcRaw      string
+		usedName     string
+		unusedName   string
+		wantUsedKept bool
+		wantUnusedRM bool
+	}{
+		{
+			name:         "keeps referenced and removes unreferenced declares",
+			funcRaw:      "define i32 @f() { call void @used() }",
+			usedName:     "used",
+			unusedName:   "unused",
+			wantUsedKept: true,
+			wantUnusedRM: true,
 		},
 	}
-	refs := buildModuleIdentRefs(m)
-	removeUnreferencedDeclares(m, refs)
-	if m.Entries[0].Removed {
-		t.Error("used declare should not be removed")
-	}
-	if !m.Entries[1].Removed {
-		t.Error("unused declare should be removed")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fn := &ir.Function{Name: "f", Raw: tt.funcRaw}
+			used := &ir.Declare{Name: tt.usedName, Raw: "declare void @" + tt.usedName + "()"}
+			unused := &ir.Declare{Name: tt.unusedName, Raw: "declare void @" + tt.unusedName + "()"}
+			m := &ir.Module{
+				Entries: []ir.TopLevelEntry{
+					{Kind: ir.TopDeclare, Declare: used, Raw: used.Raw},
+					{Kind: ir.TopDeclare, Declare: unused, Raw: unused.Raw},
+					{Kind: ir.TopFunction, Function: fn, Raw: fn.Raw},
+				},
+			}
+			refs := buildModuleIdentRefs(m)
+			removeUnreferencedDeclares(m, refs)
+			if m.Entries[0].Removed != !tt.wantUsedKept {
+				t.Errorf("used declare Removed = %v, want %v", m.Entries[0].Removed, !tt.wantUsedKept)
+			}
+			if m.Entries[1].Removed != tt.wantUnusedRM {
+				t.Errorf("unused declare Removed = %v, want %v", m.Entries[1].Removed, tt.wantUnusedRM)
+			}
+		})
 	}
 }
 
 func TestRemoveUnreferencedGlobals(t *testing.T) {
-	fn := &ir.Function{Name: "f", Raw: "define i32 @f() {", BodyRaw: []string{"  load i32, ptr @used_g"}}
-	usedG := &ir.Global{Name: "used_g", Raw: "@used_g = global i32 0"}
-	unusedG := &ir.Global{Name: "unused_g", Raw: "@unused_g = global i32 0"}
-	sectionG := &ir.Global{Name: "sec_g", Section: "license", Raw: `@sec_g = global [4 x i8] c"GPL\00", section "license"`}
-	m := &ir.Module{
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopGlobal, Global: usedG, Raw: usedG.Raw},
-			{Kind: ir.TopGlobal, Global: unusedG, Raw: unusedG.Raw},
-			{Kind: ir.TopGlobal, Global: sectionG, Raw: sectionG.Raw},
-			{Kind: ir.TopFunction, Function: fn, Raw: fn.Raw},
+	tests := []struct {
+		name        string
+		wantRemoved []bool
+	}{
+		{
+			name:        "keeps used and section globals, removes unused",
+			wantRemoved: []bool{false, true, false},
 		},
 	}
-	refs := buildModuleIdentRefs(m)
-	removeUnreferencedGlobals(m, refs)
-	if m.Entries[0].Removed {
-		t.Error("used global should not be removed")
-	}
-	if !m.Entries[1].Removed {
-		t.Error("unused global should be removed")
-	}
-	if m.Entries[2].Removed {
-		t.Error("section global should not be removed")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fn := &ir.Function{Name: "f", Raw: "define i32 @f() {", BodyRaw: []string{"  load i32, ptr @used_g"}}
+			usedG := &ir.Global{Name: "used_g", Raw: "@used_g = global i32 0"}
+			unusedG := &ir.Global{Name: "unused_g", Raw: "@unused_g = global i32 0"}
+			sectionG := &ir.Global{Name: "sec_g", Section: "license", Raw: `@sec_g = global [4 x i8] c"GPL\00", section "license"`}
+			m := &ir.Module{
+				Entries: []ir.TopLevelEntry{
+					{Kind: ir.TopGlobal, Global: usedG, Raw: usedG.Raw},
+					{Kind: ir.TopGlobal, Global: unusedG, Raw: unusedG.Raw},
+					{Kind: ir.TopGlobal, Global: sectionG, Raw: sectionG.Raw},
+					{Kind: ir.TopFunction, Function: fn, Raw: fn.Raw},
+				},
+			}
+			refs := buildModuleIdentRefs(m)
+			removeUnreferencedGlobals(m, refs)
+			for i, want := range tt.wantRemoved {
+				if m.Entries[i].Removed != want {
+					t.Errorf("entry %d Removed = %v, want %v", i, m.Entries[i].Removed, want)
+				}
+			}
+		})
 	}
 }
 
 func TestRemoveUnusedAttrGroups(t *testing.T) {
-	m := &ir.Module{
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopFunction, Function: &ir.Function{
-				Raw: "define i32 @f() #0 {",
-			}},
-			{Kind: ir.TopAttrGroup, AttrGroup: &ir.AttrGroup{ID: "0", Body: "nounwind"}},
-			{Kind: ir.TopAttrGroup, AttrGroup: &ir.AttrGroup{ID: "1", Body: "readonly"}},
+	tests := []struct {
+		name        string
+		funcRaw     string
+		attrGroups  []struct{ id, body string }
+		wantRemoved []bool
+	}{
+		{
+			name:       "keeps referenced attr group, removes unused",
+			funcRaw:    "define i32 @f() #0 {",
+			attrGroups: []struct{ id, body string }{{"0", "nounwind"}, {"1", "readonly"}},
+			wantRemoved: []bool{false, true},
 		},
 	}
-	removeUnusedAttrGroups(m)
-	if m.Entries[1].Removed {
-		t.Error("attr #0 should be kept (referenced by function)")
-	}
-	if !m.Entries[2].Removed {
-		t.Error("attr #1 should be removed (unused)")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entries := []ir.TopLevelEntry{
+				{Kind: ir.TopFunction, Function: &ir.Function{Raw: tt.funcRaw}},
+			}
+			for _, ag := range tt.attrGroups {
+				entries = append(entries, ir.TopLevelEntry{
+					Kind:      ir.TopAttrGroup,
+					AttrGroup: &ir.AttrGroup{ID: ag.id, Body: ag.body},
+				})
+			}
+			m := &ir.Module{Entries: entries}
+			removeUnusedAttrGroups(m)
+			for i, want := range tt.wantRemoved {
+				// attr group entries start at index 1
+				if m.Entries[i+1].Removed != want {
+					t.Errorf("attr #%s Removed = %v, want %v", tt.attrGroups[i].id, m.Entries[i+1].Removed, want)
+				}
+			}
+		})
 	}
 }
 
 func TestBuildModuleIdentRefs(t *testing.T) {
-	m := &ir.Module{
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopGlobal, Raw: `@my_global = global i32 42`},
-			{Kind: ir.TopFunction, Function: &ir.Function{
-				Raw:     `define i32 @my_func(ptr %ctx) {`,
-				BodyRaw: []string{"  %0 = load i32, ptr @my_global"},
-			}},
+	tests := []struct {
+		name     string
+		entries  []ir.TopLevelEntry
+		wantRefs map[string]int
+	}{
+		{
+			name: "tracks global and function references",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopGlobal, Raw: `@my_global = global i32 42`},
+				{Kind: ir.TopFunction, Function: &ir.Function{
+					Raw:     `define i32 @my_func(ptr %ctx) {`,
+					BodyRaw: []string{"  %0 = load i32, ptr @my_global"},
+				}},
+			},
+			wantRefs: map[string]int{"@my_global": 2, "@my_func": 1},
 		},
 	}
-	refs := buildModuleIdentRefs(m)
-	if len(refs["@my_global"]) != 2 {
-		t.Errorf("expected @my_global referenced in 2 entries, got %d", len(refs["@my_global"]))
-	}
-	if len(refs["@my_func"]) != 1 {
-		t.Errorf("expected @my_func referenced in 1 entry, got %d", len(refs["@my_func"]))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{Entries: tt.entries}
+			refs := buildModuleIdentRefs(m)
+			for ident, wantCount := range tt.wantRefs {
+				if len(refs[ident]) != wantCount {
+					t.Errorf("%s referenced in %d entries, want %d", ident, len(refs[ident]), wantCount)
+				}
+			}
+		})
 	}
 }
 
@@ -978,74 +1327,124 @@ func TestIsAttrComment(t *testing.T) {
 }
 
 func TestCollectUsedAttrIDsFromModule(t *testing.T) {
-	m := &ir.Module{
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopFunction, Function: &ir.Function{
-				Raw:     `define i32 @f(ptr %ctx) #0 {`,
-				BodyRaw: []string{"  ret i32 0"},
-			}},
-			{Kind: ir.TopAttrGroup, AttrGroup: &ir.AttrGroup{ID: "0", Body: "nounwind"}},
-			{Kind: ir.TopAttrGroup, AttrGroup: &ir.AttrGroup{ID: "1", Body: "readonly"}},
+	tests := []struct {
+		name      string
+		funcRaw   string
+		attrIDs   []string
+		wantUsed  []string
+		wantUnused []string
+	}{
+		{
+			name:       "identifies used and unused attr IDs",
+			funcRaw:    `define i32 @f(ptr %ctx) #0 {`,
+			attrIDs:    []string{"0", "1"},
+			wantUsed:   []string{"0"},
+			wantUnused: []string{"1"},
 		},
 	}
-	used := collectUsedAttrIDsFromModule(m)
-	if !used["0"] {
-		t.Error("attr #0 should be used")
-	}
-	if used["1"] {
-		t.Error("attr #1 should not be used")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entries := []ir.TopLevelEntry{
+				{Kind: ir.TopFunction, Function: &ir.Function{
+					Raw:     tt.funcRaw,
+					BodyRaw: []string{"  ret i32 0"},
+				}},
+			}
+			for _, id := range tt.attrIDs {
+				entries = append(entries, ir.TopLevelEntry{
+					Kind:      ir.TopAttrGroup,
+					AttrGroup: &ir.AttrGroup{ID: id, Body: "nounwind"},
+				})
+			}
+			m := &ir.Module{Entries: entries}
+			used := collectUsedAttrIDsFromModule(m)
+			for _, id := range tt.wantUsed {
+				if !used[id] {
+					t.Errorf("attr #%s should be used", id)
+				}
+			}
+			for _, id := range tt.wantUnused {
+				if used[id] {
+					t.Errorf("attr #%s should not be used", id)
+				}
+			}
+		})
 	}
 }
 
 func TestMarkOrphanedAttrCommentsInModule(t *testing.T) {
-	m := &ir.Module{
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopComment, Raw: "; Function Attrs: nounwind"},
-			{Kind: ir.TopFunction, Function: &ir.Function{Raw: "define i32 @f() {"}},
-			{Kind: ir.TopComment, Raw: "; Function Attrs: readonly"},
-			{Kind: ir.TopMetadata, Raw: "!0 = !{}"},
+	tests := []struct {
+		name        string
+		entries     []ir.TopLevelEntry
+		wantRemoved []bool
+	}{
+		{
+			name: "keeps comment before function, removes orphaned comment",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopComment, Raw: "; Function Attrs: nounwind"},
+				{Kind: ir.TopFunction, Function: &ir.Function{Raw: "define i32 @f() {"}},
+				{Kind: ir.TopComment, Raw: "; Function Attrs: readonly"},
+				{Kind: ir.TopMetadata, Raw: "!0 = !{}"},
+			},
+			wantRemoved: []bool{false, false, true, false},
 		},
 	}
-	markOrphanedAttrCommentsInModule(m)
-	if m.Entries[0].Removed {
-		t.Error("comment before function should be kept")
-	}
-	if !m.Entries[2].Removed {
-		t.Error("orphaned comment (before metadata) should be removed")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{Entries: tt.entries}
+			markOrphanedAttrCommentsInModule(m)
+			for i, want := range tt.wantRemoved {
+				if m.Entries[i].Removed != want {
+					t.Errorf("entry %d Removed = %v, want %v", i, m.Entries[i].Removed, want)
+				}
+			}
+		})
 	}
 }
 
 func TestCompactModuleEntries(t *testing.T) {
-	m := &ir.Module{
-		Entries: []ir.TopLevelEntry{
-			{Kind: ir.TopGlobal, Raw: "@g = global i32 0"},
-			{Kind: ir.TopBlank, Raw: ""},
-			{Kind: ir.TopBlank, Raw: ""},
-			{Kind: ir.TopFunction, Raw: "define i32 @f() {", Removed: true},
-			{Kind: ir.TopBlank, Raw: ""},
-			{Kind: ir.TopDeclare, Raw: "declare void @d()"},
-			{Kind: ir.TopBlank, Raw: ""},
+	tests := []struct {
+		name      string
+		entries   []ir.TopLevelEntry
+		wantKinds []ir.TopLevelKind
+	}{
+		{
+			name: "removes duplicates blanks and removed entries",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopGlobal, Raw: "@g = global i32 0"},
+				{Kind: ir.TopBlank, Raw: ""},
+				{Kind: ir.TopBlank, Raw: ""},
+				{Kind: ir.TopFunction, Raw: "define i32 @f() {", Removed: true},
+				{Kind: ir.TopBlank, Raw: ""},
+				{Kind: ir.TopDeclare, Raw: "declare void @d()"},
+				{Kind: ir.TopBlank, Raw: ""},
+			},
+			wantKinds: []ir.TopLevelKind{ir.TopGlobal, ir.TopBlank, ir.TopDeclare, ir.TopBlank},
 		},
 	}
-	compactModuleEntries(m)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{Entries: tt.entries}
+			compactModuleEntries(m)
 
-	var kinds []ir.TopLevelKind
-	for _, e := range m.Entries {
-		kinds = append(kinds, e.Kind)
-	}
-	for i, e := range m.Entries {
-		if e.Removed {
-			t.Errorf("entry %d should not be removed after compaction", i)
-		}
-	}
-	wantKinds := []ir.TopLevelKind{ir.TopGlobal, ir.TopBlank, ir.TopDeclare, ir.TopBlank}
-	if len(kinds) != len(wantKinds) {
-		t.Fatalf("got %d entries, want %d: %v", len(kinds), len(wantKinds), kinds)
-	}
-	for i := range wantKinds {
-		if kinds[i] != wantKinds[i] {
-			t.Errorf("entry %d kind = %d, want %d", i, kinds[i], wantKinds[i])
-		}
+			var kinds []ir.TopLevelKind
+			for _, e := range m.Entries {
+				kinds = append(kinds, e.Kind)
+			}
+			for i, e := range m.Entries {
+				if e.Removed {
+					t.Errorf("entry %d should not be removed after compaction", i)
+				}
+			}
+			if len(kinds) != len(tt.wantKinds) {
+				t.Fatalf("got %d entries, want %d: %v", len(kinds), len(tt.wantKinds), kinds)
+			}
+			for i := range tt.wantKinds {
+				if kinds[i] != tt.wantKinds[i] {
+					t.Errorf("entry %d kind = %d, want %d", i, kinds[i], tt.wantKinds[i])
+				}
+			}
+		})
 	}
 }
 

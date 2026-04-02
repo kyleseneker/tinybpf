@@ -1146,54 +1146,35 @@ func TestNeedsQuoting(t *testing.T) {
 	}
 }
 
-func TestRoundTripMinimal(t *testing.T) {
-	testRoundTrip(t, "minimal", minimalIR)
-}
-
-func TestRoundTripTransformSeed(t *testing.T) {
-	testRoundTrip(t, "transformSeed", transformSeedIR)
-}
-
-func TestRoundTripMapAndHelper(t *testing.T) {
-	testRoundTrip(t, "mapAndHelper", mapAndHelperIR)
-}
-
-func TestRoundTripCoreGEP(t *testing.T) {
-	testRoundTrip(t, "coreGEP", coreGEPIR)
-}
-
-func TestRoundTripCoreFieldExists(t *testing.T) {
-	testRoundTrip(t, "coreFieldExists", coreFieldExistsIR)
-}
-
-func TestRoundTripMetadata(t *testing.T) {
-	testRoundTrip(t, "metadata", metadataIR)
-}
-
-func TestRoundTripDataSections(t *testing.T) {
-	testRoundTrip(t, "datasections", datasectionsIR)
-}
-
-func TestRoundTripRuntimeAndAlloc(t *testing.T) {
-	testRoundTrip(t, "runtimeAndAlloc", runtimeAndAllocIR)
-}
-
-func TestRoundTripCleanup(t *testing.T) {
-	testRoundTrip(t, "cleanup", cleanupIR)
-}
-
-func TestRoundTripMinimalFile(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("testdata", "minimal.ll"))
-	if err != nil {
-		t.Skipf("testdata/minimal.ll not found: %v", err)
+func TestRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		ir   string // inline IR; empty means load from file
+		file string // testdata filename; used only when ir is empty
+	}{
+		{name: "minimal", ir: minimalIR},
+		{name: "transformSeed", ir: transformSeedIR},
+		{name: "mapAndHelper", ir: mapAndHelperIR},
+		{name: "coreGEP", ir: coreGEPIR},
+		{name: "coreFieldExists", ir: coreFieldExistsIR},
+		{name: "metadata", ir: metadataIR},
+		{name: "datasections", ir: datasectionsIR},
+		{name: "runtimeAndAlloc", ir: runtimeAndAllocIR},
+		{name: "cleanup", ir: cleanupIR},
+		{name: "minimal.ll", file: "minimal.ll"},
+		{name: "tinygo_probe.ll", file: "tinygo_probe.ll"},
 	}
-	testRoundTrip(t, "minimal.ll", string(data))
-}
-
-func TestRoundTripTinyGoProbe(t *testing.T) {
-	data, err := os.ReadFile(filepath.Join("testdata", "tinygo_probe.ll"))
-	if err != nil {
-		t.Skipf("testdata/tinygo_probe.ll not found: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := tt.ir
+			if input == "" {
+				data, err := os.ReadFile(filepath.Join("testdata", tt.file))
+				if err != nil {
+					t.Skipf("testdata/%s not found: %v", tt.file, err)
+				}
+				input = string(data)
+			}
+			testRoundTrip(t, tt.name, input)
+		})
 	}
-	testRoundTrip(t, "tinygo_probe.ll", string(data))
 }

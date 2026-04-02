@@ -11,105 +11,137 @@ import (
 )
 
 func TestFullTransform(t *testing.T) {
-	fixture := filepath.Join("..", "ir", "testdata", "tinygo_probe.ll")
-	if _, err := os.Stat(fixture); err != nil {
-		t.Skipf("fixture not found: %v", err)
-	}
-
-	data, err := os.ReadFile(fixture)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	opts := Options{
-		Sections: map[string]string{"handle_connect": "kprobe/sys_connect"},
-		Stdout:   io.Discard,
-	}
-	got, err := TransformLines(context.Background(), strings.Split(string(data), "\n"), opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := strings.Join(got, "\n")
-
-	checks := []struct {
-		contains bool
-		substr   string
+	tests := []struct {
+		name        string
+		sections    map[string]string
+		wantContain []string
+		wantAbsent  []string
+		helperIDs   []string
+		wantDefines int
 	}{
-		{true, `target triple = "bpf"`},
-		{true, `section "kprobe/sys_connect"`},
-		{true, `section ".maps"`},
-		{true, "alloca [16 x i8]"},
-		{true, "llvm.memset.p0.i64"},
-		{false, "@__dynamic_loader("},
-		{false, "@tinygo_signal_handler("},
-		{false, "@runtime.runMain("},
-		{false, "@main.bpfProbeReadUser"},
-		{false, "@runtime.alloc"},
-		{false, "target-cpu"},
-		{false, "target-features"},
+		{
+			name:     "tinygo probe transform",
+			sections: map[string]string{"handle_connect": "kprobe/sys_connect"},
+			wantContain: []string{
+				`target triple = "bpf"`,
+				`section "kprobe/sys_connect"`,
+				`section ".maps"`,
+				"alloca [16 x i8]",
+				"llvm.memset.p0.i64",
+			},
+			wantAbsent: []string{
+				"@__dynamic_loader(",
+				"@tinygo_signal_handler(",
+				"@runtime.runMain(",
+				"@main.bpfProbeReadUser",
+				"@runtime.alloc",
+				"target-cpu",
+				"target-features",
+			},
+			helperIDs:   []string{"112", "14", "130"},
+			wantDefines: 1,
+		},
 	}
-	for _, c := range checks {
-		if strings.Contains(text, c.substr) != c.contains {
-			if c.contains {
-				t.Errorf("missing %q", c.substr)
-			} else {
-				t.Errorf("should not contain %q", c.substr)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fixture := filepath.Join("..", "ir", "testdata", "tinygo_probe.ll")
+			if _, err := os.Stat(fixture); err != nil {
+				t.Skipf("fixture not found: %v", err)
 			}
-		}
-	}
 
-	for _, id := range []string{"112", "14", "130"} {
-		if !strings.Contains(text, "inttoptr (i64 "+id+" to ptr)") {
-			t.Errorf("helper inttoptr for ID %s not found", id)
-		}
-	}
+			data, err := os.ReadFile(fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	defineCount := 0
-	for _, line := range got {
-		if strings.HasPrefix(strings.TrimSpace(line), "define ") {
-			defineCount++
-		}
-	}
-	if defineCount != 1 {
-		t.Errorf("expected 1 define block, got %d", defineCount)
+			opts := Options{
+				Sections: tt.sections,
+				Stdout:   io.Discard,
+			}
+			got, err := TransformLines(context.Background(), strings.Split(string(data), "\n"), opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text := strings.Join(got, "\n")
+
+			for _, s := range tt.wantContain {
+				if !strings.Contains(text, s) {
+					t.Errorf("missing %q", s)
+				}
+			}
+			for _, s := range tt.wantAbsent {
+				if strings.Contains(text, s) {
+					t.Errorf("should not contain %q", s)
+				}
+			}
+
+			for _, id := range tt.helperIDs {
+				if !strings.Contains(text, "inttoptr (i64 "+id+" to ptr)") {
+					t.Errorf("helper inttoptr for ID %s not found", id)
+				}
+			}
+
+			defineCount := 0
+			for _, line := range got {
+				if strings.HasPrefix(strings.TrimSpace(line), "define ") {
+					defineCount++
+				}
+			}
+			if defineCount != tt.wantDefines {
+				t.Errorf("expected %d define block(s), got %d", tt.wantDefines, defineCount)
+			}
+		})
 	}
 }
 
 func TestFullTransformLLC(t *testing.T) {
-	llcPath, err := exec.LookPath("llc")
-	if err != nil {
-		t.Skip("llc not found on PATH")
+	tests := []struct {
+		name     string
+		sections map[string]string
+	}{
+		{
+			name:     "llc compiles transformed IR to BPF object",
+			sections: map[string]string{"handle_connect": "kprobe/sys_connect"},
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			llcPath, err := exec.LookPath("llc")
+			if err != nil {
+				t.Skip("llc not found on PATH")
+			}
 
-	fixture := filepath.Join("..", "ir", "testdata", "tinygo_probe.ll")
-	if _, err := os.Stat(fixture); err != nil {
-		t.Skipf("fixture not found: %v", err)
-	}
+			fixture := filepath.Join("..", "ir", "testdata", "tinygo_probe.ll")
+			if _, err := os.Stat(fixture); err != nil {
+				t.Skipf("fixture not found: %v", err)
+			}
 
-	tmpDir := t.TempDir()
-	outputLL := filepath.Join(tmpDir, "transformed.ll")
-	outputObj := filepath.Join(tmpDir, "output.o")
+			tmpDir := t.TempDir()
+			outputLL := filepath.Join(tmpDir, "transformed.ll")
+			outputObj := filepath.Join(tmpDir, "output.o")
 
-	opts := Options{
-		Sections: map[string]string{"handle_connect": "kprobe/sys_connect"},
-		Stdout:   io.Discard,
-	}
-	if err := Run(context.Background(), fixture, outputLL, opts); err != nil {
-		t.Fatalf("transform failed: %v", err)
-	}
+			opts := Options{
+				Sections: tt.sections,
+				Stdout:   io.Discard,
+			}
+			if err := Run(context.Background(), fixture, outputLL, opts); err != nil {
+				t.Fatalf("transform failed: %v", err)
+			}
 
-	cmd := exec.Command(llcPath, "-march=bpf", "-mcpu=v3", "-filetype=obj", outputLL, "-o", outputObj)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		irData, _ := os.ReadFile(outputLL)
-		t.Fatalf("llc failed: %v\nllc output:\n%s\ntransformed IR:\n%s", err, out, irData)
-	}
+			cmd := exec.Command(llcPath, "-march=bpf", "-mcpu=v3", "-filetype=obj", outputLL, "-o", outputObj)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				irData, _ := os.ReadFile(outputLL)
+				t.Fatalf("llc failed: %v\nllc output:\n%s\ntransformed IR:\n%s", err, out, irData)
+			}
 
-	info, err := os.Stat(outputObj)
-	if err != nil {
-		t.Fatalf("output not created: %v", err)
-	}
-	if info.Size() == 0 {
-		t.Fatal("output is empty")
+			info, err := os.Stat(outputObj)
+			if err != nil {
+				t.Fatalf("output not created: %v", err)
+			}
+			if info.Size() == 0 {
+				t.Fatal("output is empty")
+			}
+		})
 	}
 }
 

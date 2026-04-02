@@ -60,10 +60,24 @@ func TestErrorFormat(t *testing.T) {
 }
 
 func TestErrorUnwrap(t *testing.T) {
-	inner := errors.New("root cause")
-	err := &Error{Stage: StageOpt, Err: inner}
-	if !errors.Is(err, inner) {
-		t.Fatal("Unwrap should expose inner error")
+	tests := []struct {
+		name  string
+		inner error
+		stage Stage
+	}{
+		{
+			name:  "exposes inner error",
+			inner: errors.New("root cause"),
+			stage: StageOpt,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := &Error{Stage: tt.stage, Err: tt.inner}
+			if !errors.Is(err, tt.inner) {
+				t.Fatal("Unwrap should expose inner error")
+			}
+		})
 	}
 }
 
@@ -141,14 +155,30 @@ func TestErrorsFormat(t *testing.T) {
 }
 
 func TestErrorsUnwrap(t *testing.T) {
-	inner := errors.New("root cause")
-	merr := &Errors{
-		Stage:    StageTransform,
-		PassName: "test",
-		Errs:     []error{inner, errors.New("other")},
+	tests := []struct {
+		name  string
+		inner error
+		other []error
+		stage Stage
+	}{
+		{
+			name:  "finds inner error through Unwrap",
+			inner: errors.New("root cause"),
+			other: []error{errors.New("other")},
+			stage: StageTransform,
+		},
 	}
-	if !errors.Is(merr, inner) {
-		t.Fatal("errors.Is should find inner error through Unwrap")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			merr := &Errors{
+				Stage:    tt.stage,
+				PassName: "test",
+				Errs:     append([]error{tt.inner}, tt.other...),
+			}
+			if !errors.Is(merr, tt.inner) {
+				t.Fatal("errors.Is should find inner error through Unwrap")
+			}
+		})
 	}
 }
 
@@ -176,34 +206,70 @@ func TestWrapErrors(t *testing.T) {
 }
 
 func TestWrap(t *testing.T) {
-	inner := errors.New("underlying")
-	got := Wrap(StageInput, inner, "try something")
-	literal := &Error{Stage: StageInput, Err: inner, Hint: "try something"}
+	tests := []struct {
+		name  string
+		stage Stage
+		inner error
+		hint  string
+	}{
+		{
+			name:  "wraps error with stage and hint",
+			stage: StageInput,
+			inner: errors.New("underlying"),
+			hint:  "try something",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Wrap(tt.stage, tt.inner, tt.hint)
+			literal := &Error{Stage: tt.stage, Err: tt.inner, Hint: tt.hint}
 
-	if got.Error() != literal.Error() {
-		t.Fatalf("Wrap output mismatch:\ngot:    %s\nwant:   %s", got.Error(), literal.Error())
-	}
-	if !IsStage(got, StageInput) {
-		t.Fatal("expected StageInput")
-	}
-	if !errors.Is(got, inner) {
-		t.Fatal("Unwrap should expose inner error")
+			if got.Error() != literal.Error() {
+				t.Fatalf("Wrap output mismatch:\ngot:    %s\nwant:   %s", got.Error(), literal.Error())
+			}
+			if !IsStage(got, tt.stage) {
+				t.Fatalf("expected stage %v", tt.stage)
+			}
+			if !errors.Is(got, tt.inner) {
+				t.Fatal("Unwrap should expose inner error")
+			}
+		})
 	}
 }
 
 func TestWrapCmd(t *testing.T) {
-	inner := errors.New("exit 1")
-	got := WrapCmd(StageLink, inner, "llvm-link a.ll", "link error", "check IR")
-	literal := &Error{Stage: StageLink, Err: inner, Command: "llvm-link a.ll", Stderr: "link error", Hint: "check IR"}
+	tests := []struct {
+		name    string
+		stage   Stage
+		inner   error
+		command string
+		stderr  string
+		hint    string
+	}{
+		{
+			name:    "wraps command error with all fields",
+			stage:   StageLink,
+			inner:   errors.New("exit 1"),
+			command: "llvm-link a.ll",
+			stderr:  "link error",
+			hint:    "check IR",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := WrapCmd(tt.stage, tt.inner, tt.command, tt.stderr, tt.hint)
+			literal := &Error{Stage: tt.stage, Err: tt.inner, Command: tt.command, Stderr: tt.stderr, Hint: tt.hint}
 
-	if got.Error() != literal.Error() {
-		t.Fatalf("WrapCmd output mismatch:\ngot:    %s\nwant:   %s", got.Error(), literal.Error())
-	}
-	if !IsStage(got, StageLink) {
-		t.Fatal("expected StageLink")
-	}
-	if !errors.Is(got, inner) {
-		t.Fatal("Unwrap should expose inner error")
+			if got.Error() != literal.Error() {
+				t.Fatalf("WrapCmd output mismatch:\ngot:    %s\nwant:   %s", got.Error(), literal.Error())
+			}
+			if !IsStage(got, tt.stage) {
+				t.Fatalf("expected stage %v", tt.stage)
+			}
+			if !errors.Is(got, tt.inner) {
+				t.Fatal("Unwrap should expose inner error")
+			}
+		})
 	}
 }
 

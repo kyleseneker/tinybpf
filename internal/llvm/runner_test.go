@@ -83,27 +83,41 @@ func TestIsVersionSuffix(t *testing.T) {
 }
 
 func TestSanitizedEnv(t *testing.T) {
-	env := sanitizedEnv()
-	hasKey := func(key string) bool {
-		prefix := key + "="
-		for _, e := range env {
-			if strings.HasPrefix(e, prefix) {
-				return true
+	tests := []struct {
+		name        string
+		wantPresent []string
+		wantAbsent  []string
+	}{
+		{
+			name:        "includes required keys and excludes others",
+			wantPresent: []string{"LC_ALL", "TZ"},
+			wantAbsent:  []string{"GOPATH", "GOROOT", "USER", "SHELL"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			env := sanitizedEnv()
+			hasKey := func(key string) bool {
+				prefix := key + "="
+				for _, e := range env {
+					if strings.HasPrefix(e, prefix) {
+						return true
+					}
+				}
+				return false
 			}
-		}
-		return false
-	}
 
-	if !hasKey("LC_ALL") {
-		t.Error("expected LC_ALL in sanitized env")
-	}
-	if !hasKey("TZ") {
-		t.Error("expected TZ in sanitized env")
-	}
-	for _, key := range []string{"GOPATH", "GOROOT", "USER", "SHELL"} {
-		if hasKey(key) {
-			t.Errorf("unexpected %s in sanitized env", key)
-		}
+			for _, key := range tt.wantPresent {
+				if !hasKey(key) {
+					t.Errorf("expected %s in sanitized env", key)
+				}
+			}
+			for _, key := range tt.wantAbsent {
+				if hasKey(key) {
+					t.Errorf("unexpected %s in sanitized env", key)
+				}
+			}
+		})
 	}
 }
 
