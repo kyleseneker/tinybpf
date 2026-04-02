@@ -174,6 +174,51 @@ func cumulativeOffsets(sizes []int) []int {
 	return offsets
 }
 
+// irTypeAlign returns the natural ABI alignment in bytes for an LLVM IR type
+// under the BPF datalayout (e-m:e-p:64:64-i64:64-i128:128-n32:64-S128).
+func irTypeAlign(t string) int {
+	t = strings.TrimSpace(t)
+	switch t {
+	case "i8":
+		return 1
+	case "i16":
+		return 2
+	case "i32":
+		return 4
+	case "i64", "ptr":
+		return 8
+	}
+	if strings.HasPrefix(t, "[") {
+		inner := strings.TrimPrefix(t, "[")
+		inner = strings.TrimSuffix(inner, "]")
+		parts := strings.SplitN(inner, " x ", 2)
+		if len(parts) == 2 {
+			return irTypeAlign(parts[1])
+		}
+	}
+	return 1
+}
+
+// alignedFieldOffsets computes byte offsets for struct fields respecting natural
+// alignment, matching the BPF datalayout.
+func alignedFieldOffsets(fields []string) ([]int, error) {
+	offsets := make([]int, len(fields))
+	off := 0
+	for i, f := range fields {
+		size, err := irTypeSize(f)
+		if err != nil {
+			return nil, err
+		}
+		align := irTypeAlign(f)
+		if align > 1 {
+			off = (off + align - 1) &^ (align - 1)
+		}
+		offsets[i] = off
+		off += size
+	}
+	return offsets, nil
+}
+
 // fieldIndexFromOffset returns the field index for a byte offset, or -1.
 func fieldIndexFromOffset(offsets []int, byteOffset int) int {
 	for i, off := range offsets {

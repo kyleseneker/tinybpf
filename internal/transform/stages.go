@@ -598,15 +598,11 @@ func buildCoreExistsCtxFromAST(m *ir.Module) (*coreExistsContext, error) {
 			if !coreTypes[td.Name] {
 				continue
 			}
-			sizes := make([]int, len(td.Fields))
-			for i, f := range td.Fields {
-				s, err := irTypeSize(f)
-				if err != nil {
-					return nil, fmt.Errorf("type %s field %d: %w", td.Name, i, err)
-				}
-				sizes[i] = s
+			offsets, err := alignedFieldOffsets(td.Fields)
+			if err != nil {
+				return nil, fmt.Errorf("type %s: %w", td.Name, err)
 			}
-			fieldOffsets[td.Name] = cumulativeOffsets(sizes)
+			fieldOffsets[td.Name] = offsets
 		}
 		typeMeta = findCoreTypeMetaFromAST(m, coreTypes)
 	} else {

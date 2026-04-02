@@ -290,6 +290,97 @@ func TestCumulativeOffsets(t *testing.T) {
 	}
 }
 
+func TestIRTypeAlign(t *testing.T) {
+	tests := []struct {
+		name string
+		typ  string
+		want int
+	}{
+		{"i8", "i8", 1},
+		{"i16", "i16", 2},
+		{"i32", "i32", 4},
+		{"i64", "i64", 8},
+		{"ptr", "ptr", 8},
+		{"array of i32", "[4 x i32]", 4},
+		{"array of i8", "[16 x i8]", 1},
+		{"unknown type", "float", 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := irTypeAlign(tt.typ); got != tt.want {
+				t.Errorf("irTypeAlign(%q) = %d, want %d", tt.typ, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAlignedFieldOffsets(t *testing.T) {
+	tests := []struct {
+		name    string
+		fields  []string
+		want    []int
+		wantErr bool
+	}{
+		{
+			name:   "uniform i32 no padding",
+			fields: []string{"i32", "i32", "i32"},
+			want:   []int{0, 4, 8},
+		},
+		{
+			name:   "i8 then i64 needs padding",
+			fields: []string{"i8", "i64"},
+			want:   []int{0, 8},
+		},
+		{
+			name:   "i32 then i64 needs padding",
+			fields: []string{"i32", "i64"},
+			want:   []int{0, 8},
+		},
+		{
+			name:   "i64 then i8 no padding",
+			fields: []string{"i64", "i8"},
+			want:   []int{0, 8},
+		},
+		{
+			name:   "i8 i16 i32 i64 mixed alignment",
+			fields: []string{"i8", "i16", "i32", "i64"},
+			want:   []int{0, 2, 4, 8},
+		},
+		{
+			name:   "single field",
+			fields: []string{"i32"},
+			want:   []int{0},
+		},
+		{
+			name:    "unsupported type",
+			fields:  []string{"i8", "x86_fp80"},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := alignedFieldOffsets(tt.fields)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("alignedFieldOffsets(%v) = %v, want %v", tt.fields, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("alignedFieldOffsets(%v)[%d] = %d, want %d", tt.fields, got, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestFieldIndexFromOffset(t *testing.T) {
 	offsets := []int{0, 4, 8}
 	tests := []struct {
