@@ -25,11 +25,12 @@ func TestRun(t *testing.T) {
 			cfg: func(dir string) Config {
 				return Config{Dir: dir, Program: "xdp_filter"}
 			},
-			wantFiles: []string{"tinybpf.json", "bpf/xdp_filter.go", "bpf/xdp_filter_stub.go", "Makefile"},
+			wantFiles: []string{"tinybpf.json", "bpf/xdp_filter.go", "bpf/xdp_filter_stub.go", "gen.go", "Makefile"},
 			wantStdout: []string{
 				"create tinybpf.json",
 				"create bpf/xdp_filter.go",
 				"create bpf/xdp_filter_stub.go",
+				"create gen.go",
 				"create Makefile",
 			},
 			wantContain: map[string][]string{
@@ -62,7 +63,7 @@ func TestRun(t *testing.T) {
 			cfg: func(dir string) Config {
 				return Config{Dir: dir, Program: "tc_filter", Stdout: nil}
 			},
-			wantFiles: []string{"tinybpf.json", "bpf/tc_filter.go", "bpf/tc_filter_stub.go", "Makefile"},
+			wantFiles: []string{"tinybpf.json", "bpf/tc_filter.go", "bpf/tc_filter_stub.go", "gen.go", "Makefile"},
 		},
 		{
 			name:    "missing name",
@@ -160,34 +161,54 @@ func TestRun(t *testing.T) {
 }
 
 func TestBuildPlan(t *testing.T) {
-	files := buildPlan("/proj", "/proj/bpf", "myprobe")
-	if len(files) != 4 {
-		t.Fatalf("expected 4 planned files, got %d", len(files))
+	tests := []struct {
+		name        string
+		dir         string
+		bpfDir      string
+		program     string
+		wantCount   int
+		wantPaths   []string
+		wantContain map[int]string // index -> substring that must appear in content
+	}{
+		{
+			name:      "standard project",
+			dir:       "/proj",
+			bpfDir:    "/proj/bpf",
+			program:   "myprobe",
+			wantCount: 5,
+			wantPaths: []string{
+				filepath.Join("/proj", "tinybpf.json"),
+				filepath.Join("/proj/bpf", "myprobe.go"),
+				filepath.Join("/proj/bpf", "myprobe_stub.go"),
+				filepath.Join("/proj", "gen.go"),
+				filepath.Join("/proj", "Makefile"),
+			},
+			wantContain: map[int]string{
+				0: `"myprobe"`,
+				1: "//export myprobe",
+				2: "//go:build !tinygo",
+				3: "//go:generate tinybpf build",
+				4: "tinybpf build",
+			},
+		},
 	}
-
-	wantPaths := []string{
-		filepath.Join("/proj", "tinybpf.json"),
-		filepath.Join("/proj/bpf", "myprobe.go"),
-		filepath.Join("/proj/bpf", "myprobe_stub.go"),
-		filepath.Join("/proj", "Makefile"),
-	}
-	for i, want := range wantPaths {
-		if files[i].path != want {
-			t.Errorf("files[%d].path = %q, want %q", i, files[i].path, want)
-		}
-	}
-
-	if !strings.Contains(files[0].content, `"myprobe"`) {
-		t.Error("config file missing program name")
-	}
-	if !strings.Contains(files[1].content, "//export myprobe") {
-		t.Error("program file missing //export directive")
-	}
-	if !strings.Contains(files[2].content, "//go:build !tinygo") {
-		t.Error("stub file missing build constraint")
-	}
-	if !strings.Contains(files[3].content, "tinybpf build") {
-		t.Error("Makefile missing build command")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files := buildPlan(tt.dir, tt.bpfDir, tt.program)
+			if len(files) != tt.wantCount {
+				t.Fatalf("expected %d planned files, got %d", tt.wantCount, len(files))
+			}
+			for i, want := range tt.wantPaths {
+				if files[i].path != want {
+					t.Errorf("files[%d].path = %q, want %q", i, files[i].path, want)
+				}
+			}
+			for idx, substr := range tt.wantContain {
+				if !strings.Contains(files[idx].content, substr) {
+					t.Errorf("files[%d] missing %q", idx, substr)
+				}
+			}
+		})
 	}
 }
 

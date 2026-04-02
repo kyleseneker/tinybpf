@@ -50,6 +50,7 @@ func buildPlan(dir, bpfDir, program string) []plannedFile {
 		{filepath.Join(dir, "tinybpf.json"), projectConfig(program)},
 		{filepath.Join(bpfDir, program+".go"), programGo(program)},
 		{filepath.Join(bpfDir, program+"_stub.go"), programStubGo()},
+		{filepath.Join(dir, "gen.go"), genGo(program)},
 		{filepath.Join(dir, "Makefile"), makefile(program)},
 	}
 }
@@ -130,6 +131,15 @@ func main() {}
 // programStubGo returns the stub source file used when building outside TinyGo.
 func programStubGo() string {
 	return `//go:build !tinygo
+
+package main
+`
+}
+
+// genGo returns a gen.go file with go:generate directives for tinybpf build and generate.
+func genGo(programName string) string {
+	return `//go:generate tinybpf build --verbose ./bpf
+//go:generate tinybpf generate build/` + programName + `.bpf.o
 
 package main
 `

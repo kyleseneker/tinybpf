@@ -837,6 +837,7 @@ func TestConsumeLinkage(t *testing.T) {
 		{"constant", "constant i32 0", "constant", "i32 0"},
 		{"external global", "external global i32 0", "external global", "i32 0"},
 		{"external constant", "external constant i32 0", "external constant", "i32 0"},
+		{"local_unnamed_addr global", "local_unnamed_addr global i32 0", "local_unnamed_addr global", "i32 0"},
 		{"no match", "something else", "", "something else"},
 		{"empty", "", "", ""},
 	}

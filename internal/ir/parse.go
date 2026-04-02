@@ -243,23 +243,41 @@ func parseGlobalBody(rest string) (linkage, typeName, init, remaining string) {
 	return linkage, typeName, init, rest
 }
 
+// linkageQualifiers are tokens that may appear before "global" or "constant" in a linkage prefix.
+var linkageQualifiers = map[string]bool{
+	"private": true, "internal": true, "external": true,
+	"linkonce_odr": true, "weak_odr": true, "available_externally": true,
+	"unnamed_addr": true, "local_unnamed_addr": true,
+}
+
 // consumeLinkage strips a recognized linkage prefix from s, returning the linkage and the remainder.
 func consumeLinkage(s string) (string, string) {
-	linkages := []string{
-		"private unnamed_addr global ",
-		"private unnamed_addr constant ",
-		"internal unnamed_addr global ",
-		"internal unnamed_addr constant ",
-		"internal global ",
-		"internal constant ",
-		"global ",
-		"constant ",
-		"external global ",
-		"external constant ",
+	var consumed []string
+	rest := s
+	for {
+		spaceIdx := strings.IndexByte(rest, ' ')
+		if spaceIdx < 0 {
+			break
+		}
+		token := rest[:spaceIdx]
+		if token == "global" || token == "constant" {
+			consumed = append(consumed, token)
+			rest = rest[spaceIdx+1:]
+			return strings.Join(consumed, " "), rest
+		}
+		if !linkageQualifiers[token] {
+			break
+		}
+		consumed = append(consumed, token)
+		rest = rest[spaceIdx+1:]
 	}
-	for _, l := range linkages {
-		if strings.HasPrefix(s, l) {
-			return strings.TrimSpace(l), s[len(l):]
+	// Check for "global" or "constant" as the last token without trailing space
+	for _, kw := range []string{"global", "constant"} {
+		if rest == kw || strings.HasPrefix(rest, kw+" ") {
+			consumed = append(consumed, kw)
+			rest = strings.TrimPrefix(rest, kw)
+			rest = strings.TrimPrefix(rest, " ")
+			return strings.Join(consumed, " "), rest
 		}
 	}
 	return "", s

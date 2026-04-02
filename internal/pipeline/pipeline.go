@@ -463,13 +463,26 @@ func (rc *runContext) storeArtifact(key, path string) {
 	_ = rc.store.Put(key, path)
 }
 
-// copyFile copies src to dst, creating or overwriting dst.
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
+// copyFile streams src to dst, creating or overwriting dst.
+func copyFile(src, dst string) (retErr error) {
+	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, data, 0o600)
+	defer func() { _ = in.Close() }()
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cErr := out.Close(); retErr == nil {
+			retErr = cErr
+		}
+	}()
+
+	_, retErr = io.Copy(out, in)
+	return retErr
 }
 
 // injectBTF runs pahole -J on the output object to embed BTF type information.
