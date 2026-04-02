@@ -62,10 +62,16 @@ internal/
     testdata/              IR fixture files for parser/serializer tests
 
   transform/               TinyGo IR -> BPF IR rewriting (8 passes)
-    transform.go           Transform interface and types
-    stages.go              Pass registration, sequencing, and most pass implementations
-    core.go                CO-RE struct access, exists intrinsics, field names
-    btfmap.go              map prefix strip, BTF encoding, name sanitization
+    transform.go           Transform interface and pipeline runner
+    stages.go              Pass registration and sequencing
+    pass_module_rewrite.go BPF target retarget and attribute stripping
+    pass_extract_programs.go Program filtering and runtime removal
+    pass_replace_alloc.go  malloc -> alloca + memset rewrite
+    pass_rewrite_helpers.go BPF helper inttoptr injection
+    pass_core.go           CO-RE struct access, exists intrinsics, field names
+    pass_sections.go       ELF section assignment
+    pass_map_btf.go        Map prefix strip, BTF encoding, name sanitization
+    pass_finalize.go       License injection, dead code removal, cleanup
     helpers.go             BPF helper name-to-ID mapping
     bpfhelpers_gen.go      Generated helper table (from kernel bpf.h)
     gen.go                 Code generation tooling for bpfhelpers_gen.go
@@ -127,7 +133,7 @@ scripts/
 | Use tinybpf as a library | `tinybpf.go` (types), `build.go` (Build function) |
 | Add a CLI flag | `internal/cli/root.go` (shared flags), `internal/cli/build.go` or `link.go` (command-specific) |
 | Add a config field | `config/config.go` (struct), `config/convert.go` (to Request), `internal/cli/root.go` (merge logic) |
-| Add a transform pass | `internal/transform/stages.go` (registration), new file in `internal/transform/` |
+| Add a transform pass | `internal/transform/stages.go` (registration), new `pass_*.go` file in `internal/transform/` |
 | Change optimization profiles | `internal/llvm/passes.go` |
 | Change ELF validation | `elfcheck/validate.go` |
 | Change doctor checks | `internal/doctor/doctor.go` |

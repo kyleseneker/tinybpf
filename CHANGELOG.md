@@ -13,6 +13,7 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 - kfunc support, stack usage warnings, `COMPATIBILITY.md`, `GOVERNANCE.md`
 
 ### Changed
+- Split monolithic `stages.go` (1813 lines) into 8 per-pass files (`pass_*.go`), merged `core.go` and `btfmap.go` into their respective pass files
 - Transform passes use structured AST instead of regex on raw IR lines
 - Cache keys include tool version fingerprints (in-place LLVM upgrades invalidate cache)
 - `consumeLinkage` refactored to token-based scanner

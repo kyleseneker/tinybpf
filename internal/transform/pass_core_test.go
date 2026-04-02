@@ -2,6 +2,8 @@ package transform
 
 import (
 	"testing"
+
+	"github.com/kyleseneker/tinybpf/internal/ir"
 )
 
 func TestExtractDBG(t *testing.T) {
@@ -475,6 +477,314 @@ func TestRenameCoreField(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := renameCoreField(tt.line); got != tt.want {
 				t.Errorf("got  %q\nwant %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCorePassModule(t *testing.T) {
+	tests := []struct {
+		name    string
+		module  *ir.Module
+		wantErr bool
+	}{
+		{
+			name:    "empty module succeeds",
+			module:  &ir.Module{},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := corePassModule(tt.module)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("corePassModule() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestAddCoreExistsIntrinsics(t *testing.T) {
+	tests := []struct {
+		name      string
+		field     bool
+		typ       bool
+		access    bool
+		wantDecls int
+	}{
+		{"none needed", false, false, false, 0},
+		{"field only", true, false, false, 1},
+		{"type only", false, true, false, 1},
+		{"all three", true, true, true, 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{Entries: []ir.TopLevelEntry{{Kind: ir.TopFunction}}}
+			addCoreExistsIntrinsics(m, tt.field, tt.typ, tt.access)
+			if len(m.Declares) != tt.wantDecls {
+				t.Errorf("declares = %d, want %d", len(m.Declares), tt.wantDecls)
+			}
+		})
+	}
+}
+
+func TestResolveMetaRefsFromAST(t *testing.T) {
+	tests := []struct {
+		name        string
+		elementsRef string
+		metaByID    map[int]*ir.MetadataNode
+		wantLen     int
+	}{
+		{
+			name:        "bad ref",
+			elementsRef: "not_a_ref",
+			wantLen:     0,
+		},
+		{
+			name:        "missing node",
+			elementsRef: "!99",
+			metaByID:    map[int]*ir.MetadataNode{},
+			wantLen:     0,
+		},
+		{
+			name:        "empty tuple",
+			elementsRef: "!0",
+			metaByID:    map[int]*ir.MetadataNode{0: {ID: 0, Tuple: nil}},
+			wantLen:     0,
+		},
+		{
+			name:        "direct refs",
+			elementsRef: "!0",
+			metaByID: map[int]*ir.MetadataNode{
+				0: {ID: 0, Tuple: []string{"!1", "!2"}},
+				1: {ID: 1, Kind: "DIDerivedType"},
+				2: {ID: 2, Kind: "DIDerivedType"},
+			},
+			wantLen: 2,
+		},
+		{
+			name:        "nested tuple",
+			elementsRef: "!0",
+			metaByID: map[int]*ir.MetadataNode{
+				0: {ID: 0, Tuple: []string{"!1"}},
+				1: {ID: 1, Kind: "", Tuple: []string{"!2", "!3"}},
+				2: {ID: 2, Kind: "DIDerivedType"},
+				3: {ID: 3, Kind: "DIDerivedType"},
+			},
+			wantLen: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveMetaRefsFromAST(tt.elementsRef, tt.metaByID)
+			if len(got) != tt.wantLen {
+				t.Errorf("resolveMetaRefsFromAST() returned %d refs, want %d: %v", len(got), tt.wantLen, got)
+			}
+		})
+	}
+}
+
+func TestFindMaxMetaIDFromModule(t *testing.T) {
+	tests := []struct {
+		name  string
+		nodes []*ir.MetadataNode
+		extra []ir.TopLevelEntry
+		want  int
+	}{
+		{
+			name:  "from nodes",
+			nodes: []*ir.MetadataNode{{ID: 3}, {ID: 7}, {ID: 1}},
+			want:  7,
+		},
+		{
+			name:  "from entries",
+			extra: []ir.TopLevelEntry{{Kind: ir.TopMetadata, Raw: "!42 = !{}"}},
+			want:  42,
+		},
+		{
+			name: "empty",
+			want: -1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{MetadataNodes: tt.nodes, Entries: tt.extra}
+			if got := findMaxMetaIDFromModule(m); got != tt.want {
+				t.Errorf("findMaxMetaIDFromModule() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAppendMetaEntryToModule(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		wantLen int
+		wantRaw string
+	}{
+		{
+			name:    "appends single metadata entry",
+			raw:     "!0 = !{}",
+			wantLen: 1,
+			wantRaw: "!0 = !{}",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{}
+			appendMetaEntryToModule(m, tt.raw)
+			if len(m.Entries) != tt.wantLen || m.Entries[0].Raw != tt.wantRaw {
+				t.Errorf("unexpected entries: %v", m.Entries)
+			}
+		})
+	}
+}
+
+func TestStripCoreExistsDeclsFromModule(t *testing.T) {
+	tests := []struct {
+		name        string
+		declNames   []string
+		wantRemoved []bool
+	}{
+		{
+			name:        "strips core exists decls but keeps others",
+			declNames:   []string{"main.bpfCoreFieldExists", "main.bpfCoreTypeExists", "main.bpfGetCurrentPidTgid"},
+			wantRemoved: []bool{true, true, false},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var entries []ir.TopLevelEntry
+			for _, name := range tt.declNames {
+				entries = append(entries, ir.TopLevelEntry{
+					Kind:    ir.TopDeclare,
+					Declare: &ir.Declare{Name: name},
+				})
+			}
+			m := &ir.Module{Entries: entries}
+			stripCoreExistsDeclsFromModule(m)
+			for i, want := range tt.wantRemoved {
+				if m.Entries[i].Removed != want {
+					t.Errorf("%s: Removed = %v, want %v", tt.declNames[i], m.Entries[i].Removed, want)
+				}
+			}
+		})
+	}
+}
+
+func TestAddIntrinsicDeclToModule(t *testing.T) {
+	t.Run("adds new decl", func(t *testing.T) {
+		m := &ir.Module{
+			Entries: []ir.TopLevelEntry{
+				{Kind: ir.TopFunction},
+			},
+		}
+		addIntrinsicDeclToModule(m, "llvm.bpf.preserve.field.info", fieldInfoIntrinsicDecl)
+		if len(m.Declares) != 1 {
+			t.Fatalf("expected 1 declare, got %d", len(m.Declares))
+		}
+		if m.Declares[0].Name != "llvm.bpf.preserve.field.info" {
+			t.Errorf("name = %q", m.Declares[0].Name)
+		}
+	})
+
+	t.Run("skips when already exists in declares", func(t *testing.T) {
+		existing := &ir.Declare{Name: "llvm.bpf.preserve.field.info"}
+		m := &ir.Module{Declares: []*ir.Declare{existing}}
+		addIntrinsicDeclToModule(m, "llvm.bpf.preserve.field.info", fieldInfoIntrinsicDecl)
+		if len(m.Declares) != 1 {
+			t.Errorf("expected 1 declare (no dup), got %d", len(m.Declares))
+		}
+	})
+
+	t.Run("skips when already exists in entries", func(t *testing.T) {
+		m := &ir.Module{
+			Entries: []ir.TopLevelEntry{
+				{Kind: ir.TopDeclare, Raw: fieldInfoIntrinsicDecl},
+			},
+		}
+		addIntrinsicDeclToModule(m, "llvm.bpf.preserve.field.info", fieldInfoIntrinsicDecl)
+		if len(m.Declares) != 0 {
+			t.Errorf("expected 0 new declares, got %d", len(m.Declares))
+		}
+	})
+
+	t.Run("appends when no func entry", func(t *testing.T) {
+		m := &ir.Module{
+			Entries: []ir.TopLevelEntry{
+				{Kind: ir.TopGlobal},
+			},
+		}
+		addIntrinsicDeclToModule(m, "llvm.bpf.preserve.field.info", fieldInfoIntrinsicDecl)
+		if len(m.Entries) != 2 {
+			t.Fatalf("expected 2 entries, got %d", len(m.Entries))
+		}
+		if m.Entries[1].Kind != ir.TopDeclare {
+			t.Error("expected last entry to be declare")
+		}
+	})
+}
+
+func TestCollectCoreStructMetaIDs(t *testing.T) {
+	tests := []struct {
+		name      string
+		entries   []ir.TopLevelEntry
+		wantIn    []int
+		wantNotIn []int
+	}{
+		{
+			name: "collects core struct IDs only",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopMetadata, Raw: `!5 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", elements: !6)`},
+				{Kind: ir.TopMetadata, Raw: `!6 = !{!7}`},
+				{Kind: ir.TopMetadata, Raw: `!7 = !DIDerivedType(tag: DW_TAG_member, name: "Pid")`},
+			},
+			wantIn:    []int{5},
+			wantNotIn: []int{6, 7},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{Entries: tt.entries}
+			ids := collectCoreStructMetaIDs(m)
+			for _, id := range tt.wantIn {
+				if !ids[id] {
+					t.Errorf("expected ID %d in core struct meta IDs", id)
+				}
+			}
+			for _, id := range tt.wantNotIn {
+				if ids[id] {
+					t.Errorf("ID %d should not be in core struct meta IDs", id)
+				}
+			}
+		})
+	}
+}
+
+func TestCollectCoreMemberIDs(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []ir.TopLevelEntry
+		wantIn  []int
+	}{
+		{
+			name: "collects elements ref ID",
+			entries: []ir.TopLevelEntry{
+				{Kind: ir.TopMetadata, Raw: `!5 = !DICompositeType(tag: DW_TAG_structure_type, name: "main.bpfCoreTaskStruct", elements: !6)`},
+				{Kind: ir.TopMetadata, Raw: `!6 = !{!7, !8}`},
+			},
+			wantIn: []int{6},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &ir.Module{Entries: tt.entries}
+			ids := collectCoreMemberIDs(m)
+			for _, id := range tt.wantIn {
+				if !ids[id] {
+					t.Errorf("expected ID %d in core member IDs", id)
+				}
 			}
 		})
 	}
