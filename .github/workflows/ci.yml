@@ -89,29 +89,66 @@ jobs:
           exit $status
 
   test:
-    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       GOWORK: "off"
     strategy:
       fail-fast: false
       matrix:
-        go-version: ["1.24.x", "1.25.x"]
-        llvm-version: ["20", "21", "22"]
         include:
-          - go-version: "1.25.x"
+          # Primary lane: full validation (coverage, fuzz, binary size)
+          - runner: ubuntu-24.04
+            go-version: "1.25.x"
             llvm-version: "20"
             primary: true
+
+          # Go/LLVM compatibility matrix (amd64)
+          - runner: ubuntu-24.04
+            go-version: "1.24.x"
+            llvm-version: "20"
+          - runner: ubuntu-24.04
+            go-version: "1.24.x"
+            llvm-version: "21"
+          - runner: ubuntu-24.04
+            go-version: "1.24.x"
+            llvm-version: "22"
+          - runner: ubuntu-24.04
+            go-version: "1.25.x"
+            llvm-version: "21"
+          - runner: ubuntu-24.04
+            go-version: "1.25.x"
+            llvm-version: "22"
+
+          # arm64 (production target)
+          - runner: ubuntu-24.04-arm
+            go-version: "1.25.x"
+            llvm-version: "20"
+
+          # macOS (developer experience, no LLVM)
+          - runner: macos-latest
+            go-version: "1.25.x"
+
+    runs-on: ${{ matrix.runner }}
+    name: test (${{ matrix.runner }}, go${{ matrix.go-version }}${{ matrix.llvm-version && format(', llvm{0}', matrix.llvm-version) || '' }})
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup toolchain
+        if: matrix.llvm-version
         uses: ./.github/actions/setup-toolchain
         with:
           go-version: ${{ matrix.go-version }}
 
-      - name: Install LLVM toolchain
+      - name: Setup Go (macOS)
+        if: ${{ !matrix.llvm-version }}
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: false
+
+      - name: Install LLVM
+        if: matrix.llvm-version
         run: |
           codename=$(lsb_release -cs)
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
@@ -126,11 +163,16 @@ jobs:
           cd examples/tracepoint-connect
           tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o ../../internal/ir/testdata/tinygo_probe.ll ./bpf
 
-      - name: Print LLVM versions
+      - name: Print tool versions
         run: |
-          echo "LLVM:   $(llvm-link --version 2>&1 | head -1)"
-          echo "opt:    $(opt --version 2>&1 | head -1)"
-          echo "llc:    $(llc --version 2>&1 | head -1)"
+          go version
+          if command -v llvm-link &>/dev/null; then
+            echo "LLVM:   $(llvm-link --version 2>&1 | head -1)"
+            echo "opt:    $(opt --version 2>&1 | head -1)"
+            echo "llc:    $(llc --version 2>&1 | head -1)"
+          else
+            echo "LLVM:   not installed (unit tests only)"
+          fi
 
       - name: Test
         run: go test -race -timeout 5m ./...
@@ -180,56 +222,6 @@ jobs:
               go test "./$dir" -run "^${target}\$" -fuzz "^${target}\$" -fuzztime 10s -timeout 30s
             done
           done
-
-  test-arm64:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 15
-    env:
-      GOWORK: "off"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup toolchain
-        uses: ./.github/actions/setup-toolchain
-        with:
-          go-version: "1.25.x"
-
-      - name: Install LLVM toolchain
-        run: |
-          codename=$(lsb_release -cs)
-          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
-          echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-20 main" | sudo tee /etc/apt/sources.list.d/llvm-20.list
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq llvm-20
-          echo "/usr/lib/llvm-20/bin" >> "$GITHUB_PATH"
-
-      - name: Test
-        run: go test -race -timeout 5m ./...
-
-      - name: Build
-        run: CGO_ENABLED=0 go build -ldflags "-s -w" -trimpath -o tinybpf ./cmd/tinybpf
-
-  test-macos:
-    runs-on: macos-latest
-    timeout-minutes: 10
-    env:
-      GOWORK: "off"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.25.x"
-          cache: false
-
-      - name: Test (unit tests only)
-        run: go test -timeout 5m ./...
-
-      - name: Build
-        run: CGO_ENABLED=0 go build -ldflags "-s -w" -trimpath -o tinybpf ./cmd/tinybpf
 
   examples:
     runs-on: ubuntu-24.04
