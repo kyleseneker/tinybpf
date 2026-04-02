@@ -5,36 +5,26 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 ## [Unreleased]
 
 ### Added
-- `tinybpf generate` command for type-safe Go loader codegen from BPF ELF objects
-- `Result.Programs` and `Result.Maps` fields populated from output ELF
-- `lsm-file-open` example (LSM security audit hook with ring buffer)
-- `percpu-counter` example (per-CPU array map with syscall counting)
-- kfunc support via `bpfKfunc` naming convention (extern preservation for BTF-based resolution)
-- Stack usage warnings when `alloca` instructions approach the 512-byte BPF limit
-- `COMPATIBILITY.md` defining the v1.0 semver contract
-- `CHANGELOG.md`
-- `GOVERNANCE.md`
-- Example test functions for pkg.go.dev documentation
-- Comprehensive godoc on `diag` package fields, methods, and stage constants
-- Table-driven tests for codegen and generate CLI (97.5% coverage)
+- `tinybpf generate` with `//go:embed` loader when BPF object is reachable from output directory
+- Scaffold generates `gen.go` with `//go:generate` directives
+- Age-based cache eviction (30-day default, automatic on cache open)
+- Auto-detection warning when multiple programs found without `--programs`
+- `lsm-file-open` and `percpu-counter` examples
+- kfunc support, stack usage warnings, `COMPATIBILITY.md`, `GOVERNANCE.md`
 
 ### Changed
-- All 9 examples converted to `LoadAndAssign` with typed `Objects`/`Programs`/`Maps` structs
-- All example READMEs standardized (mermaid diagrams, prerequisites, troubleshooting tables)
-- All example `cmd/main.go` files use context-based signal handling
-- README rewritten with "Why tinybpf?" value proposition, comparison table, and grouped examples
-- Getting-started guide restructured as numbered steps with complete end-to-end workflow
-- Scaffold Makefile includes `generate` target
-- `docs/examples.md` updated with Security track and all 9 examples
+- Transform passes use structured AST instead of regex on raw IR lines
+- Cache keys include tool version fingerprints (in-place LLVM upgrades invalidate cache)
+- `consumeLinkage` refactored to token-based scanner
+- `copyFile` streams with `io.Copy` instead of buffering entire file
+- All examples use `LoadAndAssign` with typed structs; READMEs standardized
 
 ### Fixed
-- Makefile `bench` target path (`./transform/` → `./internal/transform/`)
-- `docs/config-reference.md` BTF and Cache field types documented as optional
-- `docs/project-layout.md` updated with `codegen/` package and new examples
-- Committed example binaries removed and added to `.gitignore`
+- CO-RE field offset computation accounts for struct alignment padding
+- Misc docs and Makefile path fixes
 
 ### Removed
-- `struct_ops` from supported program types (incompatible with Go — requires function pointers as struct members)
+- `struct_ops` program type (incompatible with Go)
 
 ## [0.7.0] - 2026-04-01
 
