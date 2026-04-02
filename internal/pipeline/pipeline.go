@@ -114,6 +114,11 @@ func prepareRunContext(ctx context.Context, cfg Config) (*runContext, func(), er
 		if cacheErr != nil && cfg.Verbose {
 			fmt.Fprintf(cfg.Stdout, "[cache] warning: %v (continuing without cache)\n", cacheErr)
 		}
+		if s != nil {
+			if n, _ := s.Evict(cache.DefaultMaxAge); n > 0 && cfg.Verbose {
+				fmt.Fprintf(cfg.Stdout, "[cache] evicted %d stale entries\n", n)
+			}
+		}
 		store = s
 	}
 
@@ -145,7 +150,7 @@ func (rc *runContext) linkInputs() error {
 	if rc.store != nil {
 		inputHash, hashErr := cache.HashFiles(inputs)
 		if hashErr == nil {
-			key := cache.Key("link", inputHash, rc.tools.LLVMLink)
+			key := cache.Key("link", inputHash, rc.tools.LLVMLink, rc.tools.VersionHash)
 			if cached, hit := rc.store.Lookup(key); hit {
 				rc.logCache("link", key, true)
 				return copyFile(cached, rc.artifacts.LinkedBC)
@@ -237,7 +242,7 @@ func (rc *runContext) runOptStage() error {
 		inputHash, hashErr := cache.HashFile(rc.artifacts.TransformedLL)
 		if hashErr == nil {
 			key := cache.Key("opt", inputHash,
-				rc.tools.Opt,
+				rc.tools.Opt, rc.tools.VersionHash,
 				rc.cfg.PassPipeline,
 				rc.cfg.OptProfile,
 				strings.Join(rc.cfg.CustomPasses, ","))
@@ -260,7 +265,7 @@ func (rc *runContext) runCodegenAndFinalize() error {
 	if rc.store != nil {
 		inputHash, hashErr := cache.HashFile(rc.artifacts.OptimizedLL)
 		if hashErr == nil {
-			key := cache.Key("codegen", inputHash, rc.tools.LLC, rc.cfg.CPU)
+			key := cache.Key("codegen", inputHash, rc.tools.LLC, rc.tools.VersionHash, rc.cfg.CPU)
 			if cached, hit := rc.store.Lookup(key); hit {
 				rc.logCache("codegen", key, true)
 				if err := copyFile(cached, rc.artifacts.CodegenObj); err != nil {

@@ -10,9 +10,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 )
 
-const formatVersion = "v1"
+const (
+	formatVersion = "v1"
+	DefaultMaxAge = 30 * 24 * time.Hour // 30 days
+)
 
 // Store is a content-addressed cache backed by a directory on disk.
 type Store struct {
@@ -169,6 +173,48 @@ func (s *Store) Clean() error {
 		}
 	}
 	return nil
+}
+
+// Evict removes cached artifacts that have not been accessed within maxAge.
+func (s *Store) Evict(maxAge time.Duration) (int, error) {
+	cutoff := time.Now().Add(-maxAge)
+	removed := 0
+
+	shards, err := os.ReadDir(s.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+
+	for _, shard := range shards {
+		if !shard.IsDir() {
+			continue
+		}
+		shardPath := filepath.Join(s.dir, shard.Name())
+		entries, err := os.ReadDir(shardPath)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			info, err := e.Info()
+			if err != nil {
+				continue
+			}
+			if info.ModTime().Before(cutoff) {
+				if err := os.Remove(filepath.Join(shardPath, e.Name())); err == nil {
+					removed++
+				}
+			}
+		}
+		// Remove empty shard directories.
+		remaining, _ := os.ReadDir(shardPath)
+		if len(remaining) == 0 {
+			_ = os.Remove(shardPath)
+		}
+	}
+	return removed, nil
 }
 
 // path returns the on-disk path for a cache key, using the first two hex

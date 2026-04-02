@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDefaultDir(t *testing.T) {
@@ -472,6 +473,69 @@ func TestClean(t *testing.T) {
 				t.Fatalf("Clean() error: %v", err)
 			}
 			tt.check(t, s)
+		})
+	}
+}
+
+func TestEvict(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxAge     time.Duration
+		setup      func(t *testing.T, s *Store)
+		wantRemove int
+	}{
+		{
+			name:   "removes old entries",
+			maxAge: time.Millisecond,
+			setup: func(t *testing.T, s *Store) {
+				t.Helper()
+				src := filepath.Join(t.TempDir(), "f")
+				os.WriteFile(src, []byte("data"), 0o600)
+				key := "ab" + strings.Repeat("0", 62)
+				if err := s.Put(key, src); err != nil {
+					t.Fatal(err)
+				}
+				// Backdate the file so it appears old.
+				p := s.path(key)
+				old := time.Now().Add(-48 * time.Hour)
+				os.Chtimes(p, old, old)
+			},
+			wantRemove: 1,
+		},
+		{
+			name:   "keeps recent entries",
+			maxAge: time.Hour,
+			setup: func(t *testing.T, s *Store) {
+				t.Helper()
+				src := filepath.Join(t.TempDir(), "f")
+				os.WriteFile(src, []byte("data"), 0o600)
+				if err := s.Put("cd"+strings.Repeat("1", 62), src); err != nil {
+					t.Fatal(err)
+				}
+			},
+			wantRemove: 0,
+		},
+		{
+			name:       "no-op on empty cache",
+			maxAge:     time.Millisecond,
+			setup:      func(t *testing.T, s *Store) { t.Helper() },
+			wantRemove: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, err := NewStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.setup(t, s)
+			n, err := s.Evict(tt.maxAge)
+			if err != nil {
+				t.Fatalf("Evict() error: %v", err)
+			}
+			if n != tt.wantRemove {
+				t.Errorf("Evict() removed %d, want %d", n, tt.wantRemove)
+			}
 		})
 	}
 }

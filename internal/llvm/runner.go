@@ -5,6 +5,8 @@ package llvm
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -94,12 +96,13 @@ func sanitizedEnv() []string {
 
 // Tools holds resolved paths to all required and optional LLVM binaries.
 type Tools struct {
-	LLVMLink string
-	Opt      string
-	LLC      string
-	LLVMAr   string // optional; needed for .a input expansion
-	Objcopy  string // optional; needed for .o bitcode extraction
-	Pahole   string // optional; needed for --btf
+	LLVMLink    string
+	Opt         string
+	LLC         string
+	LLVMAr      string // optional; needed for .a input expansion
+	Objcopy     string // optional; needed for .o bitcode extraction
+	Pahole      string // optional; needed for --btf
+	VersionHash string
 }
 
 // ToolOverrides allows callers to specify explicit binary paths,
@@ -173,14 +176,35 @@ func DiscoverTools(o ToolOverrides) (Tools, error) {
 		paths[i] = path
 	}
 
-	return Tools{
+	tools := Tools{
 		LLVMLink: paths[0],
 		Opt:      paths[1],
 		LLC:      paths[2],
 		LLVMAr:   paths[3],
 		Objcopy:  paths[4],
 		Pahole:   paths[5],
-	}, nil
+	}
+	tools.VersionHash = toolVersionHash(tools)
+	return tools, nil
+}
+
+// toolVersionHash produces a short fingerprint of the required tools' --version
+// output so that cache keys change when LLVM is upgraded in-place.
+func toolVersionHash(t Tools) string {
+	h := sha256.New()
+	for _, bin := range []string{t.LLVMLink, t.Opt, t.LLC} {
+		if bin == "" {
+			continue
+		}
+		out, err := exec.Command(bin, "--version").CombinedOutput()
+		if err != nil {
+			h.Write([]byte(bin))
+		} else {
+			h.Write(out)
+		}
+		h.Write([]byte{0})
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 // resolveRequired resolves and validates a required tool path.

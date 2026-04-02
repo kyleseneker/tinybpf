@@ -100,6 +100,14 @@ func extractProgramsModule(m *ir.Module, programNames []string, verbose bool, w 
 			fmt.Fprintf(w, "[transform] keeping program: %s\n", name)
 		}
 	}
+	if len(programNames) == 0 && len(programSet) > 1 {
+		names := make([]string, 0, len(programSet))
+		for name := range programSet {
+			names = append(names, name)
+		}
+		fmt.Fprintf(w, "[transform] auto-detected %d programs: %v (use --programs to select explicitly)\n",
+			len(names), names)
+	}
 	for _, fn := range m.Functions {
 		if !programSet[fn.Name] {
 			fn.Removed = true
