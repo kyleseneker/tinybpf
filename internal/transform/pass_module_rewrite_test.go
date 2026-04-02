@@ -20,7 +20,7 @@ func TestModuleRewriteModule(t *testing.T) {
 			name:       "retargets and strips target-cpu",
 			triple:     "x86_64-unknown-linux-gnu",
 			dataLayout: "e-m:o",
-			attrBody:   `{ "target-cpu"="generic" nounwind }`,
+			attrBody:   `"target-cpu"="generic" nounwind`,
 			wantTriple: "bpf",
 			wantStrip:  "target-cpu",
 		},
@@ -87,18 +87,44 @@ func TestStripAttributesModule(t *testing.T) {
 		name         string
 		attrBody     string
 		wantAbsent   []string
+		wantPresent  []string
 		wantModified bool
 	}{
 		{
 			name:         "strips target-cpu and target-features",
-			attrBody:     `{ "target-cpu"="generic" "target-features"="+neon" nounwind }`,
+			attrBody:     ` "target-cpu"="generic" "target-features"="+neon" nounwind `,
 			wantAbsent:   []string{"target-cpu", "target-features"},
+			wantPresent:  []string{"nounwind"},
 			wantModified: true,
 		},
 		{
 			name:         "no target attrs leaves body unchanged",
-			attrBody:     `{ nounwind }`,
+			attrBody:     ` nounwind `,
 			wantAbsent:   []string{"target-cpu", "target-features"},
+			wantModified: false,
+		},
+		{
+			name:         "strips alloc attributes",
+			attrBody:     ` allockind("alloc,zeroed") allocsize(0) "alloc-family"="runtime.alloc" "target-cpu"="generic" "target-features"="+ete,+fp-armv8,+neon,+trbe,+v8a" `,
+			wantAbsent:   []string{"allockind", "allocsize", "alloc-family", "target-cpu", "target-features"},
+			wantModified: true,
+		},
+		{
+			name:         "preserves memory and other attrs",
+			attrBody:     ` nounwind memory(readwrite, inaccessiblemem: write) "target-cpu"="generic" "target-features"="+neon" `,
+			wantAbsent:   []string{"target-cpu", "target-features"},
+			wantPresent:  []string{"nounwind", "memory(readwrite, inaccessiblemem: write)"},
+			wantModified: true,
+		},
+		{
+			name:         "preserves cold noreturn attrs",
+			attrBody:     ` cold noreturn nounwind memory(inaccessiblemem: write) `,
+			wantPresent:  []string{"cold", "noreturn", "nounwind", "memory(inaccessiblemem: write)"},
+			wantModified: false,
+		},
+		{
+			name:         "empty body",
+			attrBody:     "",
 			wantModified: false,
 		},
 	}
@@ -114,11 +140,63 @@ func TestStripAttributesModule(t *testing.T) {
 			}
 			for _, absent := range tt.wantAbsent {
 				if strings.Contains(ag.Body, absent) {
-					t.Errorf("%s not stripped", absent)
+					t.Errorf("%s not stripped from %q", absent, ag.Body)
+				}
+			}
+			for _, present := range tt.wantPresent {
+				if !strings.Contains(ag.Body, present) {
+					t.Errorf("%s missing from %q", present, ag.Body)
 				}
 			}
 			if ag.Modified != tt.wantModified {
 				t.Errorf("Modified = %v, want %v", ag.Modified, tt.wantModified)
+			}
+		})
+	}
+}
+
+func TestTokenizeAttrs(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want []string
+	}{
+		{
+			name: "mixed attrs from tinygo",
+			body: ` allockind("alloc,zeroed") allocsize(0) "alloc-family"="runtime.alloc" "target-cpu"="generic" "target-features"="+ete,+fp-armv8" `,
+			want: []string{`allockind("alloc,zeroed")`, `allocsize(0)`, `"alloc-family"="runtime.alloc"`, `"target-cpu"="generic"`, `"target-features"="+ete,+fp-armv8"`},
+		},
+		{
+			name: "bare words",
+			body: `nounwind cold noreturn`,
+			want: []string{"nounwind", "cold", "noreturn"},
+		},
+		{
+			name: "memory with nested parens",
+			body: `nounwind memory(readwrite, inaccessiblemem: write)`,
+			want: []string{"nounwind", "memory(readwrite, inaccessiblemem: write)"},
+		},
+		{
+			name: "empty",
+			body: "",
+			want: nil,
+		},
+		{
+			name: "only spaces",
+			body: "   ",
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tokenizeAttrs(tt.body)
+			if len(got) != len(tt.want) {
+				t.Fatalf("tokenizeAttrs() = %v, want %v", got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("token[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
 			}
 		})
 	}
