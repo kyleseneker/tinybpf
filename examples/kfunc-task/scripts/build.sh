@@ -25,6 +25,7 @@ echo "[2/2] tinybpf build -> ${BUILD_DIR}/task.bpf.o"
   "${TINYBPF_BIN}" build \
     --cpu "${CPU}" \
     --verbose \
+    --btf \
     ./bpf
 )
 

@@ -13,6 +13,10 @@ const (
 	xdpDrop = 1
 
 	bpfMapTypeHash = 1
+
+	ethHLen      = 14 // sizeof(ethhdr)
+	ethProtoOff  = 12 // offset of h_proto within ethhdr
+	ipSrcAddrOff = 12 // offset of src_addr within iphdr
 )
 
 type bpfMapDef struct {
@@ -32,58 +36,33 @@ var blocklist = bpfMapDef{
 	MaxEntries: 1024,
 }
 
-type ethhdr struct {
-	DstMAC [6]byte
-	SrcMAC [6]byte
-	Proto  uint16
-}
-
-type iphdr struct {
-	VersionIHL uint8
-	TOS        uint8
-	TotLen     uint16
-	ID         uint16
-	FragOff    uint16
-	TTL        uint8
-	Protocol   uint8
-	Check      uint16
-	SrcAddr    uint32
-	DstAddr    uint32
-}
-
 //go:extern bpf_map_lookup_elem
 func bpfMapLookupElem(mapPtr unsafe.Pointer, key unsafe.Pointer) unsafe.Pointer
 
+//go:extern bpf_xdp_load_bytes
+func bpfXdpLoadBytes(xdpMD unsafe.Pointer, offset uint32, buf unsafe.Pointer, size uint32) int64
+
 // xdp_filter drops packets whose IPv4 source address is in the blocklist map.
+//
+// Uses bpf_xdp_load_bytes for verifier-friendly bounds-safe packet reads
+// rather than raw pointer arithmetic on md.Data.
 //
 //export xdp_filter
 func xdp_filter(ctx unsafe.Pointer) int32 {
-	type xdpMD struct {
-		Data    uint32
-		DataEnd uint32
-	}
-	md := (*xdpMD)(ctx)
-
-	ethSize := uint32(unsafe.Sizeof(ethhdr{}))
-	if md.Data+ethSize > md.DataEnd {
+	var proto uint16
+	if bpfXdpLoadBytes(ctx, ethProtoOff, unsafe.Pointer(&proto), 2) != 0 {
 		return xdpPass
 	}
-	eth := (*ethhdr)(unsafe.Pointer(uintptr(md.Data)))
-
-	if ntohs(eth.Proto) != ethPIPv4 {
+	if ntohs(proto) != ethPIPv4 {
 		return xdpPass
 	}
 
-	ipOff := md.Data + ethSize
-	ipSize := uint32(unsafe.Sizeof(iphdr{}))
-	if ipOff+ipSize > md.DataEnd {
+	var srcAddr uint32
+	if bpfXdpLoadBytes(ctx, ethHLen+ipSrcAddrOff, unsafe.Pointer(&srcAddr), 4) != 0 {
 		return xdpPass
 	}
-	ip := (*iphdr)(unsafe.Pointer(uintptr(ipOff)))
 
-	srcAddr := ip.SrcAddr
-	val := bpfMapLookupElem(unsafe.Pointer(&blocklist), unsafe.Pointer(&srcAddr))
-	if val != nil {
+	if bpfMapLookupElem(unsafe.Pointer(&blocklist), unsafe.Pointer(&srcAddr)) != nil {
 		return xdpDrop
 	}
 	return xdpPass
@@ -92,5 +71,3 @@ func xdp_filter(ctx unsafe.Pointer) int32 {
 func ntohs(v uint16) uint16 {
 	return (v >> 8) | (v << 8)
 }
-
-func main() {}
