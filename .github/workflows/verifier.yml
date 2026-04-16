@@ -38,17 +38,19 @@ jobs:
           sudo apt-get install -y -qq llvm-20
           echo "/usr/lib/llvm-20/bin" >> "$GITHUB_PATH"
 
-      - name: Install bpftool
+      - name: Install bpftool and pahole
         run: |
-          # Build from source — the linux-tools-generic apt package installs a
-          # kernel-version-matched wrapper that fails on GH runners whose
-          # installed kernel lacks a matching tools package.
+          # Build bpftool from source — the linux-tools-generic apt package
+          # installs a kernel-version-matched wrapper that fails on GH runners
+          # whose installed kernel lacks a matching tools package. pahole
+          # (dwarves) is needed for BTF generation in examples that use kfuncs.
           set -euo pipefail
-          sudo apt-get install -y -qq libelf-dev
+          sudo apt-get install -y -qq libelf-dev dwarves
           git clone --depth=1 --recurse-submodules https://github.com/libbpf/bpftool.git /tmp/bpftool
           make -j"$(nproc)" -C /tmp/bpftool/src
           sudo make -C /tmp/bpftool/src install
           bpftool version
+          pahole --version
           uname -r
 
       - name: Build tinybpf
