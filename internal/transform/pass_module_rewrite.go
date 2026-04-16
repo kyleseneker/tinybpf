@@ -36,7 +36,9 @@ func retargetModule(m *ir.Module) error {
 }
 
 // stripAttributesModule removes target-specific attributes from attribute groups
-// by tokenizing the body and filtering out BPF-invalid entries.
+// by tokenizing the body and filtering out BPF-invalid entries. LLVM's `opt`
+// rejects empty attribute groups (`attributes #N = {  }`), so if stripping
+// empties a group we substitute `nounwind` — benign and always true for BPF.
 func stripAttributesModule(m *ir.Module) error {
 	for _, ag := range m.AttrGroups {
 		tokens := tokenizeAttrs(ag.Body)
@@ -50,6 +52,9 @@ func stripAttributesModule(m *ir.Module) error {
 			filtered = append(filtered, tok)
 		}
 		if changed {
+			if len(filtered) == 0 {
+				filtered = []string{"nounwind"}
+			}
 			ag.Body = strings.Join(filtered, " ")
 			ag.Modified = true
 		}

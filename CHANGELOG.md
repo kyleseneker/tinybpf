@@ -29,6 +29,7 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 ### Fixed
 - CO-RE field offset computation accounts for struct alignment padding
 - Misc docs and Makefile path fixes
+- Attribute groups emptied by stripping now retain `nounwind` so `opt` accepts them
 
 ### Removed
 - `struct_ops` program type (incompatible with Go)

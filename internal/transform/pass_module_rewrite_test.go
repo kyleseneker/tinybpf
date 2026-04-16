@@ -107,6 +107,14 @@ func TestStripAttributesModule(t *testing.T) {
 			name:         "strips alloc attributes",
 			attrBody:     ` allockind("alloc,zeroed") allocsize(0) "alloc-family"="runtime.alloc" "target-cpu"="generic" "target-features"="+ete,+fp-armv8,+neon,+trbe,+v8a" `,
 			wantAbsent:   []string{"allockind", "allocsize", "alloc-family", "target-cpu", "target-features"},
+			wantPresent:  []string{"nounwind"},
+			wantModified: true,
+		},
+		{
+			name:         "empty after stripping substitutes nounwind",
+			attrBody:     ` "target-cpu"="generic" "target-features"="+neon" `,
+			wantAbsent:   []string{"target-cpu", "target-features"},
+			wantPresent:  []string{"nounwind"},
 			wantModified: true,
 		},
 		{
