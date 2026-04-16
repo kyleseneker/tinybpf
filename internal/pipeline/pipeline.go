@@ -270,45 +270,60 @@ func scrubAbortFromOptimized(path string, w io.Writer) error {
 		return diag.Wrap(diag.StageOpt, err, "read optimized IR for abort scrub")
 	}
 	lines := strings.Split(string(data), "\n")
-	// TEMP DEBUG: dump any line containing "abort" (case-insensitive) before scrub.
-	if w != nil && strings.Contains(strings.ToLower(string(data)), "abort") {
-		fmt.Fprintf(w, "[opt-scrub-debug] %s: found %d occurrences of 'abort' (case-insensitive)\n",
-			filepath.Base(path), strings.Count(strings.ToLower(string(data)), "abort"))
-		for i, line := range lines {
-			if strings.Contains(strings.ToLower(line), "abort") {
-				fmt.Fprintf(w, "[opt-scrub-debug]   line %d: %q\n", i+1, line)
-			}
-		}
-	} else if w != nil {
-		fmt.Fprintf(w, "[opt-scrub-debug] %s: no 'abort' found in optimized IR\n", filepath.Base(path))
-	}
-	out := lines[:0]
-	calls, declares := 0, 0
+	out := make([]string, 0, len(lines))
+	trapsAdded, abortsRemoved := 0, 0
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "call void @abort(") ||
 			strings.HasPrefix(trimmed, "tail call void @abort(") ||
 			strings.HasPrefix(trimmed, "musttail call void @abort(") {
-			calls++
+			abortsRemoved++
 			continue
 		}
 		if strings.HasPrefix(trimmed, "declare ") && strings.Contains(trimmed, " @abort(") {
-			declares++
+			abortsRemoved++
 			continue
+		}
+		// BPF llc synthesizes a `call abort` when it lowers an `unreachable`
+		// terminator that isn't preceded by a noreturn call -- BPF target then
+		// rejects `abort` as unsupported. Emitting `llvm.trap()` before the
+		// terminator gives llc a BPF-compatible trap instruction to lower
+		// instead (BPF_JMP | BPF_EXIT) and avoids the synthesized abort.
+		if trimmed == "unreachable" {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			if !lastEmittedWasTrap(out) {
+				out = append(out, indent+"call void @llvm.trap()")
+				trapsAdded++
+			}
 		}
 		out = append(out, line)
 	}
-	if calls == 0 && declares == 0 {
+	if trapsAdded == 0 && abortsRemoved == 0 {
 		return nil
 	}
 	if err := os.WriteFile(filepath.Clean(path), []byte(strings.Join(out, "\n")), 0o600); err != nil {
 		return diag.Wrap(diag.StageOpt, err, "write scrubbed IR")
 	}
-	if w != nil {
-		fmt.Fprintf(w, "[opt-scrub] stripped %d abort call(s) and %d declare(s) from TinyGo panic paths; "+
-			"if reachable at runtime the BPF verifier will reject the program\n", calls, declares)
+	if w != nil && (trapsAdded > 0 || abortsRemoved > 0) {
+		fmt.Fprintf(w, "[opt-scrub] added %d llvm.trap call(s) before unreachable, removed %d abort reference(s); "+
+			"if a panic path is reachable the verifier will reject the program\n", trapsAdded, abortsRemoved)
 	}
 	return nil
+}
+
+// lastEmittedWasTrap reports whether the most recently written non-empty line
+// is already a trap/noreturn call, so we don't insert a duplicate.
+func lastEmittedWasTrap(out []string) bool {
+	for i := len(out) - 1; i >= 0; i-- {
+		trimmed := strings.TrimSpace(out[i])
+		if trimmed == "" {
+			continue
+		}
+		return strings.HasPrefix(trimmed, "call void @llvm.trap(") ||
+			strings.HasPrefix(trimmed, "tail call void @llvm.trap(") ||
+			strings.HasPrefix(trimmed, "musttail call void @llvm.trap(")
+	}
+	return false
 }
 
 // runCodegenAndFinalize runs llc code generation, copies the output, and
