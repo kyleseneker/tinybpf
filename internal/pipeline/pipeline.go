@@ -270,70 +270,48 @@ func scrubAbortFromOptimized(path string, w io.Writer) error {
 		return diag.Wrap(diag.StageOpt, err, "read optimized IR for abort scrub")
 	}
 	lines := strings.Split(string(data), "\n")
-	// TEMP DEBUG: if path is for xdp-filter, dump a snippet of the optimized IR.
-	if w != nil && strings.Contains(path, "xdp") || strings.Contains(strings.Join(lines, "\n"), "xdp_filter") {
-		fmt.Fprintf(w, "[opt-dump] === %s ===\n", path)
-		for i, line := range lines {
-			if i > 400 {
-				fmt.Fprintf(w, "[opt-dump] ... (truncated at %d lines, total=%d)\n", i, len(lines))
-				break
-			}
-			fmt.Fprintf(w, "[opt-dump] %s\n", line)
-		}
-		fmt.Fprintf(w, "[opt-dump] === end %s ===\n", path)
-	}
 	out := make([]string, 0, len(lines))
-	trapsAdded, abortsRemoved := 0, 0
+	stripped := 0
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "call void @abort(") ||
-			strings.HasPrefix(trimmed, "tail call void @abort(") ||
-			strings.HasPrefix(trimmed, "musttail call void @abort(") {
-			abortsRemoved++
+		// BPF llc's TRAP lowering falls back to a call to abort() because the
+		// BPF target doesn't register a custom TRAP handler. Strip both the
+		// call and any declare -- the trailing `unreachable` is BPF-safe on
+		// its own and the kernel verifier will reject the program if the
+		// panic path is actually reachable.
+		if isStripTarget(trimmed, "@abort") || isStripTarget(trimmed, "@llvm.trap") {
+			stripped++
 			continue
 		}
-		if strings.HasPrefix(trimmed, "declare ") && strings.Contains(trimmed, " @abort(") {
-			abortsRemoved++
+		if strings.HasPrefix(trimmed, "declare ") &&
+			(strings.Contains(trimmed, " @abort(") || strings.Contains(trimmed, " @llvm.trap(")) {
+			stripped++
 			continue
-		}
-		// BPF llc synthesizes a `call abort` when it lowers an `unreachable`
-		// terminator that isn't preceded by a noreturn call -- BPF target then
-		// rejects `abort` as unsupported. Emitting `llvm.trap()` before the
-		// terminator gives llc a BPF-compatible trap instruction to lower
-		// instead (BPF_JMP | BPF_EXIT) and avoids the synthesized abort.
-		if trimmed == "unreachable" {
-			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
-			if !lastEmittedWasTrap(out) {
-				out = append(out, indent+"call void @llvm.trap()")
-				trapsAdded++
-			}
 		}
 		out = append(out, line)
 	}
-	if trapsAdded == 0 && abortsRemoved == 0 {
+	if stripped == 0 {
 		return nil
 	}
 	if err := os.WriteFile(filepath.Clean(path), []byte(strings.Join(out, "\n")), 0o600); err != nil {
 		return diag.Wrap(diag.StageOpt, err, "write scrubbed IR")
 	}
-	if w != nil && (trapsAdded > 0 || abortsRemoved > 0) {
-		fmt.Fprintf(w, "[opt-scrub] added %d llvm.trap call(s) before unreachable, removed %d abort reference(s); "+
-			"if a panic path is reachable the verifier will reject the program\n", trapsAdded, abortsRemoved)
+	if w != nil {
+		fmt.Fprintf(w, "[opt-scrub] stripped %d abort/llvm.trap reference(s) from TinyGo panic paths; "+
+			"if a panic path is reachable the verifier will reject the program\n", stripped)
 	}
 	return nil
 }
 
-// lastEmittedWasTrap reports whether the most recently written non-empty line
-// is already a trap/noreturn call, so we don't insert a duplicate.
-func lastEmittedWasTrap(out []string) bool {
-	for i := len(out) - 1; i >= 0; i-- {
-		trimmed := strings.TrimSpace(out[i])
-		if trimmed == "" {
-			continue
+// isStripTarget reports whether a trimmed IR line is a direct call to the
+// given target symbol (e.g. "@abort", "@llvm.trap"), accounting for tail/
+// notail/musttail prefixes.
+func isStripTarget(trimmed, sym string) bool {
+	prefix := sym + "("
+	for _, pfx := range []string{"call void ", "tail call void ", "notail call void ", "musttail call void "} {
+		if strings.HasPrefix(trimmed, pfx) && strings.HasPrefix(trimmed[len(pfx):], prefix) {
+			return true
 		}
-		return strings.HasPrefix(trimmed, "call void @llvm.trap(") ||
-			strings.HasPrefix(trimmed, "tail call void @llvm.trap(") ||
-			strings.HasPrefix(trimmed, "musttail call void @llvm.trap(")
 	}
 	return false
 }
