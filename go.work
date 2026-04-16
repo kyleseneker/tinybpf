@@ -4,6 +4,7 @@ use (
 	.
 	./examples/cgroup-connect
 	./examples/fentry-open
+	./examples/kfunc-task
 	./examples/kprobe-openat
 	./examples/lsm-file-open
 	./examples/percpu-counter

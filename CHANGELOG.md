@@ -10,6 +10,7 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 - Age-based cache eviction (30-day default, automatic on cache open)
 - Auto-detection warning when multiple programs found without `--programs`
 - `lsm-file-open` and `percpu-counter` examples
+- `kfunc-task` example: end-to-end validation of the kfunc path via `bpf_task_from_pid` + `bpf_task_release`
 - kfunc support, stack usage warnings, `COMPATIBILITY.md`, `GOVERNANCE.md`
 - Auto-infer `--program-type` from `--section` values when omitted
 

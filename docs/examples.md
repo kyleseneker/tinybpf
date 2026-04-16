@@ -32,6 +32,12 @@ Start here if you want to filter or control traffic.
 |-------|---------|-----------|----------|
 | 1 | [lsm-file-open](../examples/lsm-file-open/) | LSM | Security audit hook, `CONFIG_BPF_LSM`, ring buffer |
 
+### Kfuncs
+
+| Order | Example | Hook type | Concepts |
+|-------|---------|-----------|----------|
+| 1 | [kfunc-task](../examples/kfunc-task/) | Fentry | `bpf_task_from_pid` + `bpf_task_release`, BTF-resolved kfuncs, acquire/release reference semantics |
+
 ## How to build any example
 
 From the repo root, `make example` builds the `tinybpf` binary, compiles the BPF object, and builds the Go loader in one command:

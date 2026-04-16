@@ -119,6 +119,12 @@ See [Getting Started](docs/getting-started.md) for the full walkthrough.
 |---------|-----------|---------------------|
 | [lsm-file-open](examples/lsm-file-open/) | LSM | Security audit hook, file open monitoring |
 
+### Kfuncs
+
+| Example | Hook type | What it demonstrates |
+|---------|-----------|---------------------|
+| [kfunc-task](examples/kfunc-task/) | Fentry | `bpf_task_from_pid` + `bpf_task_release`, BTF-resolved kernel functions |
+
 Build and run any example:
 
 ```bash
