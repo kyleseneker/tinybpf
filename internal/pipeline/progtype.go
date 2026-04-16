@@ -44,7 +44,6 @@ var knownProgramTypes = map[string]string{
 	"fexit/":                "Fexit",
 	"fmod_ret/":             "Fmod ret",
 	"freplace/":             "Freplace",
-	"iter/":                 "Iterator",
 	"lsm/":                  "LSM",
 	"lsm.s/":                "LSM sleepable",
 	"syscall":               "Syscall",
@@ -95,8 +94,26 @@ func inferredSource(sections map[string]string, pt string) string {
 	return ""
 }
 
+// unsupportedProgramTypes maps prefixes of BPF program types that tinybpf
+// intentionally does not support to a short reason. They are rejected with an
+// explicit error so users know the boundary rather than hitting an obscure
+// failure later. Iterator programs depend on iterator-specific context struct
+// handling and kfunc sequencing that tinybpf does not implement.
+var unsupportedProgramTypes = map[string]string{
+	"iter/": "iterator programs are not supported by tinybpf (require iterator-specific context handling and bpf_iter_* kfunc sequencing)",
+}
+
 // ValidateProgramType checks that all section names match the given BPF program type prefix.
 func ValidateProgramType(programType string, sections map[string]string) error {
+	if reason, ok := unsupportedProgramTypeReason(programType); ok {
+		return fmt.Errorf("--program-type %q: %s", programType, reason)
+	}
+	for fn, section := range sections {
+		if reason, ok := unsupportedProgramTypeReason(section); ok {
+			return fmt.Errorf("section %q for program %q: %s", section, fn, reason)
+		}
+	}
+
 	if programType == "" {
 		return nil
 	}
@@ -113,6 +130,19 @@ func ValidateProgramType(programType string, sections map[string]string) error {
 		}
 	}
 	return nil
+}
+
+// unsupportedProgramTypeReason reports whether s is an intentionally
+// unsupported BPF program type (or a section for one), returning a
+// user-facing reason.
+func unsupportedProgramTypeReason(s string) (string, bool) {
+	for prefix, reason := range unsupportedProgramTypes {
+		bare := strings.TrimSuffix(prefix, "/")
+		if s == bare || strings.HasPrefix(s, prefix) {
+			return reason, true
+		}
+	}
+	return "", false
 }
 
 // isKnownType reports whether pt matches a recognized BPF program type.

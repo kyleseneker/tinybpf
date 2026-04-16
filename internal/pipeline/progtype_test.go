@@ -213,6 +213,18 @@ func TestValidateProgramType(t *testing.T) {
 			nil,
 			"",
 		},
+		{
+			"iter program-type rejected as unsupported",
+			"iter",
+			nil,
+			"iterator programs are not supported",
+		},
+		{
+			"iter section rejected as unsupported",
+			"",
+			map[string]string{"prog": "iter/task"},
+			"iterator programs are not supported",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

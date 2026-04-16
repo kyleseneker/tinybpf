@@ -528,14 +528,14 @@ entry:
 
 define i32 @my_func(ptr %ctx) {
 entry:
-  call void @main.bpfKfuncBpfIterTaskNext(ptr %ctx, ptr undef)
+  call void @main.bpfKfuncBpfCastToKernCtx(ptr %ctx, ptr undef)
   ret i32 0
 }
 
-declare void @main.bpfKfuncBpfIterTaskNext(ptr, ptr)`,
+declare void @main.bpfKfuncBpfCastToKernCtx(ptr, ptr)`,
 			opts:     Options{Stdout: io.Discard},
-			contains: []string{"@bpfKfuncBpfIterTaskNext"},
-			absent:   []string{"inttoptr", "@main.bpfKfuncBpfIterTaskNext"},
+			contains: []string{"@bpfKfuncBpfCastToKernCtx"},
+			absent:   []string{"inttoptr", "@main.bpfKfuncBpfCastToKernCtx"},
 		},
 		{
 			name: "multi-program extraction with sections",
