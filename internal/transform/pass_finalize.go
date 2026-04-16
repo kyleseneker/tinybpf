@@ -18,12 +18,51 @@ const (
 var allocaSizeRe = regexp.MustCompile(`alloca \[(\d+) x i8\]`)
 
 // finalizeModule adds a GPL license if missing and removes unreferenced definitions.
-func finalizeModule(m *ir.Module) error {
+func finalizeModule(m *ir.Module, w io.Writer) error {
 	stripKfuncPrefixModule(m)
+	stripAbortCallsModule(m, w)
 	if err := addLicenseModule(m); err != nil {
 		return err
 	}
 	return cleanupModule(m)
+}
+
+// stripAbortCallsModule removes `call void @abort()` instructions from function
+// bodies. TinyGo pairs them with an `unreachable` terminator on panic and
+// bounds-check paths; the terminator alone preserves semantics and is
+// BPF-compatible, but the BPF llc backend rejects `abort`. A diagnostic is
+// emitted when stripping happens so users see their code contains a
+// TinyGo-flagged panic path -- if reachable at runtime the kernel verifier
+// will reject the program with a clearer message. The now-unused
+// `declare void @abort()` is pruned by removeUnreferencedDeclares later.
+func stripAbortCallsModule(m *ir.Module, w io.Writer) {
+	total := 0
+	for _, fn := range m.Functions {
+		if fn.Removed {
+			continue
+		}
+		ir.EnsureBlocks(fn)
+		count := 0
+		for _, block := range fn.Blocks {
+			kept := block.Instructions[:0]
+			for _, inst := range block.Instructions {
+				if inst.Kind == ir.InstCall && inst.Call != nil && inst.Call.Callee == "@abort" {
+					count++
+					continue
+				}
+				kept = append(kept, inst)
+			}
+			block.Instructions = kept
+		}
+		if count > 0 {
+			fn.Modified = true
+			total += count
+		}
+	}
+	if total > 0 && w != nil {
+		fmt.Fprintf(w, "[transform] stripped %d abort call(s) from TinyGo panic paths; "+
+			"if reachable at runtime the BPF verifier will reject the program\n", total)
+	}
 }
 
 // stripKfuncPrefixModule renames kfunc declarations and call sites from

@@ -30,6 +30,8 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 - CO-RE field offset computation accounts for struct alignment padding
 - Misc docs and Makefile path fixes
 - Attribute groups emptied by stripping now retain `nounwind` so `opt` accepts them
+- Strip `call void @abort()` from TinyGo panic paths; `unreachable` terminator preserves semantics and avoids BPF llc rejecting `abort`
+- CO-RE offset discovery skips GEPs with non-integer trailing operands instead of aborting the whole transform
 
 ### Removed
 - `struct_ops` program type (incompatible with Go)

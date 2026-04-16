@@ -38,7 +38,7 @@ func TestFinalizeModule(t *testing.T) {
 					{Kind: ir.TopBlank, Raw: ""},
 				},
 			}
-			if err := finalizeModule(m); err != nil {
+			if err := finalizeModule(m, nil); err != nil {
 				t.Fatal(err)
 			}
 			hasLicense := false

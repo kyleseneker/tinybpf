@@ -24,6 +24,8 @@ func buildModuleStages(opts Options) []moduleStage {
 			return sectionsPassModule(m, opts.Sections)
 		}},
 		{"map-btf", mapBTFPassModule},
-		{"finalize", finalizeModule},
+		{"finalize", func(m *ir.Module) error {
+			return finalizeModule(m, opts.Stdout)
+		}},
 	}
 }
