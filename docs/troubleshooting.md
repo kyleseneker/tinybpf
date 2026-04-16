@@ -1,14 +1,12 @@
 # Troubleshooting
 
-Common issues and solutions when using `tinybpf`. Run `tinybpf --help` for a quick overview of available commands and flags.
-
 ## Setup issues
 
 ### LLVM version mismatch
 
-**Symptom:** `tinybpf` fails at the `llvm-link` or `opt` stage with parse errors, or `tinybpf doctor` reports a version warning.
+**Symptom:** `tinybpf` fails at the `llvm-link` or `opt` stage with parse errors, or `tinybpf doctor` warns about version.
 
-**Cause:** System LLVM tools must be >= the LLVM version bundled with TinyGo. TinyGo 0.40.x bundles LLVM 20; system tools must be version 20 or later.
+**Cause:** System LLVM must be >= TinyGo's bundled version (TinyGo 0.40.x -> LLVM 20+).
 
 **Fix:**
 
@@ -48,17 +46,9 @@ tinygo version
 
 ### `tinybpf doctor` reports failures
 
-Run `tinybpf doctor` to diagnose your toolchain. Each tool is listed with its resolved path and version. Failures appear as `[FAIL]` with an error message, and warnings appear at the end with remediation guidance.
-
-```bash
-tinybpf doctor
-```
-
-If a required tool (`llvm-link`, `opt`, `llc`) is missing, install LLVM or pass the tool path explicitly with `--llvm-link`, `--opt`, or `--llc`.
+Run `tinybpf doctor`; each tool lists its resolved path and version. If a required tool (`llvm-link`, `opt`, `llc`) is missing, install LLVM or pass the path explicitly (`--llvm-link`, `--opt`, `--llc`).
 
 ## Build errors
-
-When using `tinybpf build`, the TinyGo compilation step runs before the link pipeline. Errors from this stage are reported as `tinygo-compile`.
 
 ### Stage `tinygo-compile` -- TOOL_EXECUTION_FAILED
 

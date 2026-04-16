@@ -31,6 +31,12 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 ### Removed
 - `struct_ops` program type (incompatible with Go)
 - `iter/` program type from `knownProgramTypes`; iterator programs are now rejected with an explicit error and documented as unsupported
+- `docs/examples.md` (duplicated README tables and per-example READMEs)
+- Verbose FAQ, "BPF in a nutshell", and "Why TinyGo" intro from `writing-go-for-ebpf.md`
+- Expanded prose in architecture "Design decisions"; collapsed to a bullet list
+- `getting-started.md` trimmed to toolchain prerequisites + install (build flow lives in README)
+- `CONTRIBUTING.md` trimmed to dev setup + VM workflow (no imagined-contributor PR process)
+- `support-matrix.md` trimmed (CI matrix section redundant with workflow file)
 
 ## [0.7.0] - 2026-04-01
 

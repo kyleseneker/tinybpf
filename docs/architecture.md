@@ -74,60 +74,30 @@ graph LR
 
 Each pass receives a parsed `*ir.Module` and modifies the AST in place.
 
-## Design decisions
+## Design notes
 
-### Shell out to LLVM binaries
-
-The linker drives standalone LLVM tools (`llvm-link`, `opt`, `llc`) rather than linking against `libLLVM`. This avoids a CGo dependency on a specific LLVM version. Users install whichever LLVM matches their TinyGo, and the Go binary stays small, portable, and easy to cross-compile.
-
-### AST-based IR transformation
-
-The `ir` package provides a lightweight parser that builds a structured AST from LLVM IR text, covering the subset of IR that TinyGo emits: type definitions, globals, declares, functions (with basic blocks and instructions), attribute groups, and metadata nodes. The `transform` package operates on this AST, modifying nodes directly rather than manipulating raw text.
-
-Unrecognized IR constructs are preserved verbatim through `Raw` fields on every AST node, guaranteeing faithful round-trip serialization (`Serialize(Parse(input)) == input` for unmodified modules). This avoids a CGo/libLLVM dependency, works across LLVM versions, and gives transforms structured access to functions, instructions, globals, and metadata without relying on fragile textual patterns.
-
-### Fail-loud on partial match
-
-Every transform that uses a two-stage filter (marker string check followed by regex or parser) **must** error when the marker is present but the second stage fails. A line containing `@main.bpf` inside a `call` that doesn't match the helper regex, a `bpfMapDef` global with an unparseable initializer, or a `bpfCore` GEP that doesn't match the expected pattern -- these all produce errors rather than silent skips.
-
-The rule: if we recognize *what* a line is trying to do but can't parse *how*, that is an error, not a skip.
-
-### Structured diagnostics
-
-Every pipeline stage produces a `diag.Error` carrying the stage name, the command that failed, and a human-readable hint. LLVM tool errors can be cryptic; wrapping them with context makes debugging practical.
-
-Transform passes that iterate independent items (helper rewrites, CO-RE access/exists, alloc replacement, map BTF) collect all errors in a single pass and return them as a `diag.Errors`. Structural stages (module rewrite, sections, finalize) remain fail-fast because their errors cascade.
-
-Unknown BPF helper names include fuzzy-match suggestions ("did you mean?") based on Levenshtein distance against the generated helper table.
-
-### Named optimization profiles
-
-The `--opt-profile` flag maps to curated LLVM pass sequences tuned for BPF verifier compliance. See [Config Reference](config-reference.md#optimization-profiles) for the available profiles. Users who need full control can provide `--pass-pipeline` directly.
-
-### Binary allowlist and environment sanitization
-
-Every external binary execution passes through `llvm.Run`, which injects a minimal subprocess environment (`LC_ALL=C`, `TZ=UTC`, and only `PATH`/`HOME`/`TMPDIR` from the host). This prevents locale or timezone leaks from affecting LLVM output, supporting deterministic builds.
-
-At tool discovery time, every resolved path is validated against an allowlist of known tool basenames (`llvm-link`, `opt`, `llc`, `llvm-ar`, `llvm-objcopy`, `pahole`, `tinygo`, `ld.lld`). Version-suffixed names like `opt-18` are accepted. Paths containing shell metacharacters are rejected.
-
-### Project configuration
-
-The `tinybpf.json` file stores project-level build settings. The CLI auto-discovers this file by walking parent directories from the current working directory, like `go.mod`. CLI flags override config file values for one-off invocations. See [Config Reference](config-reference.md) for the full schema and merge rules.
-
-### Content-addressed build cache
-
-The `cache` package provides a per-stage content-addressed build cache stored under `$XDG_CACHE_HOME/tinybpf/v1/`. On a cache hit, the cached output is copied directly to the working directory and the LLVM tool invocation is skipped.
-
-Artifacts are stored in two-character hex shard directories. The `v1/` prefix allows future format changes without conflicting. BTF injection and ELF validation are not cached because they operate on the final output file and their cost is negligible compared to the LLVM tool stages.
-
-### Input normalization
-
-Archives (`.a`) and object files with embedded bitcode (`.o`) require extraction before linking. A dedicated normalization stage keeps the link step clean and makes supported input formats extensible. When multiple inputs are provided, `--jobs` enables parallel normalization bounded by a semaphore.
-
-### Inspectable intermediates
-
-The `--keep-temp` and `--tmpdir` flags preserve every intermediate file. The `--dump-ir` flag writes a snapshot of the IR after each transform pass into a `dump-ir/` subdirectory, numbered sequentially (`01-module-rewrite.ll`, `02-extract-programs.ll`, etc.), making it easy to diff consecutive passes and isolate which transform introduced a problem.
-
-### Enriched error context
-
-Transform-stage errors include the IR line number and a source snippet surrounding the failing line. For example, an unknown BPF helper error shows the exact IR call instruction and its neighbors, rather than just a function name.
+- **Shell out to LLVM.** The pipeline invokes `llvm-link`, `opt`, `llc` as
+  subprocesses rather than linking against `libLLVM`. No CGo; the Go binary
+  stays portable.
+- **AST-based IR rewriting.** `internal/ir` parses LLVM IR into an AST with
+  `Raw` fallback fields on every node, guaranteeing round-trip serialization
+  (`Serialize(Parse(input)) == input` for unmodified modules). Transforms
+  operate on structure, not text.
+- **Fail loud on partial match.** If a transform recognizes *what* a
+  construct is but can't parse *how*, it errors rather than silently skipping.
+- **Collect-all vs fail-fast.** Item-level passes (helper rewrites, CO-RE,
+  alloc, map BTF) accumulate every error per run; structural passes
+  (module rewrite, sections, finalize) stop on first failure.
+- **Unknown helpers suggest alternatives.** Levenshtein-based "did you mean?"
+  hints on the generated helper table.
+- **Subprocess sanitization.** Every tool invocation passes through
+  `llvm.Run`, which sets `LC_ALL=C`, `TZ=UTC`, and forwards only
+  `PATH`/`HOME`/`TMPDIR`. Resolved paths are checked against a basename
+  allowlist; shell metacharacters in paths are rejected.
+- **Content-addressed cache.** Per-stage artifacts in
+  `$XDG_CACHE_HOME/tinybpf/v1/`, sharded by two-char hex prefix. BTF and ELF
+  validation are not cached (trivial cost).
+- **Inspectable intermediates.** `--keep-temp`, `--tmpdir`, and `--dump-ir`
+  preserve every stage output plus a numbered dump after each transform pass.
+- **Enriched diagnostics.** Transform errors include IR line numbers and
+  source snippets around the failing line.

@@ -1,89 +1,38 @@
 # Support Matrix
 
-Tested toolchain versions and platforms for `tinybpf`.
+Tested versions for `tinybpf`.
 
-## Toolchain versions
+## Toolchain
 
-| Dependency | Tested versions | Notes |
-|------------|-----------------|-------|
+| Dependency | Versions | Notes |
+|------------|----------|-------|
 | Go | 1.24.x, 1.25.x | |
 | TinyGo | 0.40.1 | Bundles LLVM 20.1.1 |
-| LLVM | 20, 21, 22 | System LLVM must be >= TinyGo's bundled LLVM major version |
+| LLVM | 20, 21, 22 | System LLVM must be >= TinyGo's bundled major |
 | bpftool | 7.4.0 | Used for verifier validation on Linux |
 
-### LLVM version compatibility
+TinyGo 0.40.x emits LLVM 20 IR; LLVM 18/19 cannot parse it. LLVM 20, 21, and
+22 are forward-compatible.
 
-TinyGo 0.40.x emits LLVM 20 IR. System LLVM tools (`llvm-link`, `opt`, `llc`) must be version 20 or later to parse it.
+## Platforms
 
-| System LLVM | Compatible | Notes |
-|-------------|------------|-------|
-| 18 | No | Cannot parse LLVM 20 IR (`#dbg_value` syntax, `nuw` on GEP) |
-| 19 | No | Cannot parse LLVM 20 IR (`nuw` on GEP, unsupported attributes) |
-| 20 | Yes | Matches TinyGo 0.40.x |
-| 21 | Yes | Forward-compatible with LLVM 20 IR |
-| 22 | Yes | Forward-compatible with LLVM 20 IR |
+| OS | Arch | Compile | Load |
+|----|------|---------|------|
+| Linux | amd64 | Yes | Yes |
+| Linux | arm64 | Yes | Yes |
+| macOS | arm64 | Yes | No (use QEMU VM) |
 
-## Required LLVM binaries
+## Kernels
 
-| Binary | Purpose |
+CO-RE relocations are exercised weekly via the `kernel-matrix` CI job using
+the `rawtp-sched` example.
+
+| Kernel | LTS EOL |
 |--------|---------|
-| `llvm-link` | IR module linking |
-| `opt` | Optimization pass pipeline |
-| `llc` | BPF code generation |
+| 5.15 | Dec 2026 |
+| 6.1 | Dec 2027 |
+| 6.6 | Dec 2027 |
+| 6.12 | Dec 2028 |
+| 6.18 | Dec 2028 |
 
-## Optional binaries
-
-| Binary | Purpose |
-|--------|---------|
-| `llvm-ar` | Expanding `.a` archive inputs |
-| `llvm-objcopy` | Extracting embedded bitcode from `.o` inputs |
-| `pahole` | BTF injection (`--btf` flag) |
-
-## CI matrix
-
-CI runs on Ubuntu 24.04 with the following matrix:
-
-| Dimension | Values |
-|-----------|--------|
-| Go | 1.24.x, 1.25.x |
-| LLVM | 20, 21, 22 |
-| Primary lane | Go 1.25.x + LLVM 20 |
-
-The primary lane enforces:
-- 90% coverage threshold
-- Binary size limit (15 MiB)
-- Fuzz smoke tests (10s per target)
-
-## Kernel validation
-
-| Kernel | Distribution | Architecture | Confidence |
-|--------|-------------|--------------|------------|
-| 6.8.0-100 | Ubuntu 24.04 | arm64 | Manual |
-
-**Confidence levels:** CI = continuously tested on every PR; Scheduled = tested on a recurring schedule; Manual = validated by maintainers, not continuously tested.
-
-## CO-RE kernel matrix
-
-CO-RE relocations are tested across active LTS kernel versions via the `kernel-matrix` CI workflow (weekly, using the `rawtp-sched` example):
-
-| Kernel | LTS EOL | CO-RE status |
-|--------|---------|-------------|
-| 5.15 | Dec 2026 | Tested |
-| 6.1 | Dec 2027 | Tested |
-| 6.6 | Dec 2027 | Tested |
-| 6.12 | Dec 2028 | Tested |
-| 6.18 | Dec 2028 | Tested |
-
-CO-RE requires a kernel with BTF support (`CONFIG_DEBUG_INFO_BTF=y`), which is enabled by default on most distributions since kernel 5.4+.
-
-## Platform support
-
-| OS | Architecture | Compilation | Kernel loading | Confidence |
-|----|-------------|-------------|----------------|------------|
-| Linux | amd64 | Yes | Yes | CI |
-| Linux | arm64 | Yes | Yes | CI |
-| macOS | arm64 | Yes (through `llc`) | No (requires Linux) | CI |
-
-**Confidence levels:** CI = continuously tested on every PR; Manual = validated by maintainers, not continuously tested.
-
-See [Troubleshooting](troubleshooting.md#debugging-flags-summary) for debugging flags and [Contributing](../CONTRIBUTING.md#running-tests) for testing details.
+CO-RE requires `CONFIG_DEBUG_INFO_BTF=y` (default on most distros since 5.4).
