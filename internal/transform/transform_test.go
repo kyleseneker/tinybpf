@@ -534,8 +534,8 @@ entry:
 
 declare void @main.bpfKfuncBpfCastToKernCtx(ptr, ptr)`,
 			opts:     Options{Stdout: io.Discard},
-			contains: []string{"@bpfKfuncBpfCastToKernCtx"},
-			absent:   []string{"inttoptr", "@main.bpfKfuncBpfCastToKernCtx"},
+			contains: []string{"@bpf_cast_to_kern_ctx"},
+			absent:   []string{"inttoptr", "@main.bpfKfuncBpfCastToKernCtx", "@bpfKfuncBpfCastToKernCtx"},
 		},
 		{
 			name: "multi-program extraction with sections",

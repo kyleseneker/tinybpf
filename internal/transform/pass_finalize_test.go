@@ -79,7 +79,7 @@ func TestStripKfuncPrefixModule(t *testing.T) {
 				"entry:",
 				"  %0 = call ptr @main.bpfKfuncMyHelper(ptr %ctx, i32 42, ptr undef)",
 			},
-			wantDeclName: "bpfKfuncMyHelper",
+			wantDeclName: "my_helper",
 			wantNoPrefix: true,
 			wantStripArg: true,
 		},
@@ -121,7 +121,7 @@ func TestStripKfuncPrefixModule(t *testing.T) {
 				for _, block := range fn.Blocks {
 					for _, inst := range block.Instructions {
 						if inst.Kind == ir.InstCall && inst.Call != nil &&
-							inst.Call.Callee == "@bpfKfuncMyHelper" {
+							inst.Call.Callee == "@my_helper" {
 							if strings.Contains(inst.Call.Args, "ptr undef") {
 								t.Error("trailing ptr undef not stripped from kfunc call args")
 							}

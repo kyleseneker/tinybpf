@@ -130,9 +130,20 @@ func isAbortCallLine(line string) bool {
 	return strings.HasPrefix(rest, "@abort(")
 }
 
+// kernelKfuncName translates a Go kfunc symbol like `main.bpfKfuncBpfTaskFromPid`
+// to the kernel kfunc symbol `bpf_task_from_pid`. Callers pass the full Go
+// symbol including the `main.` package prefix.
+func kernelKfuncName(goName string) string {
+	name := strings.TrimPrefix(goName, "main.")
+	name = strings.TrimPrefix(name, "bpfKfunc")
+	return camelToSnake(name)
+}
+
 // stripKfuncPrefixModule renames kfunc declarations and call sites from
-// @main.bpfKfunc* to @bpfKfunc*, and strips the trailing TinyGo context
-// pointer (ptr undef) from kfunc call arguments.
+// @main.bpfKfuncXxx to the kernel kfunc name (CamelCase -> snake_case), and
+// strips the trailing TinyGo context pointer (ptr undef) from kfunc call
+// arguments. The naming convention: a Go function `bpfKfuncBpfTaskFromPid`
+// maps to the kernel kfunc `bpf_task_from_pid`.
 func stripKfuncPrefixModule(m *ir.Module) {
 	var renames []mapRename
 	for i := range m.Entries {
@@ -144,7 +155,7 @@ func stripKfuncPrefixModule(m *ir.Module) {
 			continue
 		}
 		oldName := e.Declare.Name
-		newName := oldName[len("main."):]
+		newName := kernelKfuncName(oldName)
 		renames = append(renames, mapRename{
 			oldRef: "@" + oldName,
 			newRef: "@" + newName,

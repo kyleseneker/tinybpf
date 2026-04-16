@@ -270,26 +270,7 @@ func scrubAbortFromOptimized(path string, w io.Writer) error {
 		return diag.Wrap(diag.StageOpt, err, "read optimized IR for abort scrub")
 	}
 	lines := strings.Split(string(data), "\n")
-	out := make([]string, 0, len(lines))
-	stripped := 0
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		// BPF llc's TRAP lowering falls back to a call to abort() because the
-		// BPF target doesn't register a custom TRAP handler. Strip both the
-		// call and any declare -- the trailing `unreachable` is BPF-safe on
-		// its own and the kernel verifier will reject the program if the
-		// panic path is actually reachable.
-		if isStripTarget(trimmed, "@abort") || isStripTarget(trimmed, "@llvm.trap") {
-			stripped++
-			continue
-		}
-		if strings.HasPrefix(trimmed, "declare ") &&
-			(strings.Contains(trimmed, " @abort(") || strings.Contains(trimmed, " @llvm.trap(")) {
-			stripped++
-			continue
-		}
-		out = append(out, line)
-	}
+	out, stripped := rewritePanicPaths(lines)
 	if stripped == 0 {
 		return nil
 	}
@@ -297,10 +278,161 @@ func scrubAbortFromOptimized(path string, w io.Writer) error {
 		return diag.Wrap(diag.StageOpt, err, "write scrubbed IR")
 	}
 	if w != nil {
-		fmt.Fprintf(w, "[opt-scrub] stripped %d abort/llvm.trap reference(s) from TinyGo panic paths; "+
-			"if a panic path is reachable the verifier will reject the program\n", stripped)
+		fmt.Fprintf(w, "[opt-scrub] rewrote %d TinyGo panic path(s) to return default values; "+
+			"the BPF kernel verifier will reject the program if such a path is reachable at runtime\n", stripped)
 	}
 	return nil
+}
+
+// rewritePanicPaths scans IR lines, replacing TinyGo's `tail call @llvm.trap()`
+// + `unreachable` pair with a `ret <type> <default>` using the enclosing
+// function's return type. The BPF llc backend would otherwise lower `llvm.trap`
+// to `abort`, which it then rejects as unsupported. `unreachable` alone leaves
+// the block with no emitted instructions and breaks branch offsets, so we
+// substitute a valid terminator instead. The `declare` for `@llvm.trap` / any
+// dangling `@abort` is also dropped.
+func rewritePanicPaths(lines []string) ([]string, int) {
+	out := make([]string, 0, len(lines))
+	stripped := 0
+	currentRetType := ""
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if rt := parseDefineRetType(trimmed); rt != "" {
+			currentRetType = rt
+		}
+		if trimmed == "}" {
+			currentRetType = ""
+		}
+		if strings.HasPrefix(trimmed, "declare ") &&
+			(strings.Contains(trimmed, " @abort(") || strings.Contains(trimmed, " @llvm.trap(")) {
+			stripped++
+			continue
+		}
+		if isStripTarget(trimmed, "@abort") {
+			stripped++
+			continue
+		}
+		if isStripTarget(trimmed, "@llvm.trap") {
+			if j := nextNonEmpty(lines, i+1); j >= 0 &&
+				strings.HasPrefix(strings.TrimSpace(lines[j]), "unreachable") {
+				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+				out = append(out, indent+defaultRet(currentRetType))
+				i = j
+				stripped++
+				continue
+			}
+			stripped++
+			continue
+		}
+		if trimmed == "unreachable" || strings.HasPrefix(trimmed, "unreachable,") {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			out = append(out, indent+defaultRet(currentRetType))
+			stripped++
+			continue
+		}
+		out = append(out, line)
+	}
+	return out, stripped
+}
+
+// parseDefineRetType returns the return type from an LLVM `define` line, or
+// "" if the line isn't a function definition header.
+func parseDefineRetType(trimmed string) string {
+	if !strings.HasPrefix(trimmed, "define ") {
+		return ""
+	}
+	rest := strings.TrimPrefix(trimmed, "define ")
+	atIdx := strings.IndexByte(rest, '@')
+	if atIdx <= 0 {
+		return ""
+	}
+	// Split tokens before `@` and pick the last token that looks like a type
+	// (i.e. not an attribute keyword). This skips things like `noundef`,
+	// `range(i32 1, 3)`, `local_unnamed_addr`, etc.
+	head := strings.TrimSpace(rest[:atIdx])
+	depth := 0
+	tokens := []string{}
+	cur := strings.Builder{}
+	for i := range len(head) {
+		c := head[i]
+		switch c {
+		case '(':
+			depth++
+			cur.WriteByte(c)
+		case ')':
+			depth--
+			cur.WriteByte(c)
+		case ' ', '\t':
+			if depth > 0 {
+				cur.WriteByte(c)
+				continue
+			}
+			if cur.Len() > 0 {
+				tokens = append(tokens, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	if cur.Len() > 0 {
+		tokens = append(tokens, cur.String())
+	}
+	for i := len(tokens) - 1; i >= 0; i-- {
+		t := tokens[i]
+		if isTypeToken(t) {
+			return t
+		}
+	}
+	return ""
+}
+
+// isTypeToken reports whether tok is plausibly an LLVM type name rather than
+// an attribute or calling convention keyword.
+func isTypeToken(tok string) bool {
+	switch tok {
+	case "void", "i1", "i8", "i16", "i32", "i64", "i128", "ptr", "float", "double", "half":
+		return true
+	}
+	if strings.HasPrefix(tok, "i") && len(tok) > 1 {
+		allDigits := true
+		for _, c := range tok[1:] {
+			if c < '0' || c > '9' {
+				allDigits = false
+				break
+			}
+		}
+		if allDigits {
+			return true
+		}
+	}
+	return false
+}
+
+// defaultRet returns a `ret` instruction appropriate for the given LLVM type.
+// Used to replace `unreachable` terminators in rewritten panic paths.
+func defaultRet(retType string) string {
+	switch retType {
+	case "", "void":
+		return "ret void"
+	case "ptr":
+		return "ret ptr null"
+	case "float", "double", "half":
+		return "ret " + retType + " 0.0"
+	default:
+		return "ret " + retType + " 0"
+	}
+}
+
+// nextNonEmpty returns the index of the next non-empty trimmed line, or -1.
+func nextNonEmpty(lines []string, start int) int {
+	for i := start; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) != "" {
+			return i
+		}
+	}
+	return -1
 }
 
 // isStripTarget reports whether a trimmed IR line is a direct call to the
