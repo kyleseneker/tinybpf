@@ -689,7 +689,7 @@ func collectFieldExistsOffsets(fn *ir.Function, offsetSet map[int]bool) error {
 			idxParts := strings.Fields(lastIdx)
 			byteOffset, err := strconv.Atoi(idxParts[len(idxParts)-1])
 			if err != nil {
-				return err
+				continue
 			}
 			offsetSet[byteOffset] = true
 		}
