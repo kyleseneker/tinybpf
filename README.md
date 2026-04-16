@@ -91,7 +91,7 @@ make setup    # install all dependencies
 make doctor   # verify toolchain
 ```
 
-See [Getting Started](docs/getting-started.md) for the full walkthrough.
+See [Getting Started](docs/getting-started.md) for toolchain install details.
 
 ## Examples
 
@@ -132,7 +132,7 @@ make example NAME=tracepoint-connect
 sudo ./examples/tracepoint-connect/scripts/run.sh
 ```
 
-See [Examples Guide](docs/examples.md) for learning tracks.
+Each example has its own README with attach/run details.
 
 ## Library usage
 
@@ -163,14 +163,14 @@ See the [`Request`](https://pkg.go.dev/github.com/kyleseneker/tinybpf#Request) d
 
 | Document | Description |
 |----------|-------------|
-| [Getting Started](docs/getting-started.md) | Install, scaffold, build, generate, and load your first BPF program |
-| [Writing Go for eBPF](docs/writing-go-for-ebpf.md) | Language constraints, helpers, CO-RE, kfuncs, and patterns |
+| [Getting Started](docs/getting-started.md) | Toolchain prerequisites and install |
+| [Writing Go for eBPF](docs/writing-go-for-ebpf.md) | Language constraints, helpers, CO-RE, kfuncs |
 | [CLI Reference](docs/cli-reference.md) | Every command, flag, and default |
-| [Config Reference](docs/config-reference.md) | `tinybpf.json` schema, auto-discovery, and merge rules |
-| [Examples Guide](docs/examples.md) | Learning tracks and how to run examples |
-| [Troubleshooting](docs/troubleshooting.md) | Setup issues, pipeline errors, and verifier debugging |
+| [Config Reference](docs/config-reference.md) | `tinybpf.json` schema and merge rules |
+| [Troubleshooting](docs/troubleshooting.md) | Setup issues, pipeline errors, verifier debugging |
 | [Architecture](docs/architecture.md) | Pipeline design and the 8-pass IR transformation |
-| [Support Matrix](docs/support-matrix.md) | Tested toolchain versions, kernels, and platforms |
+| [Project Layout](docs/project-layout.md) | Package map |
+| [Support Matrix](docs/support-matrix.md) | Tested toolchain versions and platforms |
 
 ## License
 
