@@ -270,6 +270,18 @@ func scrubAbortFromOptimized(path string, w io.Writer) error {
 		return diag.Wrap(diag.StageOpt, err, "read optimized IR for abort scrub")
 	}
 	lines := strings.Split(string(data), "\n")
+	// TEMP DEBUG: dump any line containing "abort" (case-insensitive) before scrub.
+	if w != nil && strings.Contains(strings.ToLower(string(data)), "abort") {
+		fmt.Fprintf(w, "[opt-scrub-debug] %s: found %d occurrences of 'abort' (case-insensitive)\n",
+			filepath.Base(path), strings.Count(strings.ToLower(string(data)), "abort"))
+		for i, line := range lines {
+			if strings.Contains(strings.ToLower(line), "abort") {
+				fmt.Fprintf(w, "[opt-scrub-debug]   line %d: %q\n", i+1, line)
+			}
+		}
+	} else if w != nil {
+		fmt.Fprintf(w, "[opt-scrub-debug] %s: no 'abort' found in optimized IR\n", filepath.Base(path))
+	}
 	out := lines[:0]
 	calls, declares := 0, 0
 	for _, line := range lines {
