@@ -1,0 +1,8 @@
+{
+  "build": {
+    "output": "build/task.bpf.o",
+    "programs": {
+      "trace_openat2": "fentry/do_sys_openat2"
+    }
+  }
+}
