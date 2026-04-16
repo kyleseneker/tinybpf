@@ -20,6 +20,7 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 - `consumeLinkage` refactored to token-based scanner
 - `copyFile` streams with `io.Copy` instead of buffering entire file
 - All examples use `LoadAndAssign` with typed structs; READMEs standardized
+- Documented iterator programs as unsupported; `--program-type iter` and `iter/` sections now produce an explicit error
 
 ### Fixed
 - CO-RE field offset computation accounts for struct alignment padding
@@ -27,6 +28,7 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 
 ### Removed
 - `struct_ops` program type (incompatible with Go)
+- `iter/` program type from `knownProgramTypes`; iterator programs are now rejected with an explicit error and documented as unsupported
 
 ## [0.7.0] - 2026-04-01
 
