@@ -16,6 +16,8 @@
 
 ---
 
+> **Status:** Experimental 0.x project, solo-maintained. Expect breaking changes to the CLI, config schema, public API, and generated code between minor versions. Pin a specific version if you depend on it.
+
 ## Why tinybpf?
 
 [eBPF](https://ebpf.io/) lets sandboxed programs run inside the Linux kernel -- but today those programs must be written in C or Rust, even when the rest of your stack is Go.

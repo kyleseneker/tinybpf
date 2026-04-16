@@ -11,7 +11,7 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 - Auto-detection warning when multiple programs found without `--programs`
 - `lsm-file-open` and `percpu-counter` examples
 - `kfunc-task` example: end-to-end validation of the kfunc path via `bpf_task_from_pid` + `bpf_task_release`
-- kfunc support, stack usage warnings, `COMPATIBILITY.md`, `GOVERNANCE.md`
+- kfunc support, stack usage warnings
 - Auto-infer `--program-type` from `--section` values when omitted
 - Scheduled `helper-table-update` workflow: monthly refresh of the BPF helper table from the latest stable kernel tag on kernel.org; opens a PR when the upstream table changes
 
@@ -37,6 +37,7 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 - `getting-started.md` trimmed to toolchain prerequisites + install (build flow lives in README)
 - `CONTRIBUTING.md` trimmed to dev setup + VM workflow (no imagined-contributor PR process)
 - `support-matrix.md` trimmed (CI matrix section redundant with workflow file)
+- `GOVERNANCE.md` and `COMPATIBILITY.md` -- premature v1.0-style governance and semver commitments for a solo-maintained 0.x project with no users to make promises to
 
 ## [0.7.0] - 2026-04-01
 
