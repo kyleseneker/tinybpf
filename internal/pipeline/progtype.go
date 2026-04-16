@@ -50,6 +50,51 @@ var knownProgramTypes = map[string]string{
 	"syscall":               "Syscall",
 }
 
+// InferProgramType returns the BPF program type common to all section names,
+// or "" if sections is empty or section names don't map to a known type.
+// Returns an error if sections map to conflicting program types.
+func InferProgramType(sections map[string]string) (string, error) {
+	if len(sections) == 0 {
+		return "", nil
+	}
+	inferred := ""
+	for fn, section := range sections {
+		pt := programTypeFromSection(section)
+		if pt == "" {
+			continue
+		}
+		if inferred == "" {
+			inferred = pt
+		} else if inferred != pt {
+			return "", fmt.Errorf("sections have conflicting program types: %q is %q but %q is %q",
+				fn, pt, inferredSource(sections, inferred), inferred)
+		}
+	}
+	return inferred, nil
+}
+
+// programTypeFromSection extracts the BPF program type from a section name
+// by matching against known type prefixes (e.g. "kprobe/sys_open" -> "kprobe").
+func programTypeFromSection(section string) string {
+	for prefix := range knownProgramTypes {
+		name := strings.TrimSuffix(prefix, "/")
+		if section == name || strings.HasPrefix(section, name+"/") {
+			return name
+		}
+	}
+	return ""
+}
+
+// inferredSource returns the function name of the first section that matches the given program type.
+func inferredSource(sections map[string]string, pt string) string {
+	for fn, section := range sections {
+		if programTypeFromSection(section) == pt {
+			return fn
+		}
+	}
+	return ""
+}
+
 // ValidateProgramType checks that all section names match the given BPF program type prefix.
 func ValidateProgramType(programType string, sections map[string]string) error {
 	if programType == "" {

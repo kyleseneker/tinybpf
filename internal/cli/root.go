@@ -155,7 +155,7 @@ func registerBuildFlags(fs *flag.FlagSet, req *tinybpf.Request, programs, sectio
 	fs.BoolVar(&req.EnableBTF, "btf", false, "Enable BTF injection via pahole.")
 	fs.BoolVar(&req.DumpIR, "dump-ir", false, "Write intermediate IR after each transform stage for debugging.")
 	fs.BoolVar(&req.Cache, "cache", true, "Enable content-addressed build cache for intermediate artifacts.")
-	fs.StringVar(&req.ProgramType, "program-type", "", "Expected BPF program type (e.g. kprobe, xdp, tracepoint). Validates --section values.")
+	fs.StringVar(&req.ProgramType, "program-type", "", "BPF program type (e.g. kprobe, xdp, tracepoint). Auto-inferred from --section values when omitted.")
 	fs.Var(programs, "program", "Program function name to keep. Repeat for multiple programs. Auto-detected if omitted.")
 	fs.Var(sections, "section", "Program-to-section mapping (e.g., handle_connect=tracepoint/syscalls/sys_enter_connect). Repeat for multiple.")
 	registerToolFlags(fs, &req.Toolchain)

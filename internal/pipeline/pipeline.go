@@ -340,6 +340,14 @@ func validateRequiredFields(cfg *Config) error {
 		}
 	}
 
+	if cfg.ProgramType == "" {
+		inferred, err := InferProgramType(cfg.Sections)
+		if err != nil {
+			return diag.Wrap(diag.StageInput, err, "sections map to conflicting program types; use --program-type to override")
+		}
+		cfg.ProgramType = inferred
+	}
+
 	if err := ValidateProgramType(cfg.ProgramType, cfg.Sections); err != nil {
 		return diag.Wrap(diag.StageInput, err, "check --program-type and --section flags are consistent")
 	}

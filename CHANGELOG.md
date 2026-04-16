@@ -11,6 +11,7 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 - Auto-detection warning when multiple programs found without `--programs`
 - `lsm-file-open` and `percpu-counter` examples
 - kfunc support, stack usage warnings, `COMPATIBILITY.md`, `GOVERNANCE.md`
+- Auto-infer `--program-type` from `--section` values when omitted
 
 ### Changed
 - Split monolithic `stages.go` (1813 lines) into 8 per-pass files (`pass_*.go`), merged `core.go` and `btfmap.go` into their respective pass files
