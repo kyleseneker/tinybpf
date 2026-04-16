@@ -250,8 +250,53 @@ func (rc *runContext) runOptStage() error {
 		}
 	}
 
-	return runStage(rc.ctx, rc.cfg, diag.StageOpt, rc.tools.Opt, optArgs,
-		"try a less aggressive --pass-pipeline or inspect linked IR")
+	if err := runStage(rc.ctx, rc.cfg, diag.StageOpt, rc.tools.Opt, optArgs,
+		"try a less aggressive --pass-pipeline or inspect linked IR"); err != nil {
+		return err
+	}
+	return scrubAbortFromOptimized(rc.artifacts.OptimizedLL, rc.cfg.Stdout)
+}
+
+// scrubAbortFromOptimized removes `call void @abort()` lines and the matching
+// declare from the opt-produced IR before it feeds into llc. opt introduces
+// these on TinyGo panic paths (bounds checks, nil derefs); the BPF llc backend
+// rejects them. The preceding `unreachable` terminator already handles the
+// semantics of an unreachable abort, so dropping the call is safe -- if the
+// path is actually reachable at runtime the kernel verifier will reject the
+// loaded program with a clearer message.
+func scrubAbortFromOptimized(path string, w io.Writer) error {
+	data, err := os.ReadFile(filepath.Clean(path))
+	if err != nil {
+		return diag.Wrap(diag.StageOpt, err, "read optimized IR for abort scrub")
+	}
+	lines := strings.Split(string(data), "\n")
+	out := lines[:0]
+	calls, declares := 0, 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "call void @abort(") ||
+			strings.HasPrefix(trimmed, "tail call void @abort(") ||
+			strings.HasPrefix(trimmed, "musttail call void @abort(") {
+			calls++
+			continue
+		}
+		if strings.HasPrefix(trimmed, "declare ") && strings.Contains(trimmed, " @abort(") {
+			declares++
+			continue
+		}
+		out = append(out, line)
+	}
+	if calls == 0 && declares == 0 {
+		return nil
+	}
+	if err := os.WriteFile(filepath.Clean(path), []byte(strings.Join(out, "\n")), 0o600); err != nil {
+		return diag.Wrap(diag.StageOpt, err, "write scrubbed IR")
+	}
+	if w != nil {
+		fmt.Fprintf(w, "[opt-scrub] stripped %d abort call(s) and %d declare(s) from TinyGo panic paths; "+
+			"if reachable at runtime the BPF verifier will reject the program\n", calls, declares)
+	}
+	return nil
 }
 
 // runCodegenAndFinalize runs llc code generation, copies the output, and
