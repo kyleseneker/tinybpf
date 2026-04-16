@@ -16,6 +16,7 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 - Scheduled `helper-table-update` workflow: monthly refresh of the BPF helper table from the latest stable kernel tag on kernel.org; opens a PR when the upstream table changes
 
 ### Changed
+- Bumped `github.com/cilium/ebpf` from v0.20.0 to v0.21.0 across all example modules
 - Split monolithic `stages.go` (1813 lines) into 8 per-pass files (`pass_*.go`), merged `core.go` and `btfmap.go` into their respective pass files
 - Transform passes use structured AST instead of regex on raw IR lines
 - Cache keys include tool version fingerprints (in-place LLVM upgrades invalidate cache)
