@@ -23,6 +23,7 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 - `copyFile` streams with `io.Copy` instead of buffering entire file
 - All examples use `LoadAndAssign` with typed structs; READMEs standardized
 - Documented iterator programs as unsupported; `--program-type iter` and `iter/` sections now produce an explicit error
+- CI shrunk to a single PR-gating lane (Linux amd64, Go 1.25, LLVM 20) plus lint and examples; the full compatibility matrix (Go 1.24/1.25 × LLVM 20/21/22 × amd64/arm64, macOS, fuzz, bench) moved to a new weekly `compat.yml` workflow
 
 ### Fixed
 - CO-RE field offset computation accounts for struct alignment padding

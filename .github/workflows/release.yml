@@ -1,5 +1,9 @@
 name: Release
 
+# Release workflow: deliberately untouched by the CI-shrink pass. Tag-driven
+# release plumbing is load-bearing and any change here risks a bad publish.
+# If you need to edit this, do it in its own PR with a dry run.
+
 on:
   push:
     tags:

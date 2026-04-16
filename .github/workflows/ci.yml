@@ -1,5 +1,9 @@
 name: CI
 
+# PR-gating workflow: the minimum required to catch real breakage on every
+# push/PR. The broader compatibility matrix (multi-Go, multi-LLVM, arm64,
+# macOS) has been moved to compat.yml and runs weekly / on demand.
+
 on:
   push:
     branches: [main]
@@ -72,6 +76,8 @@ jobs:
           args: check
 
       - name: Audit support matrix
+        # The weekly compat.yml run still exercises every cell in the support
+        # matrix, so this audit stays honest even though PRs only run one cell.
         run: |
           status=0
           for gv in 1.24 1.25; do
@@ -88,59 +94,33 @@ jobs:
           done
           exit $status
 
+  # Single PR-gating test lane: Linux amd64 + Go 1.25 + LLVM 20.
+  # Everything that used to fan out (Go 1.24, LLVM 21/22, arm64, macOS) runs
+  # weekly in compat.yml. This catches ~all real breakage with ~1/15 the cost.
   test:
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       GOWORK: "off"
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
-        go-version: ["1.24.x", "1.25.x"]
-        llvm-version: ["20", "21", "22"]
-        include:
-          # Primary lane: full validation (coverage, fuzz, binary size)
-          - runner: ubuntu-24.04
-            go-version: "1.25.x"
-            llvm-version: "20"
-            primary: true
-          # macOS: compile and unit tests (no LLVM)
-          - runner: macos-latest
-            go-version: "1.24.x"
-          - runner: macos-latest
-            go-version: "1.25.x"
-
-    runs-on: ${{ matrix.runner }}
-    name: test (${{ matrix.runner }}, go${{ matrix.go-version }}${{ matrix.llvm-version && format(', llvm{0}', matrix.llvm-version) || '' }})
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
       - name: Setup toolchain
-        if: matrix.llvm-version
         uses: ./.github/actions/setup-toolchain
         with:
-          go-version: ${{ matrix.go-version }}
-
-      - name: Setup Go (macOS)
-        if: ${{ !matrix.llvm-version }}
-        uses: actions/setup-go@v6
-        with:
-          go-version: ${{ matrix.go-version }}
-          cache: false
+          go-version: "1.25.x"
 
       - name: Install LLVM
-        if: matrix.llvm-version
         run: |
           codename=$(lsb_release -cs)
           wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
-          echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-${{ matrix.llvm-version }} main" | sudo tee /etc/apt/sources.list.d/llvm-${{ matrix.llvm-version }}.list
+          echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-20 main" | sudo tee /etc/apt/sources.list.d/llvm-20.list
           sudo apt-get update -qq
-          sudo apt-get install -y -qq llvm-${{ matrix.llvm-version }}
-          echo "/usr/lib/llvm-${{ matrix.llvm-version }}/bin" >> "$GITHUB_PATH"
+          sudo apt-get install -y -qq llvm-20
+          echo "/usr/lib/llvm-20/bin" >> "$GITHUB_PATH"
 
       - name: Generate fresh IR fixture
-        if: matrix.primary
         run: |
           cd examples/tracepoint-connect
           tinygo build -gc=none -scheduler=none -panic=trap -opt=1 -o ../../internal/ir/testdata/tinygo_probe.ll ./bpf
@@ -148,13 +128,9 @@ jobs:
       - name: Print tool versions
         run: |
           go version
-          if command -v llvm-link &>/dev/null; then
-            echo "LLVM:   $(llvm-link --version 2>&1 | head -1)"
-            echo "opt:    $(opt --version 2>&1 | head -1)"
-            echo "llc:    $(llc --version 2>&1 | head -1)"
-          else
-            echo "LLVM:   not installed (unit tests only)"
-          fi
+          echo "LLVM:   $(llvm-link --version 2>&1 | head -1)"
+          echo "opt:    $(opt --version 2>&1 | head -1)"
+          echo "llc:    $(llc --version 2>&1 | head -1)"
 
       - name: Test
         run: go test -race -timeout 5m ./...
@@ -163,7 +139,6 @@ jobs:
         run: CGO_ENABLED=0 go build -ldflags "-s -w" -trimpath -o tinybpf ./cmd/tinybpf
 
       - name: Binary size
-        if: matrix.primary
         run: |
           size=$(stat --format=%s tinybpf)
           echo "Binary size: $(numfmt --to=iec $size)"
@@ -174,7 +149,6 @@ jobs:
           fi
 
       - name: Coverage
-        if: matrix.primary
         run: |
           go test -coverprofile=coverage.out ./...
           total=$(go tool cover -func=coverage.out | grep ^total: | awk '{print $3}' | tr -d '%')
@@ -184,26 +158,6 @@ jobs:
             echo "::error::Coverage ${total}% is below ${threshold}% threshold"
             exit 1
           fi
-
-      - name: Cache fuzz corpus
-        if: matrix.primary
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/go-build/fuzz
-          key: fuzz-${{ runner.os }}-${{ hashFiles('internal/transform/*_test.go') }}
-          restore-keys: fuzz-${{ runner.os }}-
-
-      - name: Fuzz smoke
-        if: matrix.primary
-        run: |
-          fuzz_targets=$(grep -r '^func Fuzz' internal/transform/ --include='*_test.go' -l | sort -u)
-          for file in $fuzz_targets; do
-            dir=$(dirname "$file")
-            for target in $(grep -oP '^func \KFuzz\w+' "$file"); do
-              echo "--- fuzzing $target (10s) ---"
-              go test "./$dir" -run "^${target}\$" -fuzz "^${target}\$" -fuzztime 10s -timeout 30s
-            done
-          done
 
   examples:
     runs-on: ubuntu-24.04
@@ -238,47 +192,3 @@ jobs:
             echo "--- tidy $dir ---"
             (cd "$dir" && go mod tidy && git diff --exit-code go.mod go.sum)
           done
-
-  bench:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    if: github.event_name == 'pull_request'
-    env:
-      GOWORK: "off"
-    steps:
-      - name: Checkout PR
-        uses: actions/checkout@v6
-
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.25.x"
-          cache: false
-
-      - name: Benchmark PR
-        run: go test -bench=. -benchmem -count=6 -timeout=5m ./internal/transform/ | tee /tmp/bench-pr.txt
-
-      - name: Checkout base
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
-
-      - name: Benchmark base
-        run: go test -bench=. -benchmem -count=6 -timeout=5m ./internal/transform/ 2>&1 | tee /tmp/bench-base.txt || true
-
-      - name: Compare benchmarks
-        run: |
-          go install golang.org/x/perf/cmd/benchstat@latest
-          echo '## Benchmark comparison (base → PR)' >> "$GITHUB_STEP_SUMMARY"
-          echo '' >> "$GITHUB_STEP_SUMMARY"
-          if ! grep -q '^Benchmark' /tmp/bench-base.txt 2>/dev/null; then
-            echo 'No benchmarks in base branch. PR results:' >> "$GITHUB_STEP_SUMMARY"
-            echo '' >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            grep '^Benchmark' /tmp/bench-pr.txt >> "$GITHUB_STEP_SUMMARY" || true
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            benchstat /tmp/bench-base.txt /tmp/bench-pr.txt >> "$GITHUB_STEP_SUMMARY" 2>&1
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-          fi
