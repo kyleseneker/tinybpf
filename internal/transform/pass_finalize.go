@@ -44,6 +44,32 @@ func stripAbortCallsModule(m *ir.Module, w io.Writer) {
 		total += stripAbortFromFunction(fn)
 	}
 	removeAbortDeclare(m)
+	if w != nil {
+		// TEMP DEBUG: report any call callee containing "abort" in kept functions.
+		for _, fn := range m.Functions {
+			if fn.Removed {
+				continue
+			}
+			for _, block := range fn.Blocks {
+				for _, inst := range block.Instructions {
+					if inst.Call != nil && strings.Contains(inst.Call.Callee, "abort") {
+						fmt.Fprintf(w, "[debug abort] fn=%s callee=%q raw=%q\n",
+							fn.Name, inst.Call.Callee, inst.Raw)
+					} else if strings.Contains(inst.Raw, "abort") {
+						fmt.Fprintf(w, "[debug abort] fn=%s raw=%q\n", fn.Name, inst.Raw)
+					}
+				}
+			}
+		}
+		for _, e := range m.Entries {
+			if e.Removed {
+				continue
+			}
+			if strings.Contains(e.Raw, "abort") {
+				fmt.Fprintf(w, "[debug abort] entry kind=%d raw=%q\n", e.Kind, e.Raw)
+			}
+		}
+	}
 	if total > 0 && w != nil {
 		fmt.Fprintf(w, "[transform] stripped %d abort call(s) from TinyGo panic paths; "+
 			"if reachable at runtime the BPF verifier will reject the program\n", total)
