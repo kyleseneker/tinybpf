@@ -270,6 +270,18 @@ func scrubAbortFromOptimized(path string, w io.Writer) error {
 		return diag.Wrap(diag.StageOpt, err, "read optimized IR for abort scrub")
 	}
 	lines := strings.Split(string(data), "\n")
+	// TEMP DEBUG: if path is for xdp-filter, dump a snippet of the optimized IR.
+	if w != nil && strings.Contains(path, "xdp") || strings.Contains(strings.Join(lines, "\n"), "xdp_filter") {
+		fmt.Fprintf(w, "[opt-dump] === %s ===\n", path)
+		for i, line := range lines {
+			if i > 400 {
+				fmt.Fprintf(w, "[opt-dump] ... (truncated at %d lines, total=%d)\n", i, len(lines))
+				break
+			}
+			fmt.Fprintf(w, "[opt-dump] %s\n", line)
+		}
+		fmt.Fprintf(w, "[opt-dump] === end %s ===\n", path)
+	}
 	out := make([]string, 0, len(lines))
 	trapsAdded, abortsRemoved := 0, 0
 	for _, line := range lines {
