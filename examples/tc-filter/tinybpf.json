@@ -2,7 +2,7 @@
   "build": {
     "output": "build/filter.bpf.o",
     "programs": {
-      "classify_ingress": "classifier/ingress"
+      "classify_ingress": "tc/ingress"
     }
   }
 }
