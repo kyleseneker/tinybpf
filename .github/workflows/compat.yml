@@ -1,0 +1,136 @@
+name: Compat Matrix
+
+# Weekly compatibility sweep. Covers every cell of the claimed support matrix
+# (Go 1.24/1.25, LLVM 20/21/22, amd64 + arm64, macOS) plus fuzz and benchmark
+# runs. These used to run on every PR; they were moved here because they
+# almost never catch anything the PR-gating ci.yml lane misses, and they are
+# expensive. Run manually with `gh workflow run compat.yml` if a PR touches
+# something matrix-sensitive.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 2" # weekly, Tuesday 06:00 UTC
+
+concurrency:
+  group: compat-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    timeout-minutes: 20
+    env:
+      GOWORK: "off"
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        go-version: ["1.24.x", "1.25.x"]
+        llvm-version: ["20", "21", "22"]
+        include:
+          - runner: macos-latest
+            go-version: "1.24.x"
+          - runner: macos-latest
+            go-version: "1.25.x"
+    runs-on: ${{ matrix.runner }}
+    name: test (${{ matrix.runner }}, go${{ matrix.go-version }}${{ matrix.llvm-version && format(', llvm{0}', matrix.llvm-version) || '' }})
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup toolchain
+        if: matrix.llvm-version
+        uses: ./.github/actions/setup-toolchain
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Setup Go (macOS)
+        if: ${{ !matrix.llvm-version }}
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: false
+
+      - name: Install LLVM
+        if: matrix.llvm-version
+        run: |
+          codename=$(lsb_release -cs)
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-${{ matrix.llvm-version }} main" | sudo tee /etc/apt/sources.list.d/llvm-${{ matrix.llvm-version }}.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-${{ matrix.llvm-version }}
+          echo "/usr/lib/llvm-${{ matrix.llvm-version }}/bin" >> "$GITHUB_PATH"
+
+      - name: Print tool versions
+        run: |
+          go version
+          if command -v llvm-link &>/dev/null; then
+            echo "LLVM:   $(llvm-link --version 2>&1 | head -1)"
+            echo "opt:    $(opt --version 2>&1 | head -1)"
+            echo "llc:    $(llc --version 2>&1 | head -1)"
+          else
+            echo "LLVM:   not installed (unit tests only)"
+          fi
+
+      - name: Test
+        run: go test -race -timeout 5m ./...
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -ldflags "-s -w" -trimpath -o tinybpf ./cmd/tinybpf
+
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+          cache: false
+
+      - name: Cache fuzz corpus
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-${{ runner.os }}-${{ hashFiles('internal/transform/*_test.go') }}
+          restore-keys: fuzz-${{ runner.os }}-
+
+      - name: Fuzz smoke
+        run: |
+          fuzz_targets=$(grep -r '^func Fuzz' internal/transform/ --include='*_test.go' -l | sort -u)
+          for file in $fuzz_targets; do
+            dir=$(dirname "$file")
+            for target in $(grep -oP '^func \KFuzz\w+' "$file"); do
+              echo "--- fuzzing $target (60s) ---"
+              go test "./$dir" -run "^${target}\$" -fuzz "^${target}\$" -fuzztime 60s -timeout 2m
+            done
+          done
+
+  bench:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GOWORK: "off"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.x"
+          cache: false
+
+      - name: Benchmark
+        run: |
+          go test -bench=. -benchmem -count=6 -timeout=5m ./internal/transform/ | tee /tmp/bench.txt
+          echo '## Benchmark results' >> "$GITHUB_STEP_SUMMARY"
+          echo '' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          grep '^Benchmark' /tmp/bench.txt >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
