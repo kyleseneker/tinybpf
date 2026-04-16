@@ -13,6 +13,7 @@ All notable changes to tinybpf are documented in this file. Format follows [Keep
 - `kfunc-task` example: end-to-end validation of the kfunc path via `bpf_task_from_pid` + `bpf_task_release`
 - kfunc support, stack usage warnings, `COMPATIBILITY.md`, `GOVERNANCE.md`
 - Auto-infer `--program-type` from `--section` values when omitted
+- Scheduled `helper-table-update` workflow: monthly refresh of the BPF helper table from the latest stable kernel tag on kernel.org; opens a PR when the upstream table changes
 
 ### Changed
 - Split monolithic `stages.go` (1813 lines) into 8 per-pass files (`pass_*.go`), merged `core.go` and `btfmap.go` into their respective pass files
