@@ -40,16 +40,14 @@ jobs:
 
       - name: Install bpftool
         run: |
-          # Prefer kernel-matched linux-tools; fall back to generic.
-          sudo apt-get install -y -qq linux-tools-"$(uname -r)" 2>/dev/null || \
-            sudo apt-get install -y -qq linux-tools-generic 2>/dev/null || true
-          if ! command -v bpftool >/dev/null 2>&1; then
-            # Build from source if the distro package is unavailable.
-            sudo apt-get install -y -qq libelf-dev
-            git clone --depth=1 --recurse-submodules https://github.com/libbpf/bpftool.git /tmp/bpftool
-            make -j"$(nproc)" -C /tmp/bpftool/src
-            sudo make -C /tmp/bpftool/src install
-          fi
+          # Build from source — the linux-tools-generic apt package installs a
+          # kernel-version-matched wrapper that fails on GH runners whose
+          # installed kernel lacks a matching tools package.
+          set -euo pipefail
+          sudo apt-get install -y -qq libelf-dev
+          git clone --depth=1 --recurse-submodules https://github.com/libbpf/bpftool.git /tmp/bpftool
+          make -j"$(nproc)" -C /tmp/bpftool/src
+          sudo make -C /tmp/bpftool/src install
           bpftool version
           uname -r
 
