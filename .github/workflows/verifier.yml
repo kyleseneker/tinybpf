@@ -1,0 +1,153 @@
+name: Verifier
+
+# Loads every example's compiled BPF ELF via `bpftool prog load` to exercise
+# the in-kernel BPF verifier. This is a non-gating signal job: it runs on
+# demand and on a weekly schedule, and is not part of the PR merge gate.
+#
+# Unlike the E2E workflow (which attaches one program and generates traffic),
+# this job only attempts the verifier load step for every example program.
+# That catches verifier regressions that pure ELF tests cannot detect.
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 7 * * 2" # weekly, Tuesday 07:00 UTC
+
+concurrency:
+  group: verifier-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verifier-load:
+    name: bpftool prog load (all examples)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup toolchain
+        uses: ./.github/actions/setup-toolchain
+
+      - name: Install LLVM toolchain
+        run: |
+          codename=$(lsb_release -cs)
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+          echo "deb http://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-20 main" | sudo tee /etc/apt/sources.list.d/llvm-20.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq llvm-20
+          echo "/usr/lib/llvm-20/bin" >> "$GITHUB_PATH"
+
+      - name: Install bpftool
+        run: |
+          # Prefer kernel-matched linux-tools; fall back to generic.
+          sudo apt-get install -y -qq linux-tools-"$(uname -r)" 2>/dev/null || \
+            sudo apt-get install -y -qq linux-tools-generic 2>/dev/null || true
+          if ! command -v bpftool >/dev/null 2>&1; then
+            # Build from source if the distro package is unavailable.
+            sudo apt-get install -y -qq libelf-dev
+            git clone --depth=1 --recurse-submodules https://github.com/libbpf/bpftool.git /tmp/bpftool
+            make -j"$(nproc)" -C /tmp/bpftool/src
+            sudo make -C /tmp/bpftool/src install
+          fi
+          bpftool version
+          uname -r
+
+      - name: Build tinybpf
+        run: go build -o "$PWD/tinybpf" ./cmd/tinybpf
+
+      - name: Build all example BPF ELFs
+        env:
+          TINYBPF_BIN: ${{ github.workspace }}/tinybpf
+        run: |
+          set -euo pipefail
+          for dir in examples/*/; do
+            name="$(basename "$dir")"
+            echo "::group::build ${name}"
+            "${dir}scripts/build.sh"
+            echo "::endgroup::"
+          done
+
+      - name: Report kernel config (diagnostic)
+        run: |
+          set -eu
+          echo "Kernel: $(uname -r)"
+          # BPF LSM requires CONFIG_BPF_LSM=y and `lsm=` boot param including bpf.
+          if [[ -r /boot/config-$(uname -r) ]]; then
+            grep -E '^CONFIG_(BPF_LSM|BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF|CGROUP_BPF|XDP_SOCKETS|NET_CLS_BPF)=' \
+              /boot/config-$(uname -r) || true
+          fi
+          # Active LSMs (lsm_file_open requires bpf to be in the active LSM chain).
+          if [[ -r /sys/kernel/security/lsm ]]; then
+            echo "active LSMs: $(cat /sys/kernel/security/lsm)"
+          fi
+
+      - name: Verifier load (bpftool prog load)
+        id: verifier
+        run: |
+          set -uo pipefail
+          passed=0
+          failed=0
+          skipped=0
+          failures=()
+          bpffs=/sys/fs/bpf
+
+          # Ensure bpffs is mounted (usually is on GH hosted runners, but be safe).
+          if ! mountpoint -q "${bpffs}"; then
+            sudo mount -t bpf bpf "${bpffs}"
+          fi
+
+          load_one() {
+            local name="$1" obj="$2"
+            local pin="${bpffs}/tinybpf_${name}"
+            sudo rm -f "${pin}" 2>/dev/null || true
+            echo "::group::load ${name} (${obj})"
+            echo "  pin=${pin}"
+            # bpftool infers program type from the libbpf-style section name
+            # (cgroup/, fentry/, kprobe/, lsm/, tracepoint/, raw_tracepoint/,
+            # classifier/, xdp). No explicit `type` hint is required.
+            local log
+            if ! log=$(sudo bpftool prog load "${obj}" "${pin}" 2>&1); then
+              echo "  FAIL: verifier rejected ${name}"
+              echo "${log}"
+              failures+=("${name}")
+              failed=$((failed + 1))
+            else
+              echo "  PASS: ${name} accepted by verifier"
+              sudo bpftool prog show pinned "${pin}" 2>&1 | sed 's/^/    /' || true
+              passed=$((passed + 1))
+            fi
+            sudo rm -f "${pin}" 2>/dev/null || true
+            echo "::endgroup::"
+          }
+
+          for dir in examples/*/; do
+            name="$(basename "$dir")"
+            # Discover the built ELF from tinybpf.json "build.output".
+            cfg="${dir}tinybpf.json"
+            if [[ ! -f "${cfg}" ]]; then
+              echo "SKIP: ${name} (no tinybpf.json)"
+              skipped=$((skipped + 1))
+              continue
+            fi
+            out_rel=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["build"]["output"])' "${cfg}" 2>/dev/null \
+              || sed -n 's/.*"output"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${cfg}" | head -1)
+            obj="${dir}${out_rel}"
+            if [[ ! -f "${obj}" ]]; then
+              echo "SKIP: ${name} (no ELF at ${obj})"
+              skipped=$((skipped + 1))
+              continue
+            fi
+            load_one "${name}" "${obj}"
+          done
+
+          echo ""
+          echo "============================================="
+          echo " Verifier results: ${passed} passed, ${failed} failed, ${skipped} skipped"
+          echo " Kernel: $(uname -r)"
+          echo "============================================="
+          if (( failed > 0 )); then
+            echo "Failed examples:"
+            for f in "${failures[@]}"; do echo "  - ${f}"; done
+            exit 1
+          fi
