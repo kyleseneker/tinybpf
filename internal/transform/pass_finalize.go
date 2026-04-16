@@ -41,28 +41,93 @@ func stripAbortCallsModule(m *ir.Module, w io.Writer) {
 		if fn.Removed {
 			continue
 		}
-		ir.EnsureBlocks(fn)
-		count := 0
-		for _, block := range fn.Blocks {
-			kept := block.Instructions[:0]
-			for _, inst := range block.Instructions {
-				if inst.Kind == ir.InstCall && inst.Call != nil && inst.Call.Callee == "@abort" {
-					count++
-					continue
-				}
-				kept = append(kept, inst)
-			}
-			block.Instructions = kept
-		}
-		if count > 0 {
-			fn.Modified = true
-			total += count
-		}
+		total += stripAbortFromFunction(fn)
 	}
+	removeAbortDeclare(m)
 	if total > 0 && w != nil {
 		fmt.Fprintf(w, "[transform] stripped %d abort call(s) from TinyGo panic paths; "+
 			"if reachable at runtime the BPF verifier will reject the program\n", total)
 	}
+}
+
+// stripAbortFromFunction removes @abort calls from fn's blocks (or BodyRaw as
+// a fallback when blocks are unavailable) and returns the number of calls removed.
+func stripAbortFromFunction(fn *ir.Function) int {
+	ir.EnsureBlocks(fn)
+	count := 0
+	for _, block := range fn.Blocks {
+		kept := block.Instructions[:0]
+		for _, inst := range block.Instructions {
+			if isAbortCall(inst) {
+				count++
+				continue
+			}
+			kept = append(kept, inst)
+		}
+		block.Instructions = kept
+	}
+	if len(fn.Blocks) == 0 {
+		kept := fn.BodyRaw[:0]
+		for _, line := range fn.BodyRaw {
+			if isAbortCallLine(line) {
+				count++
+				continue
+			}
+			kept = append(kept, line)
+		}
+		fn.BodyRaw = kept
+	}
+	if count > 0 {
+		fn.Modified = true
+	}
+	return count
+}
+
+// removeAbortDeclare marks `declare void @abort()` as removed. cleanupModule's
+// unreferenced-declare pass would normally catch it; doing it here guarantees
+// removal even if a parser edge case leaves a stray reference.
+func removeAbortDeclare(m *ir.Module) {
+	for i := range m.Entries {
+		e := &m.Entries[i]
+		if e.Removed || e.Kind != ir.TopDeclare || e.Declare == nil {
+			continue
+		}
+		if e.Declare.Name == "abort" {
+			e.Removed = true
+		}
+	}
+}
+
+// isAbortCall reports whether an instruction is `call void @abort()`.
+func isAbortCall(inst *ir.Instruction) bool {
+	if inst.Kind == ir.InstCall && inst.Call != nil && inst.Call.Callee == "@abort" {
+		return true
+	}
+	return isAbortCallLine(inst.Raw)
+}
+
+// isAbortCallLine reports whether a raw IR line is a direct call to @abort.
+// Matches `call void @abort()` with optional leading whitespace, tail/musttail
+// prefixes, and trailing attributes or debug metadata.
+func isAbortCallLine(line string) bool {
+	s := strings.TrimSpace(line)
+	// Strip optional tail/notail/musttail prefix.
+	for _, pfx := range []string{"tail ", "notail ", "musttail "} {
+		if strings.HasPrefix(s, pfx) {
+			s = s[len(pfx):]
+			break
+		}
+	}
+	if !strings.HasPrefix(s, "call ") {
+		return false
+	}
+	rest := strings.TrimSpace(s[len("call "):])
+	if !strings.HasPrefix(rest, "void ") {
+		return false
+	}
+	rest = strings.TrimSpace(rest[len("void "):])
+	// Match `@abort(` — stop before attributes / debug info.
+	return strings.HasPrefix(rest, "@abort(")
 }
 
 // stripKfuncPrefixModule renames kfunc declarations and call sites from
