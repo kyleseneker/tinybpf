@@ -627,12 +627,13 @@ func makeWorkDir(baseDir string, keepTemp bool) (string, func(), error) {
 // stripHostPaths rewrites absolute temp-directory references in an LLVM IR
 // text file to relative paths.
 func stripHostPaths(llPath, tempDir string) error {
+	llPath = filepath.Clean(llPath)
 	data, err := os.ReadFile(llPath)
 	if err != nil {
 		return err
 	}
 	cleaned := bytes.ReplaceAll(data, []byte(tempDir), []byte("."))
-	return os.WriteFile(llPath, cleaned, 0o600)
+	return os.WriteFile(llPath, cleaned, 0o600) //nolint:gosec // llPath is the just-read internal IR artifact
 }
 
 // buildLLCArgs constructs the argument list for llc BPF code generation.
@@ -797,7 +798,12 @@ func buildAugmentedBTF(progSpec, kernelSpec *btf.Spec, kfuncs []string) (*btf.Bu
 			return nil, 0, diag.Wrap(diag.StageBTF, err,
 				fmt.Sprintf("kfunc %q not found in kernel BTF; ensure the kernel registers it (kernel >= 6.1 for task kfuncs)", name))
 		}
-		fn := &btf.Func{Name: kernelFn.Name, Type: kernelFn.Type, Linkage: btf.ExternFunc}
+		fn := &btf.Func{
+			Name:    kernelFn.Name,
+			Type:    kernelFn.Type,
+			Linkage: btf.ExternFunc,
+			Tags:    []string{"kfunc"},
+		}
 		if _, err := builder.Add(fn); err != nil {
 			return nil, 0, diag.Wrap(diag.StageBTF, err,
 				fmt.Sprintf("add kfunc %q to program BTF", name))

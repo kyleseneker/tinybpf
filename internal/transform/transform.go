@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/kyleseneker/tinybpf/internal/ir"
@@ -33,7 +34,7 @@ func Run(ctx context.Context, inputLL, outputLL string, opts Options) error {
 	if err := TransformModule(ctx, module, opts); err != nil {
 		return err
 	}
-	return os.WriteFile(outputLL, []byte(ir.Serialize(module)), 0o600)
+	return os.WriteFile(filepath.Clean(outputLL), []byte(ir.Serialize(module)), 0o600) //nolint:gosec // outputLL is a CLI-supplied build artifact path
 }
 
 // TransformModule applies the full IR transformation pipeline to a parsed module.
@@ -90,9 +91,9 @@ func (d *moduleDumper) dump(stage string, m *ir.Module) {
 	}
 	d.seq++
 	name := fmt.Sprintf("%02d-%s.ll", d.seq, stage)
-	path := d.dir + "/" + name
+	path := filepath.Join(d.dir, name)
 	data := ir.Serialize(m)
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Clean(path), []byte(data), 0o600); err != nil { //nolint:gosec // path is under the configured dump-IR dir
 		if d.verbose {
 			fmt.Fprintf(d.out, "[dump-ir] failed to write %s: %v\n", path, err)
 		}

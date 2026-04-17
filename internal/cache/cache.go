@@ -95,7 +95,7 @@ func atomicWrite(dst string, data []byte) (retErr error) {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("cache: close: %w", err)
 	}
-	return os.Rename(tmpPath, dst) //nolint:gosec // tmpPath is from os.CreateTemp, not user input
+	return os.Rename(tmpPath, dst)
 }
 
 // cleanupTempFile removes a temp file on a best-effort basis.
