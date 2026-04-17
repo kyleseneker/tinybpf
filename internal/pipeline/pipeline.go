@@ -5,12 +5,17 @@ package pipeline
 import (
 	"bytes"
 	"context"
+	"debug/elf"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/cilium/ebpf/btf"
 
 	"github.com/kyleseneker/tinybpf/diag"
 	"github.com/kyleseneker/tinybpf/elfcheck"
@@ -487,6 +492,9 @@ func (rc *runContext) finalizeOutput() error {
 		if err := injectBTF(rc.ctx, rc.cfg, rc.tools); err != nil {
 			return err
 		}
+		if err := rc.injectKfuncBTF(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -698,6 +706,184 @@ func injectBTF(ctx context.Context, cfg Config, tools llvm.Tools) error {
 	if err != nil {
 		return diag.WrapCmd(diag.StageBTF, err, res.Command, res.Stderr,
 			"failed to inject BTF data into output object")
+	}
+	return nil
+}
+
+// injectKfuncBTF augments the ELF's .BTF section with FUNC entries for kfunc
+// externs, copying signatures from the kernel's vmlinux BTF. Without these
+// entries libbpf cannot resolve the kfunc at load time (BTF FUNC lookup fails
+// with -ENOENT). pahole generates BTF from DWARF, which TinyGo does not emit
+// for extern-only declarations, so we have to add them ourselves.
+func (rc *runContext) injectKfuncBTF() error {
+	kfuncs, err := findUndefinedFuncSymbols(rc.cfg.Output)
+	if err != nil {
+		return diag.Wrap(diag.StageBTF, err, "scan ELF for kfunc externs")
+	}
+	if len(kfuncs) == 0 {
+		return nil
+	}
+	kernelSpec := loadKernelBTFOrSkip(rc.cfg.Stdout)
+	if kernelSpec == nil {
+		return nil
+	}
+	progSpec, err := loadELFBTFSection(rc.cfg.Output)
+	if err != nil {
+		return diag.Wrap(diag.StageBTF, err, "read .BTF section from ELF")
+	}
+	if progSpec == nil {
+		return diag.Wrap(diag.StageBTF, fmt.Errorf("no .BTF section"),
+			"pass --btf so pahole emits an initial BTF section that kfunc resolution can augment")
+	}
+	builder, added, err := buildAugmentedBTF(progSpec, kernelSpec, kfuncs)
+	if err != nil {
+		return err
+	}
+	if added == 0 {
+		return nil
+	}
+	newBTF, err := builder.Marshal(nil, nil)
+	if err != nil {
+		return diag.Wrap(diag.StageBTF, err, "marshal augmented BTF")
+	}
+	if err := replaceELFSection(rc.cfg.Output, ".BTF", newBTF, rc.tools.Objcopy); err != nil {
+		return diag.Wrap(diag.StageBTF, err, "update .BTF section in ELF")
+	}
+	if rc.cfg.Stdout != nil {
+		fmt.Fprintf(rc.cfg.Stdout, "[btf] injected %d kfunc FUNC entries from kernel BTF (%s)\n",
+			added, strings.Join(kfuncs, ", "))
+	}
+	return nil
+}
+
+// loadKernelBTFOrSkip returns the kernel BTF spec, or nil with a diagnostic
+// when the host cannot provide one (e.g. building on macOS). Callers should
+// treat nil as "skip kfunc injection silently".
+func loadKernelBTFOrSkip(w io.Writer) *btf.Spec {
+	spec, err := btf.LoadKernelSpec()
+	if err != nil {
+		if w != nil {
+			fmt.Fprintf(w, "[btf] skipping kfunc injection: kernel BTF unavailable (%v); build on Linux with CONFIG_DEBUG_INFO_BTF=y to populate kfunc entries\n", err)
+		}
+		return nil
+	}
+	return spec
+}
+
+// buildAugmentedBTF constructs a Builder seeded with all existing program BTF
+// types, then adds an extern FUNC entry for each requested kfunc (skipping any
+// the program already declares). Returns the builder and the count of added
+// FUNC entries.
+func buildAugmentedBTF(progSpec, kernelSpec *btf.Spec, kfuncs []string) (*btf.Builder, int, error) {
+	var existing []btf.Type
+	for t, err := range progSpec.All() {
+		if err != nil {
+			return nil, 0, diag.Wrap(diag.StageBTF, err, "iterate existing BTF types")
+		}
+		existing = append(existing, t)
+	}
+	builder, err := btf.NewBuilder(existing, nil)
+	if err != nil {
+		return nil, 0, diag.Wrap(diag.StageBTF, err, "construct BTF builder from program BTF")
+	}
+	added := 0
+	for _, name := range kfuncs {
+		var already *btf.Func
+		if err := progSpec.TypeByName(name, &already); err == nil {
+			continue
+		}
+		var kernelFn *btf.Func
+		if err := kernelSpec.TypeByName(name, &kernelFn); err != nil {
+			return nil, 0, diag.Wrap(diag.StageBTF, err,
+				fmt.Sprintf("kfunc %q not found in kernel BTF; ensure the kernel registers it (kernel >= 6.1 for task kfuncs)", name))
+		}
+		fn := &btf.Func{Name: kernelFn.Name, Type: kernelFn.Type, Linkage: btf.ExternFunc}
+		if _, err := builder.Add(fn); err != nil {
+			return nil, 0, diag.Wrap(diag.StageBTF, err,
+				fmt.Sprintf("add kfunc %q to program BTF", name))
+		}
+		added++
+	}
+	return builder, added, nil
+}
+
+// findUndefinedFuncSymbols returns the names of undefined function symbols in
+// the ELF. In a tinybpf-compiled program these are kfunc externs -- helpers
+// are lowered to inttoptr calls during transform and don't appear as symbols.
+func findUndefinedFuncSymbols(elfPath string) ([]string, error) {
+	f, err := elf.Open(filepath.Clean(elfPath))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	syms, err := f.Symbols()
+	if err != nil {
+		// SHT_SYMTAB may be absent on stripped objects; not fatal for our purposes.
+		if errors.Is(err, elf.ErrNoSymbols) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, s := range syms {
+		if s.Section != elf.SHN_UNDEF {
+			continue
+		}
+		if elf.ST_TYPE(s.Info) != elf.STT_NOTYPE && elf.ST_TYPE(s.Info) != elf.STT_FUNC {
+			continue
+		}
+		if s.Name == "" || seen[s.Name] {
+			continue
+		}
+		seen[s.Name] = true
+		out = append(out, s.Name)
+	}
+	return out, nil
+}
+
+// loadELFBTFSection reads the ELF's .BTF section and parses it via cilium/ebpf.
+// Returns (nil, nil) if the section is absent.
+func loadELFBTFSection(elfPath string) (*btf.Spec, error) {
+	f, err := elf.Open(filepath.Clean(elfPath))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	sec := f.Section(".BTF")
+	if sec == nil {
+		return nil, nil
+	}
+	data, err := sec.Data()
+	if err != nil {
+		return nil, err
+	}
+	return btf.LoadSpecFromReader(bytes.NewReader(data))
+}
+
+// replaceELFSection rewrites the named section of the ELF at path using
+// llvm-objcopy --update-section. objcopyPath must point at llvm-objcopy; GNU
+// objcopy also supports --update-section but isn't guaranteed to be installed.
+func replaceELFSection(elfPath, sectionName string, data []byte, objcopyPath string) error {
+	if objcopyPath == "" {
+		objcopyPath = "llvm-objcopy"
+	}
+	tmp, err := os.CreateTemp("", "tinybpf-btf-*.bin")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	cmd := exec.Command(objcopyPath, "--update-section", sectionName+"="+tmpPath, elfPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("%s --update-section %s: %w: %s", objcopyPath, sectionName, err, out)
 	}
 	return nil
 }
