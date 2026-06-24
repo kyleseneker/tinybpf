@@ -94,7 +94,7 @@ jobs:
           cache: false
 
       - name: Cache fuzz corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/go-build/fuzz
           key: fuzz-${{ runner.os }}-${{ hashFiles('internal/transform/*_test.go') }}
