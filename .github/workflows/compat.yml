@@ -36,7 +36,7 @@ jobs:
     name: test (${{ matrix.runner }}, go${{ matrix.go-version }}${{ matrix.llvm-version && format(', llvm{0}', matrix.llvm-version) || '' }})
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup toolchain
         if: matrix.llvm-version
@@ -85,7 +85,7 @@ jobs:
       GOWORK: "off"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -118,7 +118,7 @@ jobs:
       GOWORK: "off"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Go
         uses: actions/setup-go@v6
